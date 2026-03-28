@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="TaxiFlow Pro">
+  <defs>
+    <linearGradient id="navyTeal" x1="0%" x2="100%" y1="0%" y2="100%">
+      <stop offset="0%" stop-color="#0B2545" />
+      <stop offset="100%" stop-color="#1BC5BD" />
+    </linearGradient>
+    <linearGradient id="goldEdge" x1="100%" x2="0%" y1="0%" y2="100%">
+      <stop offset="0%" stop-color="#F4D03F" stop-opacity="0.95" />
+      <stop offset="100%" stop-color="#1BC5BD" stop-opacity="0.15" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="#F5F5F5" />
+  <rect x="12" y="12" width="104" height="104" rx="24" fill="url(#navyTeal)" />
+  <path
+    d="M37 37h23c13.255 0 24 10.745 24 24v4H60c-5.523 0-10 4.477-10 10v16H37V37Z"
+    fill="#FFFFFF"
+  />
+  <path d="M56 37h35v13H56z" fill="url(#goldEdge)" />
+  <path d="M56 57h35v13H56z" fill="#F4D03F" />
+  <path d="M56 77h21v14H56z" fill="#1BC5BD" />
+</svg>

@@ -94,6 +94,72 @@ button {
   color: var(--navy);
 }
 
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+}
+
+.auth-card {
+  display: grid;
+  gap: 1.1rem;
+  width: min(100%, 28rem);
+  padding: 1.8rem;
+  border-radius: 1.75rem;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(11, 37, 69, 0.08);
+  box-shadow: var(--shadow);
+}
+
+.auth-brand {
+  justify-content: center;
+  width: 100%;
+}
+
+.auth-logo {
+  width: 8.25rem;
+  height: 8.25rem;
+  filter: drop-shadow(0 12px 24px rgba(11, 37, 69, 0.12));
+}
+
+.auth-copy {
+  display: grid;
+  gap: 0.45rem;
+  justify-items: center;
+  text-align: center;
+}
+
+.auth-copy h1 {
+  margin: 0;
+  color: var(--navy);
+  font-family: "Bahnschrift", "Aptos Display", sans-serif;
+  font-size: clamp(1.55rem, 4vw, 2.3rem);
+  line-height: 1.04;
+}
+
+.auth-copy p:last-child {
+  margin: 0;
+  color: var(--subtext);
+}
+
+.auth-provider-note {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 0.28rem 0.55rem;
+  border-radius: 999px;
+  background: rgba(11, 37, 69, 0.06);
+  color: var(--navy);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.auth-form {
+  display: grid;
+  gap: 0.9rem;
+}
+
 .spin {
   animation: spin 1.2s linear infinite;
   color: var(--teal);
@@ -116,7 +182,27 @@ button {
 }
 
 .brand-lockup.compact {
-  gap: 0.65rem;
+  gap: 1rem;
+}
+
+.brand-logo {
+  display: block;
+  width: 9.6rem;
+  height: 9.6rem;
+  object-fit: contain;
+  filter: drop-shadow(0 10px 24px rgba(11, 37, 69, 0.16));
+}
+
+.brand-logo.compact {
+  width: 7.8rem;
+  height: 7.8rem;
+  filter: drop-shadow(0 14px 28px rgba(11, 37, 69, 0.16));
+}
+
+.toolbar-logo {
+  width: 5.1rem;
+  height: 5.1rem;
+  filter: drop-shadow(0 10px 20px rgba(11, 37, 69, 0.14));
 }
 
 .brand-mark {
@@ -216,6 +302,10 @@ button {
 }
 
 .role-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  justify-content: center;
   border-radius: 999px;
   padding: 0.65rem 0.95rem;
   background: rgba(255, 255, 255, 0.88);
@@ -285,9 +375,94 @@ button {
   align-items: center;
 }
 
+.toolbar-meta {
+  align-items: center;
+}
+
+.auth-session-panel {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.auth-session-copy {
+  display: grid;
+  gap: 0.12rem;
+  min-width: min(100%, 12rem);
+  text-align: right;
+}
+
+.auth-session-copy strong {
+  color: var(--navy);
+  font-size: 0.82rem;
+  line-height: 1.1;
+}
+
+.auth-session-copy span {
+  color: var(--subtext);
+  font-size: 0.72rem;
+}
+
 .toolbar-meta .status-chip {
   padding: 0.34rem 0.66rem;
   font-size: 0.68rem;
+}
+
+.backend-mode-panel {
+  display: grid;
+  gap: 0.35rem;
+  min-width: min(100%, 16rem);
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(11, 37, 69, 0.08);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 8px 20px rgba(11, 37, 69, 0.06);
+}
+
+.backend-mode-head {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--navy);
+}
+
+.backend-mode-head strong {
+  display: block;
+  color: var(--navy);
+  font-family: "Bahnschrift", "Aptos Display", sans-serif;
+  font-size: 0.9rem;
+}
+
+.backend-mode-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.backend-mode-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.backend-mode-switch .role-pill {
+  min-width: 4.1rem;
+  justify-content: center;
+}
+
+.backend-mode-switch .role-pill:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.backend-mode-note {
+  margin: 0;
+  color: var(--subtext);
+  font-size: 0.72rem;
+  line-height: 1.35;
 }
 
 .topbar-meta {
@@ -591,7 +766,15 @@ button {
   gap: 0.55rem;
 }
 
+.fleet-toolbar {
+  align-items: center;
+}
+
 .finance-sub-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
   border: 1px solid rgba(11, 37, 69, 0.08);
   background: #ffffff;
   color: var(--navy);
@@ -604,6 +787,12 @@ button {
 }
 
 .finance-sub-pill.active {
+  background: rgba(11, 37, 69, 0.98);
+  color: var(--white);
+}
+
+.finance-sub-pill-action {
+  border-color: rgba(11, 37, 69, 0.18);
   background: rgba(11, 37, 69, 0.98);
   color: var(--white);
 }
@@ -858,6 +1047,61 @@ button {
   border: 1px solid rgba(11, 37, 69, 0.08);
   background: #ffffff;
   box-shadow: 0 6px 16px rgba(11, 37, 69, 0.04);
+}
+
+.fleet-health-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.fleet-health-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0.28rem;
+  border-radius: 1rem 0 0 1rem;
+}
+
+.fleet-health-card[data-tone="success"] {
+  border-color: rgba(39, 174, 96, 0.24);
+  background: linear-gradient(180deg, rgba(39, 174, 96, 0.12), rgba(39, 174, 96, 0.04));
+}
+
+.fleet-health-card[data-tone="success"]::before {
+  background: linear-gradient(180deg, var(--success), #4cc37c);
+}
+
+.fleet-health-card[data-tone="success"] .eyebrow,
+.fleet-health-card[data-tone="success"] h3 {
+  color: #17663a;
+}
+
+.fleet-health-card[data-tone="warning"] {
+  border-color: rgba(243, 156, 18, 0.28);
+  background: linear-gradient(180deg, rgba(243, 156, 18, 0.14), rgba(243, 156, 18, 0.05));
+}
+
+.fleet-health-card[data-tone="warning"]::before {
+  background: linear-gradient(180deg, var(--warning), #f6b13d);
+}
+
+.fleet-health-card[data-tone="warning"] .eyebrow,
+.fleet-health-card[data-tone="warning"] h3 {
+  color: #9b5d00;
+}
+
+.fleet-health-card[data-tone="danger"] {
+  border-color: rgba(231, 76, 60, 0.26);
+  background: linear-gradient(180deg, rgba(231, 76, 60, 0.13), rgba(231, 76, 60, 0.05));
+}
+
+.fleet-health-card[data-tone="danger"]::before {
+  background: linear-gradient(180deg, var(--danger), #ee6d61);
+}
+
+.fleet-health-card[data-tone="danger"] .eyebrow,
+.fleet-health-card[data-tone="danger"] h3 {
+  color: #9f2f23;
 }
 
 .overview-board-head {

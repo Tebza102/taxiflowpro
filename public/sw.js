@@ -1,5 +1,5 @@
 const CACHE_NAME = "taxiflow-pro-v1";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/icon.svg"];
+const APP_SHELL = ["/", "/manifest.webmanifest", "/taxiflow-favicon.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)));

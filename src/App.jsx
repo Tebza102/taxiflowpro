@@ -18,6 +18,7 @@ import {
   LayoutDashboard,
   Loader2,
   Lock,
+  LogOut,
   Settings2,
   Shield,
   ShieldAlert,
@@ -26,6 +27,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { repository } from "./lib/dataGateway";
+import { hasSupabaseConfig, supabase } from "./lib/supabaseClient";
 
 const ZAR = new Intl.NumberFormat("en-ZA", {
   style: "currency",
@@ -34,12 +36,56 @@ const ZAR = new Intl.NumberFormat("en-ZA", {
 });
 
 const ROLES = ["Owner", "Admin", "Manager", "Driver"];
+const AUTH_ACCOUNT_DIRECTORY = {
+  "owner@taxiflow.local": {
+    role: "Owner",
+    actorId: "owner-session",
+  },
+  "admin@taxiflow.local": {
+    role: "Admin",
+    actorId: "admin-session",
+  },
+  "manager@taxiflow.local": {
+    role: "Manager",
+    actorId: "mgr-01",
+  },
+  "driver.one@taxiflow.local": {
+    role: "Driver",
+    actorId: "drv-01",
+  },
+  "driver.two@taxiflow.local": {
+    role: "Driver",
+    actorId: "drv-02",
+  },
+};
+const LOCAL_AUTH_STORAGE_KEY = "taxiflow-auth-session-v1";
+const LOCAL_AUTH_PASSWORD = "TaxiFlow.123";
+const ROLE_LANDING_VIEW = {
+  Owner: "overview",
+  Admin: "overview",
+  Manager: "overview",
+  Driver: "drivers",
+};
+const MODULE_EDIT_ACCESS = {
+  finance: {
+    label: "Money",
+    detail: "Daily takings, extra trips, expenses, and bank checks.",
+  },
+  fleet: {
+    label: "Fleet",
+    detail: "Vehicle profiles, defects, repairs, and archive actions.",
+  },
+  drivers: {
+    label: "Drivers",
+    detail: "Driver roster changes and linked driver records.",
+  },
+};
 
 const NAV_ITEMS = [
   { id: "overview", label: "Overview", icon: LayoutDashboard, roles: ROLES },
   {
     id: "finance",
-    label: "Finance",
+    label: "Money",
     icon: Banknote,
     roles: ["Owner", "Admin", "Manager"],
   },
@@ -51,7 +97,7 @@ const NAV_ITEMS = [
   },
   {
     id: "compliance",
-    label: "Compliance",
+    label: "Documents",
     icon: Shield,
     roles: ["Owner", "Admin", "Manager"],
   },
@@ -63,10 +109,10 @@ const formatMoney = (value) => ZAR.format(value ?? 0);
 const DEFECT_CATEGORIES = ["Windscreen", "Tires", "Seats", "Engine", "Other"];
 
 const getQueueTone = (entry) => {
-  if (entry.shortage > 0 || entry.gapKm > 0 || entry.status === "Escalate") {
+  if (entry.shortage > 0 || entry.gapKm > 0 || entry.status === "Needs review") {
     return "danger";
   }
-  if (entry.status === "Awaiting Cash Count") {
+  if (entry.status === "Waiting for cash check") {
     return "warning";
   }
   return "success";
@@ -118,6 +164,177 @@ const toneLabel = {
 
 const PRIVILEGED_ROLES = new Set(["Owner", "Admin", "Manager"]);
 
+const createModuleAccessState = () => ({
+  requestStatus: "none",
+  requestedAt: null,
+  requestedBy: null,
+  requestedByRole: null,
+  ownerReviewedAt: null,
+  ownerReviewedBy: null,
+  ownerReviewedByRole: null,
+  active: false,
+  grantedAt: null,
+  grantedBy: null,
+  grantedByRole: null,
+});
+
+const normalizeModuleAccessState = (value = {}) => ({
+  ...createModuleAccessState(),
+  ...value,
+});
+
+const normalizePermissionControls = (value = {}) =>
+  Object.fromEntries(
+    Object.keys(MODULE_EDIT_ACCESS).map((moduleKey) => [
+      moduleKey,
+      normalizeModuleAccessState(value?.[moduleKey]),
+    ]),
+  );
+
+const getPermissionControls = (snapshot) =>
+  normalizePermissionControls(snapshot?.permissionControls);
+
+const getModuleAccessStatus = (control) => {
+  if (control?.active) {
+    return {
+      tone: "success",
+      label: "Admin access active",
+    };
+  }
+
+  if (control?.requestStatus === "pending") {
+    return {
+      tone: "warning",
+      label: "Waiting for owner",
+    };
+  }
+
+  if (control?.requestStatus === "approved") {
+    return {
+      tone: "info",
+      label: "Waiting for manager grant",
+    };
+  }
+
+  if (control?.requestStatus === "rejected") {
+    return {
+      tone: "danger",
+      label: "Owner declined",
+    };
+  }
+
+  return {
+    tone: "navy",
+    label: "Locked",
+  };
+};
+
+const canEditModuleUpdates = (role, moduleKey, permissionControls) => {
+  if (role === "Owner" || role === "Manager") {
+    return true;
+  }
+
+  if (role === "Admin") {
+    return Boolean(permissionControls?.[moduleKey]?.active);
+  }
+
+  return false;
+};
+
+const getModuleAccessErrorMessage = (moduleKey) =>
+  `Admin cannot change ${MODULE_EDIT_ACCESS[moduleKey]?.label?.toLowerCase() ?? moduleKey} records until a manager receives owner approval and grants access.`;
+
+const normalizeRole = (value) =>
+  ROLES.find((role) => role.toLowerCase() === String(value ?? "").trim().toLowerCase()) ?? null;
+
+const resolveAuthIdentity = (user) => {
+  if (!user) {
+    return null;
+  }
+
+  const email = String(user.email ?? "")
+    .trim()
+    .toLowerCase();
+  const mappedAccount = AUTH_ACCOUNT_DIRECTORY[email];
+  const metadataRole = normalizeRole(user.app_metadata?.role ?? user.user_metadata?.role);
+  const metadataStaffId =
+    user.app_metadata?.staffId ??
+    user.app_metadata?.staff_id ??
+    user.user_metadata?.staffId ??
+    user.user_metadata?.staff_id ??
+    null;
+
+  if (mappedAccount) {
+    return {
+      ...mappedAccount,
+      email,
+    };
+  }
+
+  if (!metadataRole) {
+    return null;
+  }
+
+  return {
+    email,
+    role: metadataRole,
+    actorId:
+      metadataRole === "Driver"
+        ? metadataStaffId ?? "driver-terminal"
+        : metadataStaffId ?? `${metadataRole.toLowerCase()}-session`,
+  };
+};
+
+const createLocalAuthSession = (email, account) => ({
+  user: {
+    email,
+    app_metadata: {
+      role: account.role,
+      staffId: account.actorId,
+    },
+    user_metadata: {},
+  },
+});
+
+const readStoredLocalAuthSession = () => {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const email = window.localStorage.getItem(LOCAL_AUTH_STORAGE_KEY);
+    const account = AUTH_ACCOUNT_DIRECTORY[String(email ?? "").trim().toLowerCase()];
+
+    return account && email ? createLocalAuthSession(email, account) : null;
+  } catch {
+    return null;
+  }
+};
+
+const persistLocalAuthSession = (email) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(LOCAL_AUTH_STORAGE_KEY, email);
+  } catch {
+    // Ignore storage failures and continue in-memory.
+  }
+};
+
+const clearStoredLocalAuthSession = () => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(LOCAL_AUTH_STORAGE_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
 const formatTime = (value) =>
   value
     ? new Date(value).toLocaleTimeString("en-ZA", {
@@ -136,13 +353,435 @@ const formatStamp = (value) =>
       })
     : "Pending";
 
+const parseDateInputValue = (value) => {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? "").trim());
+
+  if (!match) {
+    return null;
+  }
+
+  const [, year, month, day] = match;
+  const date = new Date(Number(year), Number(month) - 1, Number(day));
+
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const toDateInputValue = (value = new Date()) => {
+  const date =
+    parseDateInputValue(value) ??
+    (value ? new Date(value) : null);
+
+  if (!date || Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+};
+
+const formatDateOnly = (value) => {
+  const date =
+    parseDateInputValue(value) ??
+    (value ? new Date(value) : null);
+
+  return date && !Number.isNaN(date.getTime())
+    ? date.toLocaleDateString("en-ZA", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      })
+    : "No date";
+};
+
+const createTimestampFromDateInput = (dateValue, fallback = new Date().toISOString()) => {
+  const parsedDate = parseDateInputValue(dateValue);
+
+  if (!parsedDate) {
+    return fallback;
+  }
+
+  const fallbackDate = fallback ? new Date(fallback) : new Date();
+  const hasFallbackTime = !Number.isNaN(fallbackDate.getTime());
+  const composed = new Date(
+    parsedDate.getFullYear(),
+    parsedDate.getMonth(),
+    parsedDate.getDate(),
+    hasFallbackTime ? fallbackDate.getHours() : 12,
+    hasFallbackTime ? fallbackDate.getMinutes() : 0,
+    hasFallbackTime ? fallbackDate.getSeconds() : 0,
+    0,
+  );
+
+  return composed.toISOString();
+};
+
+const formatExpenseHeadline = (record) =>
+  record?.description?.trim()
+    ? `${record.category} / ${record.description.trim()}`
+    : record?.category ?? "Expense";
+
+const formatExpenseMeta = (record) => {
+  const parts = [record?.vehicle ?? "General", formatDateOnly(record?.expenseDate ?? record?.timestamp)];
+
+  if (record?.reference?.trim()) {
+    parts.push(`Receipt ${record.reference.trim()}`);
+  }
+
+  return parts.filter(Boolean).join(" / ");
+};
+
+const getBusinessKmValue = (record) => {
+  const openingOdo = Number(record?.openingOdo ?? 0);
+  const closingOdo = Number(record?.closingOdo ?? 0);
+  const businessKm = closingOdo - openingOdo;
+
+  return Number.isFinite(businessKm) && businessKm > 0 ? businessKm : 0;
+};
+
+const formatTripRoute = (record) => {
+  const fromLocation = record?.fromLocation?.trim();
+  const toLocation = record?.toLocation?.trim();
+
+  if (fromLocation && toLocation) {
+    return `${fromLocation} to ${toLocation}`;
+  }
+
+  return record?.route ?? record?.assignedRoute ?? "Business trip";
+};
+
+const formatTripLogMeta = (record) => {
+  const parts = [formatDateOnly(record?.tripDate ?? record?.timestamp)];
+  const businessKm = Number(record?.businessKm ?? getBusinessKmValue(record));
+
+  if (businessKm > 0) {
+    parts.push(`${businessKm.toLocaleString()} km`);
+  }
+
+  if (record?.travelReason?.trim()) {
+    parts.push(record.travelReason.trim());
+  }
+
+  if (record?.fuelOilCost != null) {
+    parts.push(`Fuel ${formatMoney(record.fuelOilCost)}`);
+  }
+
+  if (record?.repairMaintenanceCost != null) {
+    parts.push(`Repairs ${formatMoney(record.repairMaintenanceCost)}`);
+  }
+
+  return parts.filter(Boolean).join(" / ");
+};
+
+const formatTransactionStatus = (status) =>
+  (
+    {
+      pending: "Waiting",
+      verified: "Checked",
+      banked: "Deposited",
+    }[status]
+  ) ?? status;
+
+const formatShortcutLabel = (shortcut) =>
+  (
+    {
+      "Log shift takings": "Add daily earnings",
+      "Capture special trip": "Add extra trip",
+      "Report a defect": "Report a problem",
+      "View vehicle status": "View vehicle details",
+    }[shortcut]
+  ) ?? shortcut;
+
+const createAuditEvent = ({
+  id,
+  timestamp = new Date().toISOString(),
+  scope = "system",
+  action,
+  entityType,
+  entityId,
+  title,
+  detail,
+  actorId = "system",
+  actorRole = "System",
+}) => ({
+  id:
+    id ??
+    `audit-${entityType ?? scope}-${entityId ?? timestamp}-${Math.random()
+      .toString(36)
+      .slice(2, 6)}`,
+  timestamp,
+  scope,
+  action,
+  entityType,
+  entityId,
+  title,
+  detail,
+  actorId,
+  actorRole,
+});
+
+const appendAuditTrail = (existing = [], entries = []) => [
+  ...entries.filter(Boolean),
+  ...existing,
+];
+
+const getAuditTone = (entry) => {
+  if (["approve", "grant", "verify", "resolve", "lock"].includes(entry.action)) {
+    return "success";
+  }
+  if (entry.action === "request") {
+    return "warning";
+  }
+  if (["delete", "archive", "revoke", "reject"].includes(entry.action)) {
+    return "warning";
+  }
+  if (["delete", "archive"].includes(entry.action)) {
+    return "warning";
+  }
+  if (entry.action === "update") {
+    return "info";
+  }
+  return "navy";
+};
+
+const getAuditActionLabel = (entry) => {
+  const labels = {
+    create: "Added",
+    update: "Changed",
+    verify: "Checked",
+    delete: "Removed",
+    lock: "Finished",
+    archive: "Archived",
+    report: "Reported",
+    resolve: "Fixed",
+    request: "Requested",
+    approve: "Approved",
+    reject: "Declined",
+    grant: "Granted",
+    revoke: "Removed",
+  };
+
+  return labels[entry.action] ?? "Saved";
+};
+
+const getAuditActorLabel = (drivers, actorId, actorRole) => {
+  const driverRecord = drivers.find((driver) => driver.staffId === actorId);
+
+  if (driverRecord?.name) {
+    return driverRecord.name;
+  }
+
+  return actorRole ?? actorId ?? "System";
+};
+
+const buildHistoricalAuditTrail = (source, drivers) => {
+  if (!source) {
+    return [];
+  }
+
+  const transactionEvents = (source.financeTransactions ?? []).flatMap((record) => [
+    createAuditEvent({
+      id: `audit-${record.id}-created`,
+      timestamp: record.createdAt ?? record.timestamp,
+      scope: "finance",
+      action: "create",
+      entityType: record.type,
+      entityId: record.id,
+      title:
+        record.type === "income"
+          ? `${record.isSpecial ? "Extra trip added" : "Daily trip added"} / ${
+              record.vehicle ?? "General"
+            }`
+          : `Expense added / ${record.category}`,
+      detail:
+        record.type === "income"
+          ? record.isSpecial
+            ? `${formatMoney(record.amountClaimed ?? record.amount ?? 0)} / ${formatTripRoute(record)} / ${formatTripLogMeta(
+                record,
+              )}`
+            : `${formatMoney(record.amountClaimed ?? record.amount ?? 0)} / ${
+                record.route ?? "Pending route"
+              }`
+          : `${record.description ?? record.vehicle ?? "General"} / ${formatMoney(
+              record.amount ?? 0,
+            )}${record.reference ? ` / Receipt ${record.reference}` : ""}`,
+      actorId: record.createdBy,
+      actorRole: record.createdByRole,
+    }),
+    record.verifiedAt
+      ? createAuditEvent({
+          id: `audit-${record.id}-verified`,
+          timestamp: record.verifiedAt,
+          scope: "finance",
+          action: "verify",
+          entityType: record.type,
+          entityId: record.id,
+          title: `Income checked / ${record.vehicle ?? "General"}`,
+          detail: `${formatMoney(record.actualCashReceived ?? 0)} counted`,
+          actorId: record.verifiedBy,
+          actorRole: record.verifiedByRole,
+        })
+      : null,
+  ]);
+
+  const depositEvents = (source.deposits ?? []).map((deposit) =>
+    createAuditEvent({
+      id: `audit-${deposit.depositId}-locked`,
+      timestamp: deposit.timestamp,
+      scope: "finance",
+      action: "lock",
+      entityType: "deposit",
+      entityId: deposit.depositId,
+      title: `Deposit finished / ${deposit.reference}`,
+      detail: `${deposit.recordsLocked} items / ${formatMoney(deposit.depositAmount)}`,
+      actorId: deposit.lockedBy,
+      actorRole: deposit.lockedByRole ?? "Owner",
+    }),
+  );
+
+  const defectEvents = (source.defects ?? []).flatMap((defect) => [
+    createAuditEvent({
+      id: `audit-${defect.id}-reported`,
+      timestamp: defect.reportedAt,
+      scope: "fleet",
+      action: "report",
+      entityType: "defect",
+      entityId: defect.id,
+      title: `Problem reported / ${defect.vehicle ?? defect.vehicleId ?? "Vehicle"}`,
+      detail: defect.detail ?? defect.issue,
+      actorId: defect.reportedByStaffId,
+      actorRole: defect.reportedByRole ?? "Driver",
+    }),
+    defect.updatedAt
+      ? createAuditEvent({
+          id: `audit-${defect.id}-updated`,
+          timestamp: defect.updatedAt,
+          scope: "fleet",
+          action: "update",
+          entityType: "defect",
+          entityId: defect.id,
+          title: `Problem updated / ${defect.vehicle ?? defect.vehicleId ?? "Vehicle"}`,
+          detail: defect.detail ?? defect.issue,
+          actorId: defect.updatedBy,
+          actorRole: defect.updatedByRole,
+        })
+      : null,
+    defect.resolvedAt
+      ? createAuditEvent({
+          id: `audit-${defect.id}-resolved`,
+          timestamp: defect.resolvedAt,
+          scope: "fleet",
+          action: "resolve",
+          entityType: "defect",
+          entityId: defect.id,
+          title: `Problem fixed / ${defect.vehicle ?? defect.vehicleId ?? "Vehicle"}`,
+          detail: `${formatMoney(defect.repairCost ?? 0)} repair amount`,
+          actorId: defect.resolvedBy,
+          actorRole: defect.resolvedByRole ?? "Manager",
+        })
+      : null,
+  ]);
+
+  const vehicleEvents = (source.vehicles ?? []).flatMap((vehicle) => [
+    vehicle.createdAt
+      ? createAuditEvent({
+          id: `audit-${vehicle.id}-created`,
+          timestamp: vehicle.createdAt,
+          scope: "fleet",
+          action: "create",
+          entityType: "vehicle",
+          entityId: vehicle.id,
+          title: `Vehicle added / ${vehicle.registration}`,
+          detail: `${vehicle.model} / ${vehicle.route}`,
+          actorId: vehicle.createdBy,
+          actorRole: vehicle.createdByRole,
+        })
+      : null,
+    vehicle.updatedAt
+      ? createAuditEvent({
+          id: `audit-${vehicle.id}-updated`,
+          timestamp: vehicle.updatedAt,
+          scope: "fleet",
+          action: "update",
+          entityType: "vehicle",
+          entityId: vehicle.id,
+          title: `Vehicle updated / ${vehicle.registration}`,
+          detail: `${vehicle.model} / ${vehicle.route}`,
+          actorId: vehicle.updatedBy,
+          actorRole: vehicle.updatedByRole,
+        })
+      : null,
+    vehicle.archivedAt
+      ? createAuditEvent({
+          id: `audit-${vehicle.id}-archived`,
+          timestamp: vehicle.archivedAt,
+          scope: "fleet",
+          action: "archive",
+          entityType: "vehicle",
+          entityId: vehicle.id,
+          title: `Vehicle archived / ${vehicle.registration}`,
+          detail: "Kept in the history.",
+          actorId: vehicle.archivedBy,
+          actorRole: vehicle.archivedByRole ?? "Owner",
+        })
+      : null,
+  ]);
+  const driverEvents = (source.drivers ?? []).flatMap((driver) => [
+    driver.createdAt
+      ? createAuditEvent({
+          id: `audit-${driver.staffId}-created`,
+          timestamp: driver.createdAt,
+          scope: "drivers",
+          action: "create",
+          entityType: "driver",
+          entityId: driver.staffId,
+          title: `Driver created / ${driver.name}`,
+          detail: `${driver.staffId} / ${driver.route}`,
+          actorId: driver.createdBy,
+          actorRole: driver.createdByRole,
+        })
+      : null,
+    driver.updatedAt
+      ? createAuditEvent({
+          id: `audit-${driver.staffId}-updated`,
+          timestamp: driver.updatedAt,
+          scope: "drivers",
+          action: "update",
+          entityType: "driver",
+          entityId: driver.staffId,
+          title: `Driver updated / ${driver.name}`,
+          detail: `${driver.staffId} / ${driver.route}`,
+          actorId: driver.updatedBy,
+          actorRole: driver.updatedByRole,
+        })
+      : null,
+  ]);
+
+  return [...transactionEvents, ...depositEvents, ...defectEvents, ...vehicleEvents, ...driverEvents]
+    .filter(Boolean)
+    .map((entry) => ({
+      ...entry,
+      actorLabel: getAuditActorLabel(drivers, entry.actorId, entry.actorRole),
+      actionLabel: getAuditActionLabel(entry),
+      tone: getAuditTone(entry),
+      timestampLabel: formatStamp(entry.timestamp),
+    }))
+    .sort((left, right) => new Date(right.timestamp) - new Date(left.timestamp));
+};
+
 const sumBy = (items, selector) =>
   items.reduce((total, item) => total + Number(selector(item) ?? 0), 0);
 
 const getIncomeCashValue = (record) =>
   Number(record.actualCashReceived ?? record.amountClaimed ?? record.amount ?? 0);
 
-const getCurrentActorId = (role, snapshot) => {
+const getCurrentActorId = (role, snapshot, authIdentity = null) => {
+  if (authIdentity?.actorId) {
+    return authIdentity.actorId;
+  }
+
   if (role === "Driver") {
     return snapshot.driverTerminal?.activeDriverId ?? "driver-terminal";
   }
@@ -198,15 +837,15 @@ const getDriverLinkedVehicles = (snapshot) => {
 
 const deriveQueueStatus = (record, shortage, gapKm) => {
   if (record.status === "banked") {
-    return "Banked";
+    return "Deposited";
   }
   if (record.status === "pending") {
-    return "Awaiting Cash Count";
+    return "Waiting for cash check";
   }
   if (shortage > 0 || gapKm > 0) {
-    return "Escalate";
+    return "Needs review";
   }
-  return "Verified";
+  return "Checked";
 };
 
 const getDaysLeft = (expiryDate, currentDate) => {
@@ -462,7 +1101,7 @@ const deriveSnapshot = (source) => {
         driver: assignedDriver,
         route:
           record.incomeKind === "special"
-            ? record.description
+            ? formatTripRoute(record)
             : record.route ?? "Standard shift",
         vehicle:
           enrichedVehicles.find((vehicle) => vehicle.id === record.vehicleId)?.registration ??
@@ -490,12 +1129,12 @@ const deriveSnapshot = (source) => {
     type: record.status,
   }));
   const specialSeries = specialIncome.slice(0, 4).map((record) => ({
-    name: record.description,
+    name: formatTripRoute(record),
     vehicle:
       enrichedVehicles.find((vehicle) => vehicle.id === record.vehicleId)?.registration ??
       record.vehicle ??
       "General",
-    type: "Special trip",
+    type: record.travelReason ?? "Special trip",
     amount: Number(record.amount ?? 0),
   }));
   const expenseSummary = (items) =>
@@ -589,11 +1228,23 @@ const deriveSnapshot = (source) => {
     linkedVehicleRecords[0] ??
     enrichedVehicles.find((vehicle) => vehicle.id === resolvedVehicleId) ??
     enrichedVehicles[0];
+  const auditTrailSource =
+    source.auditTrail?.length > 0 ? source.auditTrail : buildHistoricalAuditTrail(source, drivers);
+  const auditTrail = auditTrailSource
+    .map((entry) => ({
+      ...entry,
+      actorLabel: entry.actorLabel ?? getAuditActorLabel(drivers, entry.actorId, entry.actorRole),
+      actionLabel: entry.actionLabel ?? getAuditActionLabel(entry),
+      tone: entry.tone ?? getAuditTone(entry),
+      timestampLabel: entry.timestampLabel ?? formatStamp(entry.timestamp),
+    }))
+    .sort((left, right) => new Date(right.timestamp) - new Date(left.timestamp));
 
   return {
     ...source,
     drivers,
     defects,
+    auditTrail,
     documents,
     serviceSchedule,
     driverTerminal: {
@@ -698,7 +1349,7 @@ const createStandardDraft = (vehicleId, openingOdo) => ({
 
 const getStandardDraftValidationError = (draft) => {
   if (!draft.vehicleId) {
-    return "Select a vehicle before saving the shift.";
+    return "Select a vehicle before saving the trip log.";
   }
 
   if (draft.openingOdo === "") {
@@ -711,7 +1362,7 @@ const getStandardDraftValidationError = (draft) => {
   }
 
   if (draft.closingOdo === "") {
-    return "Enter the closing odometer to save the shift.";
+    return "Enter the closing odometer to save the trip log.";
   }
 
   const closingOdo = Number(draft.closingOdo);
@@ -723,12 +1374,12 @@ const getStandardDraftValidationError = (draft) => {
   }
 
   if (draft.amountClaimed === "") {
-    return "Enter the amount claimed to save the shift.";
+    return "Enter the amount collected to save the trip.";
   }
 
   const amountClaimed = Number(draft.amountClaimed);
   if (!Number.isFinite(amountClaimed) || amountClaimed <= 0) {
-    return "Amount claimed must be greater than zero.";
+    return "Amount collected must be greater than zero.";
   }
 
   return null;
@@ -737,14 +1388,88 @@ const getStandardDraftValidationError = (draft) => {
 const createSpecialDraft = (vehicleId) => ({
   id: null,
   vehicleId: vehicleId ?? "",
-  description: "",
+  tripDate: toDateInputValue(),
+  openingOdo: "",
+  closingOdo: "",
+  fromLocation: "",
+  toLocation: "",
+  travelReason: "",
+  fuelOilCost: "0",
+  repairMaintenanceCost: "0",
   amount: "",
 });
+
+const getSpecialDraftValidationError = (draft) => {
+  if (!draft.vehicleId) {
+    return "Select a vehicle before saving the extra trip.";
+  }
+
+  if (!draft.tripDate || !parseDateInputValue(draft.tripDate)) {
+    return "Select the travel date.";
+  }
+
+  if (draft.openingOdo === "") {
+    return "Opening odometer is required.";
+  }
+
+  const openingOdo = Number(draft.openingOdo);
+  if (!Number.isFinite(openingOdo)) {
+    return "Enter a valid opening odometer.";
+  }
+
+  if (draft.closingOdo === "") {
+    return "Enter the closing odometer to save the extra trip.";
+  }
+
+  const closingOdo = Number(draft.closingOdo);
+  if (!Number.isFinite(closingOdo)) {
+    return "Enter a valid closing odometer.";
+  }
+  if (closingOdo <= openingOdo) {
+    return "Closing odometer must be greater than opening odometer.";
+  }
+
+  if (!draft.fromLocation?.trim()) {
+    return "Enter where the business trip started.";
+  }
+
+  if (!draft.toLocation?.trim()) {
+    return "Enter where the business trip ended.";
+  }
+
+  if (!draft.travelReason?.trim()) {
+    return "Enter the business travel reason.";
+  }
+
+  const fuelOilCost = Number(draft.fuelOilCost ?? 0);
+  if (!Number.isFinite(fuelOilCost) || fuelOilCost < 0) {
+    return "Enter a valid fuel and oil cost.";
+  }
+
+  const repairMaintenanceCost = Number(draft.repairMaintenanceCost ?? 0);
+  if (!Number.isFinite(repairMaintenanceCost) || repairMaintenanceCost < 0) {
+    return "Enter a valid repairs and maintenance cost.";
+  }
+
+  if (draft.amount === "") {
+    return "Enter the amount earned for the extra trip.";
+  }
+
+  const amount = Number(draft.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return "Amount earned must be greater than zero.";
+  }
+
+  return null;
+};
 
 const createExpenseDraft = (expenseKind, vehicleId) => ({
   id: null,
   expenseKind,
   category: expenseKind === "asset" ? "Fuel" : "Salary",
+  description: "",
+  expenseDate: toDateInputValue(),
+  reference: "",
   vehicleId: vehicleId ?? "",
   amount: "",
   cashExpense: true,
@@ -765,6 +1490,14 @@ const createVehicleDraft = (vehicle, defaultInterval) => ({
   status: vehicle?.status ?? "active",
 });
 
+const createDriverDraft = (driver) => ({
+  staffId: driver?.staffId ?? "",
+  name: driver?.name ?? "",
+  route: driver?.route ?? "",
+  shiftStatus: driver?.shiftStatus ?? "Ready for dispatch",
+  prdpExpiryDate: driver?.prdpExpiryDate ?? "",
+});
+
 const createDefectDraft = (vehicleId) => ({
   id: null,
   vehicleId: vehicleId ?? "",
@@ -773,28 +1506,199 @@ const createDefectDraft = (vehicleId) => ({
 });
 
 function App() {
+  const authEnabled = hasSupabaseConfig && Boolean(supabase);
+  const authProviderLabel = authEnabled ? "Supabase authentication" : "Local setup authentication";
   const [snapshot, setSnapshot] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [backendMode, setBackendMode] = useState(() => repository.backendMode);
+  const [backendFeedback, setBackendFeedback] = useState(null);
   const [activeRole, setActiveRole] = useState("Owner");
   const [activeView, setActiveView] = useState("overview");
   const [driverShortcutIntent, setDriverShortcutIntent] = useState(null);
+  const [authSession, setAuthSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [authError, setAuthError] = useState(null);
+  const [authDraft, setAuthDraft] = useState({
+    email: "",
+    password: "",
+  });
 
   useEffect(() => {
+    if (!authEnabled) {
+      setAuthSession(readStoredLocalAuthSession());
+      setAuthLoading(false);
+      return undefined;
+    }
+
     let isMounted = true;
 
-    repository.loadSnapshot().then((data) => {
-      if (isMounted) {
-        setSnapshot(data);
-        setLoading(false);
+    supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (!isMounted) {
+          return;
+        }
+
+        setAuthSession(data.session ?? null);
+        setAuthError(error?.message ?? null);
+        setAuthLoading(false);
+      })
+      .catch((error) => {
+        if (!isMounted) {
+          return;
+        }
+
+        setAuthError(error.message);
+        setAuthLoading(false);
+      });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!isMounted) {
+        return;
       }
+
+      setAuthSession(session ?? null);
+      setAuthError(null);
+      setAuthLoading(false);
     });
 
     return () => {
       isMounted = false;
+      subscription.unsubscribe();
     };
-  }, []);
+  }, [authEnabled]);
+
+  useEffect(() => {
+    if (authEnabled && authLoading) {
+      return undefined;
+    }
+
+    let isMounted = true;
+
+    setLoading(true);
+    repository
+      .loadSnapshot(backendMode)
+      .then((data) => {
+        if (isMounted) {
+          setSnapshot(data);
+          setLoading(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [authEnabled, authLoading, authSession?.user?.id, backendMode]);
+
+  useEffect(() => {
+    if (!loading && snapshot) {
+      repository.persistSnapshot(snapshot, backendMode);
+    }
+  }, [backendMode, loading, snapshot]);
 
   const currentSnapshot = useMemo(() => deriveSnapshot(snapshot), [snapshot]);
+  const permissionControls = useMemo(
+    () => getPermissionControls(currentSnapshot),
+    [currentSnapshot],
+  );
+  const authIdentity = useMemo(() => resolveAuthIdentity(authSession?.user ?? null), [authSession]);
+  const authDisplayName = useMemo(() => {
+    if (!authIdentity || !currentSnapshot) {
+      return authIdentity?.email ?? null;
+    }
+
+    if (authIdentity.role === "Driver") {
+      return (
+        currentSnapshot.drivers.find((driver) => driver.staffId === authIdentity.actorId)?.name ??
+        authIdentity.email
+      );
+    }
+
+    return authIdentity.email;
+  }, [authIdentity, currentSnapshot]);
+
+  useEffect(() => {
+    if (!authIdentity?.role) {
+      return;
+    }
+
+    setActiveRole(authIdentity.role);
+  }, [authIdentity]);
+
+  useEffect(() => {
+    if (authIdentity?.role !== "Driver") {
+      return;
+    }
+
+    setSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const derived = deriveSnapshot(current);
+      const driver = derived.drivers.find((candidate) => candidate.staffId === authIdentity.actorId);
+
+      if (!driver) {
+        return current;
+      }
+
+      const linkedVehicles = derived.vehicles.filter(
+        (vehicle) => vehicle.assignedDriverId === driver.staffId,
+      );
+      const linkedVehicleIds = linkedVehicles.map((vehicle) => vehicle.id);
+      const currentLinkedIds = current.driverTerminal?.linkedVehicleIds ?? [];
+      const assignedVehicle =
+        linkedVehicles.find((vehicle) => vehicle.id === current.driverTerminal?.assignedVehicleId) ??
+        linkedVehicles[0] ??
+        null;
+      const nextAssignedVehicleLabel = assignedVehicle?.registration ?? "No vehicle linked";
+      const nextAssignedRoute = assignedVehicle?.route ?? driver.route ?? "No route assigned";
+      const sameLinkedVehicles =
+        linkedVehicleIds.length === currentLinkedIds.length &&
+        linkedVehicleIds.every((vehicleId, index) => vehicleId === currentLinkedIds[index]);
+
+      if (
+        current.driverTerminal?.activeDriverId === driver.staffId &&
+        current.driverTerminal?.activeDriver === driver.name &&
+        current.driverTerminal?.assignedVehicleId === (assignedVehicle?.id ?? null) &&
+        current.driverTerminal?.assignedVehicle === nextAssignedVehicleLabel &&
+        current.driverTerminal?.assignedRoute === nextAssignedRoute &&
+        sameLinkedVehicles
+      ) {
+        return current;
+      }
+
+      return {
+        ...current,
+        driverTerminal: {
+          ...current.driverTerminal,
+          activeDriverId: driver.staffId,
+          activeDriver: driver.name,
+          assignedVehicleId: assignedVehicle?.id ?? null,
+          assignedVehicle: nextAssignedVehicleLabel,
+          assignedRoute: nextAssignedRoute,
+          linkedVehicleIds,
+        },
+      };
+    });
+  }, [authIdentity]);
+
+  useEffect(() => {
+    if (!authIdentity?.role) {
+      return;
+    }
+
+    setActiveView(ROLE_LANDING_VIEW[authIdentity.role] ?? "overview");
+    setDriverShortcutIntent(null);
+  }, [authIdentity?.email, authIdentity?.role]);
 
   const allowedViews = useMemo(
     () => NAV_ITEMS.filter((item) => item.roles.includes(activeRole)),
@@ -807,20 +1711,355 @@ function App() {
     }
   }, [activeRole, activeView, allowedViews]);
 
-  if (loading || !snapshot) {
+  if (loading || !snapshot || authLoading) {
     return (
       <div className="loading-shell">
         <div className="loading-card">
           <Loader2 className="spin" size={36} />
           <p className="eyebrow">Initialising TaxiFlow Pro</p>
-          <h1>Building the mobile command centre</h1>
+          <h1>{authEnabled ? "Restoring secure session" : "Loading access screen"}</h1>
         </div>
       </div>
     );
   }
 
+  const resolveCurrentActorId = (current) => getCurrentActorId(activeRole, current, authIdentity);
   const createRecordId = (prefix) =>
     `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+  const buildCurrentAuditEvent = (current, event) =>
+    createAuditEvent({
+      ...event,
+      actorId: event.actorId ?? resolveCurrentActorId(current),
+      actorRole: event.actorRole ?? activeRole,
+    });
+
+  const hasModuleUpdateAccess = (current, moduleKey) =>
+    canEditModuleUpdates(activeRole, moduleKey, getPermissionControls(current));
+
+  const handleAuthSubmit = async (event) => {
+    event.preventDefault();
+
+    setAuthSubmitting(true);
+    setAuthError(null);
+
+    const normalizedEmail = authDraft.email.trim().toLowerCase();
+
+    if (!authEnabled) {
+      const account = AUTH_ACCOUNT_DIRECTORY[normalizedEmail];
+
+      if (!account) {
+        setAuthError("This email is not assigned to a TaxiFlow account.");
+        setAuthSubmitting(false);
+        return;
+      }
+
+      if (authDraft.password !== LOCAL_AUTH_PASSWORD) {
+        setAuthError("Incorrect password for this TaxiFlow account.");
+        setAuthSubmitting(false);
+        return;
+      }
+
+      const session = createLocalAuthSession(normalizedEmail, account);
+      persistLocalAuthSession(normalizedEmail);
+      setAuthSession(session);
+      setAuthDraft((current) => ({
+        ...current,
+        password: "",
+      }));
+      setAuthSubmitting(false);
+      return;
+    }
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email: normalizedEmail,
+      password: authDraft.password,
+    });
+
+    if (error) {
+      setAuthError(error.message);
+      setAuthSubmitting(false);
+      return;
+    }
+
+    setAuthDraft((current) => ({
+      ...current,
+      password: "",
+    }));
+    setAuthSubmitting(false);
+  };
+
+  const handleSignOut = async () => {
+    setAuthSubmitting(true);
+
+    if (!authEnabled) {
+      clearStoredLocalAuthSession();
+      setAuthSession(null);
+      setAuthError(null);
+      setAuthDraft((current) => ({
+        ...current,
+        password: "",
+      }));
+      setAuthSubmitting(false);
+      return;
+    }
+
+    const { error } = await supabase.auth.signOut();
+
+    if (error) {
+      setAuthError(error.message);
+    } else {
+      setAuthSession(null);
+      setAuthDraft((current) => ({
+        ...current,
+        password: "",
+      }));
+    }
+
+    setAuthSubmitting(false);
+  };
+
+  if (!authSession) {
+    return (
+      <SignInShell
+        authProviderLabel={authProviderLabel}
+        email={authDraft.email}
+        error={authError}
+        fleetName={currentSnapshot.profile.fleetName}
+        isLocalAuth={!authEnabled}
+        onChange={setAuthDraft}
+        onSubmit={handleAuthSubmit}
+        password={authDraft.password}
+        submitting={authSubmitting}
+      />
+    );
+  }
+
+  if (!authIdentity) {
+    return (
+      <AccessDeniedShell
+        email={authSession?.user?.email ?? "Unknown account"}
+        onSignOut={handleSignOut}
+      />
+    );
+  }
+
+  const requestAdminModuleAccess = (moduleKey) => {
+    let result = { ok: false, error: "Unable to send this permission request." };
+
+    setSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+      if (activeRole !== "Manager") {
+        result = { ok: false, error: "Only a manager can ask the owner for admin edit access." };
+        return current;
+      }
+      if (!MODULE_EDIT_ACCESS[moduleKey]) {
+        result = { ok: false, error: "Permission area not found." };
+        return current;
+      }
+
+      const currentControls = getPermissionControls(current);
+      const targetControl = currentControls[moduleKey];
+
+      if (targetControl.requestStatus === "pending") {
+        result = { ok: false, error: "This request is already waiting for the owner." };
+        return current;
+      }
+
+      const timestamp = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
+      const nextControl = {
+        ...targetControl,
+        requestStatus: "pending",
+        requestedAt: timestamp,
+        requestedBy: actorId,
+        requestedByRole: activeRole,
+        ownerReviewedAt: null,
+        ownerReviewedBy: null,
+        ownerReviewedByRole: null,
+        active: false,
+        grantedAt: null,
+        grantedBy: null,
+        grantedByRole: null,
+      };
+
+      result = {
+        ok: true,
+        message: `Owner approval requested for admin edits in ${MODULE_EDIT_ACCESS[moduleKey].label}.`,
+      };
+
+      return {
+        ...current,
+        permissionControls: {
+          ...currentControls,
+          [moduleKey]: nextControl,
+        },
+        auditTrail: appendAuditTrail(current.auditTrail, [
+          buildCurrentAuditEvent(current, {
+            timestamp,
+            scope: "system",
+            action: "request",
+            entityType: "permission",
+            entityId: moduleKey,
+            title: `Admin edit access requested / ${MODULE_EDIT_ACCESS[moduleKey].label}`,
+            detail: "Manager asked the owner for approval.",
+          }),
+        ]),
+      };
+    });
+
+    return result;
+  };
+
+  const reviewAdminModuleAccess = (moduleKey, nextDecision) => {
+    let result = { ok: false, error: "Unable to review this permission request." };
+
+    setSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+      if (activeRole !== "Owner") {
+        result = { ok: false, error: "Only the owner can review admin edit requests." };
+        return current;
+      }
+      if (!MODULE_EDIT_ACCESS[moduleKey]) {
+        result = { ok: false, error: "Permission area not found." };
+        return current;
+      }
+
+      const currentControls = getPermissionControls(current);
+      const targetControl = currentControls[moduleKey];
+
+      if (targetControl.requestStatus !== "pending") {
+        result = { ok: false, error: "There is no waiting request for this area." };
+        return current;
+      }
+
+      const approved = nextDecision === "approved";
+      const timestamp = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
+      const nextControl = {
+        ...targetControl,
+        requestStatus: approved ? "approved" : "rejected",
+        ownerReviewedAt: timestamp,
+        ownerReviewedBy: actorId,
+        ownerReviewedByRole: activeRole,
+        active: approved ? targetControl.active : false,
+        grantedAt: approved ? targetControl.grantedAt : null,
+        grantedBy: approved ? targetControl.grantedBy : null,
+        grantedByRole: approved ? targetControl.grantedByRole : null,
+      };
+
+      result = {
+        ok: true,
+        message: approved
+          ? `Owner approved admin edit access for ${MODULE_EDIT_ACCESS[moduleKey].label}.`
+          : `Owner declined admin edit access for ${MODULE_EDIT_ACCESS[moduleKey].label}.`,
+      };
+
+      return {
+        ...current,
+        permissionControls: {
+          ...currentControls,
+          [moduleKey]: nextControl,
+        },
+        auditTrail: appendAuditTrail(current.auditTrail, [
+          buildCurrentAuditEvent(current, {
+            timestamp,
+            scope: "system",
+            action: approved ? "approve" : "reject",
+            entityType: "permission",
+            entityId: moduleKey,
+            title: `Admin edit access ${approved ? "approved" : "declined"} / ${
+              MODULE_EDIT_ACCESS[moduleKey].label
+            }`,
+            detail: approved
+              ? "Manager can now grant admin access."
+              : "Admin edit access stays locked.",
+          }),
+        ]),
+      };
+    });
+
+    return result;
+  };
+
+  const setAdminModuleAccess = (moduleKey, nextActive) => {
+    let result = { ok: false, error: "Unable to change admin access." };
+
+    setSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+      if (!["Owner", "Manager"].includes(activeRole)) {
+        result = { ok: false, error: "Only the owner or manager can change admin access." };
+        return current;
+      }
+      if (!MODULE_EDIT_ACCESS[moduleKey]) {
+        result = { ok: false, error: "Permission area not found." };
+        return current;
+      }
+
+      const currentControls = getPermissionControls(current);
+      const targetControl = currentControls[moduleKey];
+
+      if (nextActive && targetControl.requestStatus !== "approved") {
+        result = {
+          ok: false,
+          error: "Owner approval is still required before admin access can be granted.",
+        };
+        return current;
+      }
+      if (!nextActive && !targetControl.active) {
+        result = { ok: false, error: "Admin access is already off for this area." };
+        return current;
+      }
+
+      const timestamp = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
+      const nextControl = {
+        ...targetControl,
+        active: nextActive,
+        grantedAt: nextActive ? timestamp : null,
+        grantedBy: nextActive ? actorId : null,
+        grantedByRole: nextActive ? activeRole : null,
+      };
+
+      result = {
+        ok: true,
+        message: nextActive
+          ? `Admin can now edit ${MODULE_EDIT_ACCESS[moduleKey].label} records.`
+          : `Admin edit access removed from ${MODULE_EDIT_ACCESS[moduleKey].label}.`,
+      };
+
+      return {
+        ...current,
+        permissionControls: {
+          ...currentControls,
+          [moduleKey]: nextControl,
+        },
+        auditTrail: appendAuditTrail(current.auditTrail, [
+          buildCurrentAuditEvent(current, {
+            timestamp,
+            scope: "system",
+            action: nextActive ? "grant" : "revoke",
+            entityType: "permission",
+            entityId: moduleKey,
+            title: `Admin edit access ${nextActive ? "granted" : "removed"} / ${
+              MODULE_EDIT_ACCESS[moduleKey].label
+            }`,
+            detail: nextActive
+              ? "Admin can now update saved records in this area."
+              : "Admin must wait for the next manager grant.",
+          }),
+        ]),
+      };
+    });
+
+    return result;
+  };
 
   const selectDriverVehicle = (vehicleId) => {
     setSnapshot((current) => {
@@ -864,9 +2103,16 @@ function App() {
       const openingOdo = Number(draft.openingOdo);
       const closingOdo = Number(draft.closingOdo);
       const amountClaimed = Number(draft.amountClaimed);
+      const now = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
+      const isUpdate = Boolean(existing);
 
+      if (activeRole === "Admin" && !hasModuleUpdateAccess(current, "finance")) {
+        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
+        return current;
+      }
       if (existing?.status === "banked") {
-        result = { ok: false, error: "Banked records are read-only." };
+        result = { ok: false, error: "Deposited records can no longer be changed." };
         return current;
       }
       if (!vehicle) {
@@ -882,7 +2128,7 @@ function App() {
         return current;
       }
       if (!Number.isFinite(amountClaimed) || amountClaimed <= 0) {
-        result = { ok: false, error: "Enter the amount claimed for the shift." };
+        result = { ok: false, error: "Enter the amount collected for the trip." };
         return current;
       }
 
@@ -893,6 +2139,7 @@ function App() {
         draft.id ?? null,
       );
       const nextRecord = {
+        ...existing,
         id: draft.id ?? createRecordId("txn-inc"),
         type: "income",
         incomeKind: "standard",
@@ -907,34 +2154,49 @@ function App() {
         discrepancy: openingOdo !== expectedOpening,
         isSpecial: false,
         status: "pending",
-        timestamp: new Date().toISOString(),
-        createdBy: getCurrentActorId(activeRole, current),
-        createdByRole: activeRole,
+        timestamp: existing?.timestamp ?? existing?.createdAt ?? now,
+        createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
+        createdBy: existing?.createdBy ?? actorId,
+        createdByRole: existing?.createdByRole ?? activeRole,
+        updatedAt: isUpdate ? now : null,
+        updatedBy: isUpdate ? actorId : null,
+        updatedByRole: isUpdate ? activeRole : null,
+        verifiedAt: null,
+        verifiedBy: null,
+        verifiedByRole: null,
         depositId: null,
       };
       const nextTransactions = draft.id
         ? current.financeTransactions.map((record) =>
             record.id === draft.id
-              ? {
-                  ...nextRecord,
-                  createdBy: record.createdBy,
-                  createdByRole: record.createdByRole,
-                }
+              ? nextRecord
               : record,
           )
         : [nextRecord, ...(current.financeTransactions ?? [])];
+      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp: now,
+          scope: "finance",
+          action: isUpdate ? "update" : "create",
+          entityType: "income",
+          entityId: nextRecord.id,
+          title: `${isUpdate ? "Trip income updated" : "Trip income added"} / ${vehicle.registration}`,
+          detail: `${vehicle.route} / ${formatMoney(amountClaimed)}`,
+        }),
+      ]);
 
       result = {
         ok: true,
         message: nextRecord.discrepancy
-          ? "Shift saved with an opening odometer discrepancy flag."
-          : "Shift saved and queued for verification.",
+          ? "Trip saved, but the opening odometer does not match the last record."
+          : "Trip saved and waiting to be checked.",
         nextOpeningOdo: closingOdo,
       };
 
       return {
         ...current,
         financeTransactions: nextTransactions,
+        auditTrail: nextAuditTrail,
       };
     });
 
@@ -942,7 +2204,7 @@ function App() {
   };
 
   const saveSpecialIncome = (draft) => {
-    let result = { ok: false, error: "Unable to save the special trip." };
+    let result = { ok: false, error: "Unable to save the extra trip." };
 
     setSnapshot((current) => {
       if (!current) {
@@ -953,60 +2215,128 @@ function App() {
         (record) => record.id === draft.id,
       );
       const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
+      const tripDate = String(draft.tripDate ?? "").trim();
+      const openingOdo = Number(draft.openingOdo);
+      const closingOdo = Number(draft.closingOdo);
+      const fromLocation = draft.fromLocation?.trim() ?? "";
+      const toLocation = draft.toLocation?.trim() ?? "";
+      const travelReason = draft.travelReason?.trim() ?? "";
+      const fuelOilCost = Number(draft.fuelOilCost ?? 0);
+      const repairMaintenanceCost = Number(draft.repairMaintenanceCost ?? 0);
       const amount = Number(draft.amount);
+      const businessKm = closingOdo - openingOdo;
+      const now = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
+      const isUpdate = Boolean(existing);
 
-      if (existing?.status === "banked") {
-        result = { ok: false, error: "Banked records are read-only." };
+      if (activeRole === "Admin" && !hasModuleUpdateAccess(current, "finance")) {
+        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
         return current;
       }
-      if (!draft.description?.trim()) {
-        result = { ok: false, error: "Add a description for the special trip." };
+      if (existing?.status === "banked") {
+        result = { ok: false, error: "Deposited records can no longer be changed." };
+        return current;
+      }
+      if (!vehicle) {
+        result = { ok: false, error: "Select a valid vehicle before submitting." };
+        return current;
+      }
+      if (!tripDate || !parseDateInputValue(tripDate)) {
+        result = { ok: false, error: "Select the travel date." };
+        return current;
+      }
+      if (!Number.isFinite(openingOdo) || !Number.isFinite(closingOdo)) {
+        result = { ok: false, error: "Opening and closing odometer readings are required." };
+        return current;
+      }
+      if (closingOdo - openingOdo <= 0) {
+        result = { ok: false, error: "Closing odometer must be greater than opening odometer." };
+        return current;
+      }
+      if (!fromLocation || !toLocation || !travelReason) {
+        result = { ok: false, error: "Complete the business travel details before saving." };
+        return current;
+      }
+      if (!Number.isFinite(fuelOilCost) || fuelOilCost < 0) {
+        result = { ok: false, error: "Enter a valid fuel and oil cost." };
+        return current;
+      }
+      if (!Number.isFinite(repairMaintenanceCost) || repairMaintenanceCost < 0) {
+        result = { ok: false, error: "Enter a valid repairs and maintenance cost." };
         return current;
       }
       if (!Number.isFinite(amount) || amount <= 0) {
-        result = { ok: false, error: "Enter the amount earned for the special trip." };
+        result = { ok: false, error: "Enter the amount earned for the extra trip." };
         return current;
       }
 
       const nextRecord = {
+        ...existing,
         id: draft.id ?? createRecordId("txn-sp"),
         type: "income",
         incomeKind: "special",
-        vehicleId: draft.vehicleId || null,
-        vehicle: vehicle?.registration ?? "General",
-        route: vehicle?.route ?? "Special trip",
-        description: draft.description.trim(),
+        vehicleId: draft.vehicleId,
+        vehicle: vehicle.registration,
+        route: `${fromLocation} to ${toLocation}`,
+        assignedRoute: vehicle.route,
+        description: travelReason,
+        tripDate,
+        openingOdo,
+        closingOdo,
+        businessKm,
+        fromLocation,
+        toLocation,
+        travelReason,
+        fuelOilCost,
+        repairMaintenanceCost,
         amount,
         amountClaimed: amount,
         actualCashReceived: null,
         discrepancy: false,
         isSpecial: true,
         status: "pending",
-        timestamp: new Date().toISOString(),
-        createdBy: getCurrentActorId(activeRole, current),
-        createdByRole: activeRole,
+        timestamp: createTimestampFromDateInput(tripDate, existing?.timestamp ?? now),
+        createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
+        createdBy: existing?.createdBy ?? actorId,
+        createdByRole: existing?.createdByRole ?? activeRole,
+        updatedAt: isUpdate ? now : null,
+        updatedBy: isUpdate ? actorId : null,
+        updatedByRole: isUpdate ? activeRole : null,
+        verifiedAt: null,
+        verifiedBy: null,
+        verifiedByRole: null,
         depositId: null,
       };
       const nextTransactions = draft.id
         ? current.financeTransactions.map((record) =>
-            record.id === draft.id
-              ? {
-                  ...nextRecord,
-                  createdBy: record.createdBy,
-                  createdByRole: record.createdByRole,
-                }
-              : record,
+            record.id === draft.id ? nextRecord : record,
           )
         : [nextRecord, ...(current.financeTransactions ?? [])];
+      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp: now,
+          scope: "finance",
+          action: isUpdate ? "update" : "create",
+          entityType: "income",
+          entityId: nextRecord.id,
+          title: `${isUpdate ? "Extra trip updated" : "Extra trip added"} / ${
+            nextRecord.vehicle
+          }`,
+          detail: `${formatTripRoute(nextRecord)} / ${travelReason} / ${businessKm.toLocaleString()} km / ${formatMoney(
+            amount,
+          )}`,
+        }),
+      ]);
 
       result = {
         ok: true,
-        message: "Special trip saved as pending income.",
+        message: "Extra trip saved and waiting to be checked.",
       };
 
       return {
         ...current,
         financeTransactions: nextTransactions,
+        auditTrail: nextAuditTrail,
       };
     });
 
@@ -1028,13 +2358,31 @@ function App() {
       const expenseKind = draft.expenseKind;
       const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
       const status = PRIVILEGED_ROLES.has(activeRole) ? "verified" : "pending";
+      const now = new Date().toISOString();
+      const expenseDate = String(draft.expenseDate ?? "").trim();
+      const description = draft.description?.trim() ?? "";
+      const reference = draft.reference?.trim() ?? "";
+      const actorId = resolveCurrentActorId(current);
+      const isUpdate = Boolean(existing);
 
+      if (activeRole === "Admin" && !hasModuleUpdateAccess(current, "finance")) {
+        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
+        return current;
+      }
       if (existing?.status === "banked") {
-        result = { ok: false, error: "Banked records are read-only." };
+        result = { ok: false, error: "Deposited records can no longer be changed." };
         return current;
       }
       if (!draft.category?.trim()) {
         result = { ok: false, error: "Enter an expense category." };
+        return current;
+      }
+      if (!description) {
+        result = { ok: false, error: "Enter an expense description." };
+        return current;
+      }
+      if (!expenseDate) {
+        result = { ok: false, error: "Select the expense date." };
         return current;
       }
       if (!Number.isFinite(amount) || amount <= 0) {
@@ -1042,48 +2390,64 @@ function App() {
         return current;
       }
       if (expenseKind === "asset" && !vehicle) {
-        result = { ok: false, error: "Asset-linked expenses require a valid vehicle." };
+        result = { ok: false, error: "Vehicle costs need a valid vehicle." };
         return current;
       }
 
       const nextRecord = {
+        ...existing,
         id: draft.id ?? createRecordId("txn-exp"),
         type: "expense",
         expenseKind,
         category: draft.category.trim(),
+        description,
+        expenseDate,
+        reference: reference || null,
         vehicleId: expenseKind === "asset" ? draft.vehicleId : null,
         vehicle: expenseKind === "asset" ? vehicle.registration : "General",
         amount,
         cashExpense: Boolean(draft.cashExpense),
         status,
-        timestamp: new Date().toISOString(),
-        createdBy: getCurrentActorId(activeRole, current),
-        createdByRole: activeRole,
+        timestamp: createTimestampFromDateInput(expenseDate, existing?.timestamp ?? now),
+        createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
+        createdBy: existing?.createdBy ?? actorId,
+        createdByRole: existing?.createdByRole ?? activeRole,
+        updatedAt: isUpdate ? now : null,
+        updatedBy: isUpdate ? actorId : null,
+        updatedByRole: isUpdate ? activeRole : null,
         depositId: null,
       };
       const nextTransactions = draft.id
         ? current.financeTransactions.map((record) =>
-            record.id === draft.id
-              ? {
-                  ...nextRecord,
-                  createdBy: record.createdBy,
-                  createdByRole: record.createdByRole,
-                }
-              : record,
+            record.id === draft.id ? nextRecord : record,
           )
         : [nextRecord, ...(current.financeTransactions ?? [])];
+      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp: now,
+          scope: "finance",
+          action: isUpdate ? "update" : "create",
+          entityType: "expense",
+          entityId: nextRecord.id,
+          title: `${isUpdate ? "Expense updated" : "Expense added"} / ${nextRecord.category}`,
+          detail: `${nextRecord.description} / ${formatMoney(amount)}${
+            nextRecord.reference ? ` / Receipt ${nextRecord.reference}` : ""
+          }`,
+        }),
+      ]);
 
       result = {
         ok: true,
         message:
           status === "verified"
-            ? "Expense saved and verified."
-            : "Expense saved and routed for manager approval.",
+            ? "Expense saved and checked."
+            : "Expense saved and sent to a manager for review.",
       };
 
       return {
         ...current,
         financeTransactions: nextTransactions,
+        auditTrail: nextAuditTrail,
       };
     });
 
@@ -1091,7 +2455,7 @@ function App() {
   };
 
   const verifyIncome = (transactionId, actualCashReceived) => {
-    let result = { ok: false, error: "Unable to verify this income record." };
+    let result = { ok: false, error: "Unable to check this income record." };
 
     setSnapshot((current) => {
       if (!current) {
@@ -1100,17 +2464,23 @@ function App() {
 
       const amount = Number(actualCashReceived);
       const target = current.financeTransactions.find((record) => record.id === transactionId);
+      const now = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
 
+      if (!hasModuleUpdateAccess(current, "finance")) {
+        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
+        return current;
+      }
       if (!target || target.type !== "income") {
         result = { ok: false, error: "Income record not found." };
         return current;
       }
       if (target.status === "banked") {
-        result = { ok: false, error: "Banked records are read-only." };
+        result = { ok: false, error: "Deposited records can no longer be changed." };
         return current;
       }
       if (!Number.isFinite(amount) || amount < 0) {
-        result = { ok: false, error: "Enter the actual cash received before verifying." };
+        result = { ok: false, error: "Enter the cash received before checking this record." };
         return current;
       }
 
@@ -1120,19 +2490,34 @@ function App() {
               ...record,
               actualCashReceived: amount,
               status: "verified",
+              verifiedAt: now,
+              verifiedBy: actorId,
+              verifiedByRole: activeRole,
             }
           : record,
       );
+      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp: now,
+          scope: "finance",
+          action: "verify",
+          entityType: "income",
+          entityId: transactionId,
+          title: `Trip income checked / ${target.vehicle ?? "General"}`,
+          detail: `${formatMoney(amount)} counted`,
+        }),
+      ]);
 
       result = {
         ok: true,
-        message: "Income record verified and moved into the bankable cash pool.",
+        message: "Income record checked and added to cash ready for banking.",
         shortage: Math.max(Number(target.amountClaimed ?? target.amount ?? 0) - amount, 0),
       };
 
       return {
         ...current,
         financeTransactions: nextTransactions,
+        auditTrail: nextAuditTrail,
       };
     });
 
@@ -1149,22 +2534,51 @@ function App() {
 
       const target = current.financeTransactions.find((record) => record.id === transactionId);
 
+      if (!hasModuleUpdateAccess(current, "finance")) {
+        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
+        return current;
+      }
       if (!target) {
         result = { ok: false, error: "Record not found." };
         return current;
       }
       if (target.status === "banked") {
-        result = { ok: false, error: "Banked records are locked and cannot be deleted." };
+        result = { ok: false, error: "Deposited records are final and cannot be deleted." };
         return current;
       }
 
-      result = { ok: true, message: "Record removed from the current working set." };
+      result = { ok: true, message: "Record removed." };
+      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          scope: "finance",
+          action: "delete",
+          entityType: target.type,
+          entityId: target.id,
+          title:
+            target.type === "income"
+              ? `${target.isSpecial ? "Extra trip removed" : "Trip income removed"} / ${
+                  target.vehicle ?? "General"
+                }`
+              : `Expense removed / ${target.category}`,
+          detail:
+            target.type === "income"
+              ? target.isSpecial
+                ? `${formatMoney(target.amountClaimed ?? target.amount ?? 0)} / ${formatTripRoute(
+                    target,
+                  )} / ${formatTripLogMeta(target)}`
+                : `${formatMoney(target.amountClaimed ?? target.amount ?? 0)} / ${
+                    target.route ?? "Pending route"
+                  }`
+              : `${formatMoney(target.amount ?? 0)} / ${target.vehicle ?? "General"}`,
+        }),
+      ]);
 
       return {
         ...current,
         financeTransactions: current.financeTransactions.filter(
           (record) => record.id !== transactionId,
         ),
+        auditTrail: nextAuditTrail,
       };
     });
 
@@ -1172,7 +2586,7 @@ function App() {
   };
 
   const lockDeposit = () => {
-    let result = { ok: false, error: "No verified records are available to lock." };
+    let result = { ok: false, error: "No checked records are ready to finalise." };
 
     setSnapshot((current) => {
       if (!current) {
@@ -1183,11 +2597,16 @@ function App() {
         (record) => record.status === "verified",
       );
 
+      if (!hasModuleUpdateAccess(current, "finance")) {
+        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
+        return current;
+      }
       if (lockableTransactions.length === 0) {
         return current;
       }
 
       const now = new Date();
+      const actorId = resolveCurrentActorId(current);
       const depositId = `dep-${now.getTime()}`;
       const reference = buildDepositReference((current.deposits?.length ?? 0) + 1, now);
       const verifiedTakings = sumBy(
@@ -1209,11 +2628,27 @@ function App() {
         cashExpenses,
         depositAmount: verifiedTakings - cashExpenses,
         transactionIds: lockableTransactions.map((record) => record.id),
+        lockedBy: actorId,
+        lockedByRole: activeRole,
       };
+      const timestamp = now.toISOString();
+      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp,
+          scope: "finance",
+          action: "lock",
+          entityType: "deposit",
+          entityId: depositId,
+          title: `Deposit finished / ${reference}`,
+          detail: `${lockableTransactions.length} records / ${formatMoney(
+            depositRecord.depositAmount,
+          )}`,
+        }),
+      ]);
 
       result = {
         ok: true,
-        message: `${lockableTransactions.length} verified records were sealed into ${reference}.`,
+        message: `${lockableTransactions.length} checked records were added to ${reference}.`,
         reference,
       };
 
@@ -1226,9 +2661,11 @@ function App() {
                 ...record,
                 status: "banked",
                 depositId,
+                bankedAt: timestamp,
               }
             : record,
         ),
+        auditTrail: nextAuditTrail,
       };
     });
 
@@ -1242,8 +2679,8 @@ function App() {
       if (!current) {
         return current;
       }
-      if (!["Owner", "Admin"].includes(activeRole)) {
-        result = { ok: false, error: "Only Admin or Owner can edit vehicle settings." };
+      if (!PRIVILEGED_ROLES.has(activeRole)) {
+        result = { ok: false, error: "Only management can edit vehicle settings." };
         return current;
       }
       if (!draft.registration?.trim() || !draft.model?.trim() || !draft.route?.trim()) {
@@ -1251,7 +2688,15 @@ function App() {
         return current;
       }
 
+      const existing = current.vehicles.find((vehicle) => vehicle.id === draft.id);
+      if (activeRole === "Admin" && !hasModuleUpdateAccess(current, "fleet")) {
+        result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
+        return current;
+      }
+      const now = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
       const nextVehicle = {
+        ...existing,
         id: draft.id ?? createRecordId("veh"),
         registration: draft.registration.trim().toUpperCase(),
         model: draft.model.trim(),
@@ -1264,13 +2709,32 @@ function App() {
         permitExpiryDate: draft.permitExpiryDate || null,
         discExpiryDate: draft.discExpiryDate || null,
         assignedDriverId: draft.assignedDriverId || null,
-        archivedAt: draft.status === "archived" ? new Date().toISOString() : null,
+        createdAt: existing?.createdAt ?? now,
+        createdBy: existing?.createdBy ?? actorId,
+        createdByRole: existing?.createdByRole ?? activeRole,
+        updatedAt: existing ? now : null,
+        updatedBy: existing ? actorId : null,
+        updatedByRole: existing ? activeRole : null,
+        archivedAt: existing?.archivedAt ?? null,
+        archivedBy: existing?.archivedBy ?? null,
+        archivedByRole: existing?.archivedByRole ?? null,
       };
       const nextVehicles = draft.id
         ? current.vehicles.map((vehicle) =>
             vehicle.id === draft.id ? { ...vehicle, ...nextVehicle } : vehicle,
           )
         : [nextVehicle, ...(current.vehicles ?? [])];
+      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp: now,
+          scope: "fleet",
+          action: existing ? "update" : "create",
+          entityType: "vehicle",
+          entityId: nextVehicle.id,
+          title: `Vehicle ${existing ? "updated" : "created"} / ${nextVehicle.registration}`,
+          detail: `${nextVehicle.model} / ${nextVehicle.route}`,
+        }),
+      ]);
 
       result = {
         ok: true,
@@ -1281,6 +2745,73 @@ function App() {
       return {
         ...current,
         vehicles: nextVehicles,
+        auditTrail: nextAuditTrail,
+      };
+    });
+
+    return result;
+  };
+
+  const saveDriver = (draft) => {
+    let result = { ok: false, error: "Unable to save the driver profile." };
+
+    setSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+      if (!PRIVILEGED_ROLES.has(activeRole)) {
+        result = { ok: false, error: "Only management can add drivers." };
+        return current;
+      }
+      if (activeRole === "Admin" && !hasModuleUpdateAccess(current, "drivers")) {
+        result = { ok: false, error: getModuleAccessErrorMessage("drivers") };
+        return current;
+      }
+      if (!draft.name?.trim() || !draft.route?.trim()) {
+        result = { ok: false, error: "Driver name and route are required." };
+        return current;
+      }
+
+      const now = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
+      const nextDriver = {
+        staffId: draft.staffId?.trim() || createRecordId("drv"),
+        name: draft.name.trim(),
+        route: draft.route.trim(),
+        shiftStatus: draft.shiftStatus ?? "Ready for dispatch",
+        avgShiftRevenue: 0,
+        cashAccuracy: 100,
+        prdpExpiryDate: draft.prdpExpiryDate || null,
+        role: "Driver",
+        createdAt: now,
+        createdBy: actorId,
+        createdByRole: activeRole,
+        updatedAt: null,
+        updatedBy: null,
+        updatedByRole: null,
+      };
+      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp: now,
+          scope: "drivers",
+          action: "create",
+          entityType: "driver",
+          entityId: nextDriver.staffId,
+          title: `Driver created / ${nextDriver.name}`,
+          detail: `${nextDriver.staffId} / ${nextDriver.route}`,
+        }),
+      ]);
+
+      result = {
+        ok: true,
+        message: `${nextDriver.name} added to the driver roster.`,
+        staffId: nextDriver.staffId,
+      };
+
+      return {
+        ...current,
+        drivers: [nextDriver, ...(current.drivers ?? [])],
+        auditTrail: nextAuditTrail,
       };
     });
 
@@ -1298,6 +2829,10 @@ function App() {
         result = { ok: false, error: "Only Admin or Owner can archive vehicles." };
         return current;
       }
+      if (!hasModuleUpdateAccess(current, "fleet")) {
+        result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
+        return current;
+      }
 
       const target = current.vehicles.find((vehicle) => vehicle.id === vehicleId);
       if (!target) {
@@ -1309,7 +2844,20 @@ function App() {
         return current;
       }
 
+      const now = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
       result = { ok: true, message: `${target.registration} archived for audit retention.` };
+      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp: now,
+          scope: "fleet",
+          action: "archive",
+          entityType: "vehicle",
+          entityId: target.id,
+          title: `Vehicle archived / ${target.registration}`,
+          detail: `${target.model} kept in the owner history`,
+        }),
+      ]);
 
       return {
         ...current,
@@ -1318,10 +2866,16 @@ function App() {
             ? {
                 ...vehicle,
                 status: "archived",
-                archivedAt: new Date().toISOString(),
+                archivedAt: now,
+                archivedBy: actorId,
+                archivedByRole: activeRole,
+                updatedAt: now,
+                updatedBy: actorId,
+                updatedByRole: activeRole,
               }
             : vehicle,
         ),
+        auditTrail: nextAuditTrail,
       };
     });
 
@@ -1329,7 +2883,7 @@ function App() {
   };
 
   const logDefect = (draft) => {
-    let result = { ok: false, error: "Unable to log the defect." };
+    let result = { ok: false, error: "Unable to save the problem report." };
 
     setSnapshot((current) => {
       if (!current) {
@@ -1337,19 +2891,23 @@ function App() {
       }
       const existing = current.defects.find((defect) => defect.id === draft.id);
       if (!draft.vehicleId) {
-        result = { ok: false, error: "Select a vehicle before logging a defect." };
+        result = { ok: false, error: "Select a vehicle before reporting a problem." };
         return current;
       }
       if (!DEFECT_CATEGORIES.includes(draft.category)) {
-        result = { ok: false, error: "Select a valid defect category." };
+        result = { ok: false, error: "Select a valid problem category." };
+        return current;
+      }
+      if (activeRole === "Admin" && !hasModuleUpdateAccess(current, "fleet")) {
+        result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
         return current;
       }
       if (existing && !["Owner", "Admin", "Manager"].includes(activeRole)) {
-        result = { ok: false, error: "Only management can update logged defects." };
+        result = { ok: false, error: "Only management can update reported problems." };
         return current;
       }
       if (existing?.status === "resolved") {
-        result = { ok: false, error: "Resolved defects are immutable." };
+        result = { ok: false, error: "Fixed problems can no longer be changed." };
         return current;
       }
 
@@ -1366,27 +2924,47 @@ function App() {
             ? "Medium"
             : "Low";
       const detail = draft.detail?.trim() || draft.category;
+      const now = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
       const defectRecord = {
+        ...existing,
         id: draft.id ?? createRecordId("def"),
         vehicleId: draft.vehicleId,
         category: draft.category,
         issue: detail,
         detail,
         severity,
-        reportedAt: existing?.reportedAt ?? new Date().toISOString(),
-        reportedByStaffId: existing?.reportedByStaffId ?? getCurrentActorId(activeRole, current),
+        reportedAt: existing?.reportedAt ?? now,
+        reportedByStaffId: existing?.reportedByStaffId ?? actorId,
+        reportedByRole: existing?.reportedByRole ?? activeRole,
+        updatedAt: existing ? now : null,
+        updatedBy: existing ? actorId : null,
+        updatedByRole: existing ? activeRole : null,
         status: "open",
         costEstimate: existing?.costEstimate ?? 0,
         repairCost: null,
         resolvedAt: null,
         resolvedExpenseId: null,
+        resolvedBy: null,
+        resolvedByRole: null,
       };
+      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp: now,
+          scope: "fleet",
+          action: existing ? "update" : "report",
+          entityType: "defect",
+          entityId: defectRecord.id,
+          title: `Problem ${existing ? "updated" : "reported"} / ${vehicle.registration}`,
+          detail,
+        }),
+      ]);
 
       result = {
         ok: true,
         message: existing
-          ? "Logged defect updated in the vehicle audit trail."
-          : "Defect logged into the vehicle audit trail.",
+          ? "Reported problem updated in the vehicle history."
+          : "Problem added to the vehicle history.",
       };
 
       return {
@@ -1396,6 +2974,7 @@ function App() {
               defect.id === draft.id ? { ...defect, ...defectRecord } : defect,
             )
           : [defectRecord, ...(current.defects ?? [])],
+        auditTrail: nextAuditTrail,
       };
     });
 
@@ -1403,35 +2982,40 @@ function App() {
   };
 
   const resolveDefect = (defectId, repairCost) => {
-    let result = { ok: false, error: "Unable to resolve the defect." };
+    let result = { ok: false, error: "Unable to mark this problem as fixed." };
 
     setSnapshot((current) => {
       if (!current) {
         return current;
       }
       if (!["Owner", "Admin", "Manager"].includes(activeRole)) {
-        result = { ok: false, error: "Only management can resolve defects." };
+        result = { ok: false, error: "Only management can mark problems as fixed." };
+        return current;
+      }
+      if (!hasModuleUpdateAccess(current, "fleet")) {
+        result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
         return current;
       }
 
       const target = (current.defects ?? []).find((defect) => defect.id === defectId);
       const amount = Number(repairCost);
       if (!target) {
-        result = { ok: false, error: "Defect not found." };
+        result = { ok: false, error: "Problem not found." };
         return current;
       }
       if (target.status === "resolved") {
-        result = { ok: false, error: "Resolved defects are immutable." };
+        result = { ok: false, error: "Fixed problems can no longer be changed." };
         return current;
       }
       if (!Number.isFinite(amount) || amount < 0) {
-        result = { ok: false, error: "Enter the repair cost to resolve this defect." };
+        result = { ok: false, error: "Enter the repair cost before marking this as fixed." };
         return current;
       }
 
       const vehicle = current.vehicles.find((item) => item.id === target.vehicleId);
       const expenseId = createRecordId("txn-exp");
       const timestamp = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
       const expenseRecord = {
         id: expenseId,
         type: "expense",
@@ -1443,14 +3027,38 @@ function App() {
         cashExpense: true,
         status: "verified",
         timestamp,
-        createdBy: getCurrentActorId(activeRole, current),
+        createdAt: timestamp,
+        createdBy: actorId,
         createdByRole: activeRole,
+        verifiedAt: timestamp,
+        verifiedBy: actorId,
+        verifiedByRole: activeRole,
         depositId: null,
       };
+      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp,
+          scope: "fleet",
+          action: "resolve",
+          entityType: "defect",
+          entityId: defectId,
+          title: `Problem fixed / ${vehicle?.registration ?? "Vehicle"}`,
+          detail: `${target.detail ?? target.issue} / ${formatMoney(amount)}`,
+        }),
+        buildCurrentAuditEvent(current, {
+          timestamp,
+          scope: "finance",
+          action: "create",
+          entityType: "expense",
+          entityId: expenseId,
+          title: `Repair cost added / ${vehicle?.registration ?? "Vehicle"}`,
+          detail: `${target.category} / ${formatMoney(amount)}`,
+        }),
+      ]);
 
       result = {
         ok: true,
-        message: "Defect resolved and repair expense posted to the finance ledger.",
+        message: "Problem marked as fixed and the repair cost was added to expenses.",
       };
 
       return {
@@ -1463,10 +3071,16 @@ function App() {
                 repairCost: amount,
                 resolvedAt: timestamp,
                 resolvedExpenseId: expenseId,
+                resolvedBy: actorId,
+                resolvedByRole: activeRole,
+                updatedAt: timestamp,
+                updatedBy: actorId,
+                updatedByRole: activeRole,
               }
             : defect,
         ),
         financeTransactions: [expenseRecord, ...(current.financeTransactions ?? [])],
+        auditTrail: nextAuditTrail,
       };
     });
 
@@ -1495,6 +3109,42 @@ function App() {
     }
   };
 
+  const backendModeLabel = backendMode === "live" ? "Live mode" : "Demo mode";
+  const backendModeNote =
+    backendMode === "live"
+      ? `Client data is stored in ${repository.liveModeSourceLabel} with a clean live slate.`
+      : "Training and presentation data is active. Reset demo to start from zero.";
+
+  const handleBackendModeChange = (nextMode) => {
+    const resolvedMode = repository.setBackendMode(nextMode);
+
+    setBackendFeedback(
+      resolvedMode === "live"
+        ? {
+            tone: "success",
+            message: `Live mode is active. Data now saves in ${repository.liveModeSourceLabel}.`,
+          }
+        : {
+            tone: "info",
+            message: "Demo data mode is active for training and presentations.",
+          },
+    );
+
+    if (resolvedMode !== backendMode) {
+      setLoading(true);
+      setBackendMode(resolvedMode);
+    }
+  };
+
+  const handleResetDemoMode = () => {
+    const resetSnapshot = repository.resetModeSnapshot("mock");
+    setSnapshot(resetSnapshot);
+    setBackendFeedback({
+      tone: "warning",
+      message: "Demo workspace reset. Training capture now starts from zero.",
+    });
+  };
+
   const openDefects = currentSnapshot.defects.filter(
     (defect) => defect.status !== "resolved",
   ).length;
@@ -1508,7 +3158,12 @@ function App() {
 
   const moduleMeta = {
     overview: {
-      stat: activeRole === "Driver" ? currentSnapshot.driverTerminal.assignedVehicle : "Live",
+      stat:
+        activeRole === "Driver"
+          ? currentSnapshot.driverTerminal.assignedVehicle
+          : backendMode === "live"
+            ? "Live"
+            : "Demo",
       sub: activeRole === "Driver" ? "My terminal" : "Operations",
     },
     finance: {
@@ -1535,7 +3190,11 @@ function App() {
         <main className="page-shell">
           <section className="app-toolbar">
             <div className="brand-lockup compact">
-              <div className="brand-mark compact">TF</div>
+              <img
+                className="brand-logo compact toolbar-logo"
+                src="/taxiflow-favicon.png"
+                alt="TaxiFlow logo"
+              />
               <div>
                 <h1>{currentSnapshot.profile.fleetName}</h1>
                 <p className="topbar-meta">
@@ -1550,21 +3209,73 @@ function App() {
                   <Clock size={14} />
                   <span>Banking window {currentSnapshot.profile.nextBankingWindow}</span>
                 </span>
+                <article className="backend-mode-panel">
+                  <div className="backend-mode-head">
+                    <Settings2 size={14} />
+                    <div>
+                      <p className="eyebrow">Data mode</p>
+                      <strong>{backendModeLabel}</strong>
+                    </div>
+                  </div>
+                  <div className="backend-mode-switch" role="group" aria-label="Data mode toggle">
+                    <button
+                      type="button"
+                      className={
+                        backendMode === "mock" ? "role-pill compact active" : "role-pill compact"
+                      }
+                      onClick={() => handleBackendModeChange("mock")}
+                    >
+                      Demo
+                    </button>
+                    <button
+                      type="button"
+                      className={
+                        backendMode === "live"
+                          ? "role-pill compact active"
+                          : "role-pill compact"
+                      }
+                      onClick={() => handleBackendModeChange("live")}
+                    >
+                      Live
+                    </button>
+                  </div>
+                  {backendMode === "mock" && (
+                    <div className="backend-mode-actions">
+                      <button
+                        type="button"
+                        className="role-pill compact"
+                        onClick={handleResetDemoMode}
+                      >
+                        Reset demo
+                      </button>
+                    </div>
+                  )}
+                  <p className="backend-mode-note">{backendModeNote}</p>
+                </article>
+                {backendFeedback && (
+                  <span className="status-chip" data-tone={backendFeedback.tone}>
+                    {backendFeedback.message}
+                  </span>
+                )}
               </div>
 
-              <div className="role-switcher inline">
-                {ROLES.map((role) => (
-                  <button
-                    key={role}
-                    className={
-                      role === activeRole ? "role-pill active compact" : "role-pill compact"
-                    }
-                    onClick={() => setActiveRole(role)}
-                    type="button"
-                  >
-                    {role}
-                  </button>
-                ))}
+              <div className="auth-session-panel">
+                <span className="status-chip" data-tone="info">
+                  {activeRole}
+                </span>
+                <div className="auth-session-copy">
+                  <strong>{authDisplayName}</strong>
+                  <span>{authSession?.user?.email}</span>
+                </div>
+                <button
+                  type="button"
+                  className="role-pill compact"
+                  onClick={handleSignOut}
+                  disabled={authSubmitting}
+                >
+                  <LogOut size={14} />
+                  <span>Sign out</span>
+                </button>
               </div>
             </div>
           </section>
@@ -1587,15 +3298,20 @@ function App() {
             <OverviewPanel
               activeRole={activeRole}
               snapshot={currentSnapshot}
+              permissionControls={permissionControls}
               onNavigate={setActiveView}
               onShortcutAction={handleDriverShortcut}
               onSelectDriverVehicle={selectDriverVehicle}
+              onRequestAdminModuleAccess={requestAdminModuleAccess}
+              onReviewAdminModuleAccess={reviewAdminModuleAccess}
+              onSetAdminModuleAccess={setAdminModuleAccess}
             />
           )}
           {activeView === "finance" && (
             <FinancePanel
               snapshot={currentSnapshot}
               activeRole={activeRole}
+              permissionControls={permissionControls}
               onNavigate={setActiveView}
               onSaveStandardIncome={saveStandardIncome}
               onSaveSpecialIncome={saveSpecialIncome}
@@ -1609,6 +3325,7 @@ function App() {
             <FleetPanel
               snapshot={currentSnapshot}
               activeRole={activeRole}
+              permissionControls={permissionControls}
               onSaveVehicle={saveVehicleProfile}
               onArchiveVehicle={archiveVehicle}
               onLogDefect={logDefect}
@@ -1621,10 +3338,12 @@ function App() {
             <DriversPanel
               snapshot={currentSnapshot}
               activeRole={activeRole}
+              permissionControls={permissionControls}
               onShortcutAction={handleDriverShortcut}
               shortcutIntent={driverShortcutIntent}
               onSaveStandardIncome={saveStandardIncome}
               onSaveSpecialIncome={saveSpecialIncome}
+              onSaveDriver={saveDriver}
               onSelectDriverVehicle={selectDriverVehicle}
             />
           )}
@@ -1655,7 +3374,17 @@ function App() {
   );
 }
 
-function OverviewPanel({ activeRole, snapshot, onNavigate, onShortcutAction, onSelectDriverVehicle }) {
+function OverviewPanel({
+  activeRole,
+  snapshot,
+  permissionControls,
+  onNavigate,
+  onShortcutAction,
+  onSelectDriverVehicle,
+  onRequestAdminModuleAccess,
+  onReviewAdminModuleAccess,
+  onSetAdminModuleAccess,
+}) {
   const isDriver = activeRole === "Driver";
   const linkedVehicles = getDriverLinkedVehicles(snapshot);
   const linkedVehicleIds = new Set(linkedVehicles.map((vehicle) => vehicle.id));
@@ -1669,6 +3398,7 @@ function OverviewPanel({ activeRole, snapshot, onNavigate, onShortcutAction, onS
   const watchDocs = snapshot.documents.length - criticalDocs - warningDocs;
   const visibleVehicles = isDriver ? linkedVehicles : snapshot.vehicles;
   const visibleFleetCount = visibleVehicles.length;
+  const ownerAuditTrail = activeRole === "Owner" ? (snapshot.auditTrail ?? []).slice(0, 10) : [];
   const activeVehicles = visibleVehicles.filter((vehicle) => vehicle.status !== "archived");
   const archivedVehicles = visibleFleetCount - activeVehicles.length;
   const healthyVehicles = activeVehicles.filter(
@@ -1735,7 +3465,7 @@ function OverviewPanel({ activeRole, snapshot, onNavigate, onShortcutAction, onS
           </InsightCard>
 
           <InsightCard
-            title="PrDP runway"
+            title="PrDP days left"
             metric={activeDriverRecord?.prdpDays ? `${activeDriverRecord.prdpDays}d` : "N/A"}
             meta="days left"
             icon={Shield}
@@ -1808,7 +3538,7 @@ function OverviewPanel({ activeRole, snapshot, onNavigate, onShortcutAction, onS
                   className="shortcut-button"
                   onClick={() => onShortcutAction(shortcut)}
                 >
-                  {shortcut}
+                  {formatShortcutLabel(shortcut)}
                 </button>
               ))}
             </div>
@@ -1830,7 +3560,7 @@ function OverviewPanel({ activeRole, snapshot, onNavigate, onShortcutAction, onS
                 />
               ))}
               <CompactFeedItem
-                title="Odometer continuity"
+                title="Odometer check"
                 subtitle={`${snapshot.driverTerminal.lastShift.openOdo.toLocaleString()} to ${snapshot.driverTerminal.lastShift.closeOdo.toLocaleString()} km`}
                 tone="info"
                 meta={snapshot.driverTerminal.assignedVehicle}
@@ -1846,9 +3576,9 @@ function OverviewPanel({ activeRole, snapshot, onNavigate, onShortcutAction, onS
     <div className="content-stack">
       <div className="analytics-grid overview-analytics">
         <InsightCard
-          title="Cash capture"
+          title="Cash on hand"
           metric={formatMoney(snapshot.finance.pendingCashInSafe)}
-          meta={`${snapshot.finance.verifiedToday} verified`}
+          meta={`${snapshot.finance.verifiedToday} checked`}
           icon={Lock}
           tone="warning"
         >
@@ -1856,7 +3586,7 @@ function OverviewPanel({ activeRole, snapshot, onNavigate, onShortcutAction, onS
         </InsightCard>
 
         <InsightCard
-          title="Banking batch"
+          title="Next bank deposit"
           metric={formatMoney(snapshot.finance.bankingBatch.depositAmount)}
           meta={snapshot.finance.bankingBatch.reference}
           icon={Building2}
@@ -1866,8 +3596,8 @@ function OverviewPanel({ activeRole, snapshot, onNavigate, onShortcutAction, onS
         </InsightCard>
 
         <InsightCard
-          title="Compliance"
-          metric={`${criticalDocs} critical`}
+          title="Documents"
+          metric={`${criticalDocs} urgent`}
           meta="90 / 60 / 30"
           icon={ShieldAlert}
           tone={criticalDocs > 0 ? "danger" : "info"}
@@ -1901,8 +3631,8 @@ function OverviewPanel({ activeRole, snapshot, onNavigate, onShortcutAction, onS
       <div className="overview-board-grid">
         <article className="overview-board">
           <div className="overview-board-head">
-            <p className="eyebrow">Queue</p>
-            <h3>Cash and gap flags</h3>
+            <p className="eyebrow">Issues</p>
+            <h3>Cash and distance checks</h3>
           </div>
           <div className="compact-feed">
             {snapshot.verificationQueue
@@ -1922,7 +3652,7 @@ function OverviewPanel({ activeRole, snapshot, onNavigate, onShortcutAction, onS
 
         <article className="overview-board">
           <div className="overview-board-head">
-            <p className="eyebrow">Renewals</p>
+            <p className="eyebrow">Documents</p>
             <h3>Next expiries</h3>
           </div>
           <div className="compact-feed">
@@ -1940,7 +3670,7 @@ function OverviewPanel({ activeRole, snapshot, onNavigate, onShortcutAction, onS
 
         <article className="overview-board">
           <div className="overview-board-head">
-            <p className="eyebrow">Loop</p>
+            <p className="eyebrow">Today</p>
             <h3>Daily flow</h3>
           </div>
           <div className="flow-strip">
@@ -1950,7 +3680,7 @@ function OverviewPanel({ activeRole, snapshot, onNavigate, onShortcutAction, onS
           </div>
           <div className="module-quick-links">
             <button className="cta-link" onClick={() => onNavigate("finance")} type="button">
-              Finance
+              Money
               <ChevronRight size={16} />
             </button>
             <button className="cta-link" onClick={() => onNavigate("fleet")} type="button">
@@ -1958,19 +3688,190 @@ function OverviewPanel({ activeRole, snapshot, onNavigate, onShortcutAction, onS
               <ChevronRight size={16} />
             </button>
             <button className="cta-link" onClick={() => onNavigate("compliance")} type="button">
-              Compliance
+              Documents
               <ChevronRight size={16} />
             </button>
           </div>
         </article>
       </div>
+
+      {activeRole !== "Driver" && (
+        <AdminEditAccessPanel
+          activeRole={activeRole}
+          permissionControls={permissionControls}
+          onRequestAdminModuleAccess={onRequestAdminModuleAccess}
+          onReviewAdminModuleAccess={onReviewAdminModuleAccess}
+          onSetAdminModuleAccess={onSetAdminModuleAccess}
+        />
+      )}
+
+      {activeRole === "Owner" && (
+        <Panel eyebrow="Owner tools" title="System activity history" icon={Clock}>
+          <div className="finance-ledger">
+            {ownerAuditTrail.map((entry) => (
+              <article key={entry.id} className="ledger-row">
+                <div className="ledger-copy">
+                  <strong>{entry.title}</strong>
+                  <span>{entry.detail}</span>
+                </div>
+                <div className="ledger-meta">
+                  <span className="status-chip" data-tone={entry.tone}>
+                    {entry.actionLabel}
+                  </span>
+                  <span>
+                    {entry.actorLabel} / {entry.timestampLabel}
+                  </span>
+                </div>
+              </article>
+            ))}
+          </div>
+        </Panel>
+      )}
     </div>
+  );
+}
+
+function AdminEditAccessPanel({
+  activeRole,
+  permissionControls,
+  onRequestAdminModuleAccess,
+  onReviewAdminModuleAccess,
+  onSetAdminModuleAccess,
+}) {
+  const [feedback, setFeedback] = useState(null);
+  const pushFeedback = (response) => {
+    if (!response) {
+      return;
+    }
+
+    setFeedback({
+      tone: response.ok ? "success" : "danger",
+      message: response.message ?? response.error,
+    });
+  };
+
+  return (
+    <Panel eyebrow="Access control" title="Admin edit permissions" icon={Lock}>
+      {feedback && (
+        <div className="finance-feedback" data-tone={feedback.tone}>
+          <span className="status-chip" data-tone={feedback.tone}>
+            {feedback.message}
+          </span>
+        </div>
+      )}
+      <div className="overview-board-grid">
+        {Object.entries(MODULE_EDIT_ACCESS).map(([moduleKey, moduleConfig]) => {
+          const control = permissionControls[moduleKey];
+          const status = getModuleAccessStatus(control);
+          const requestMeta = control.requestedAt
+            ? `Requested ${formatStamp(control.requestedAt)}`
+            : "No owner request has been sent yet.";
+          const reviewMeta = control.ownerReviewedAt
+            ? `Owner reviewed ${formatStamp(control.ownerReviewedAt)}`
+            : "Owner decision still pending.";
+          const grantMeta = control.grantedAt
+            ? `Manager granted ${formatStamp(control.grantedAt)}`
+            : "Admin access is not active.";
+
+          return (
+            <article key={moduleKey} className="overview-board">
+              <div className="overview-board-head">
+                <p className="eyebrow">{moduleConfig.label}</p>
+                <h3>{status.label}</h3>
+              </div>
+              <p className="panel-note">{moduleConfig.detail}</p>
+              <div className="finance-form-meta">
+                <span className="status-chip" data-tone={status.tone}>
+                  {status.label}
+                </span>
+                <span className="status-chip" data-tone="info">
+                  {control.active
+                    ? grantMeta
+                    : ["approved", "rejected"].includes(control.requestStatus)
+                      ? reviewMeta
+                      : requestMeta}
+                </span>
+              </div>
+              <div className="finance-form-actions">
+                {activeRole === "Manager" && control.requestStatus !== "approved" && !control.active && (
+                  <button
+                    type="button"
+                    className="action-button primary"
+                    disabled={control.requestStatus === "pending"}
+                    onClick={() => pushFeedback(onRequestAdminModuleAccess(moduleKey))}
+                  >
+                    Ask owner
+                  </button>
+                )}
+                {activeRole === "Manager" && control.requestStatus === "approved" && !control.active && (
+                  <button
+                    type="button"
+                    className="action-button primary"
+                    onClick={() => pushFeedback(onSetAdminModuleAccess(moduleKey, true))}
+                  >
+                    Grant to admin
+                  </button>
+                )}
+                {["Owner", "Manager"].includes(activeRole) && control.active && (
+                  <button
+                    type="button"
+                    className="action-button"
+                    onClick={() => pushFeedback(onSetAdminModuleAccess(moduleKey, false))}
+                  >
+                    Remove admin access
+                  </button>
+                )}
+                {activeRole === "Owner" && control.requestStatus === "pending" && (
+                  <>
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      onClick={() => pushFeedback(onReviewAdminModuleAccess(moduleKey, "approved"))}
+                    >
+                      Approve request
+                    </button>
+                    <button
+                      type="button"
+                      className="record-button danger"
+                      onClick={() => pushFeedback(onReviewAdminModuleAccess(moduleKey, "rejected"))}
+                    >
+                      Decline request
+                    </button>
+                  </>
+                )}
+              </div>
+              <p className="panel-note">
+                {activeRole === "Owner" &&
+                  (control.requestStatus === "pending"
+                    ? "Review the manager request before admin can receive edit access."
+                    : control.active
+                      ? "Admin is currently allowed to edit saved records in this area."
+                      : "Only the owner can approve new admin edit access requests.")}
+                {activeRole === "Manager" &&
+                  (control.requestStatus === "pending"
+                    ? "Waiting for the owner to respond."
+                    : control.requestStatus === "approved" && !control.active
+                      ? "Owner approval is ready. You can now grant admin access."
+                      : control.active
+                        ? "Admin edit access is live for this area."
+                        : "Ask the owner first, then grant access to admin after approval.")}
+                {activeRole === "Admin" &&
+                  (control.active
+                    ? "You can edit saved records in this area while this manager grant stays active."
+                    : "Edits stay locked until the manager receives owner approval and grants access.")}
+              </p>
+            </article>
+          );
+        })}
+      </div>
+    </Panel>
   );
 }
 
 function FinancePanel({
   snapshot,
   activeRole,
+  permissionControls,
   onNavigate,
   onSaveStandardIncome,
   onSaveSpecialIncome,
@@ -2009,12 +3910,12 @@ function FinancePanel({
       : finance.expenseManagement.operational;
   const selectedVehicleOpening =
     finance.vehicleOpenings?.[standardDraft.vehicleId || defaultVehicleId] ?? 0;
-  const distance =
-    Number(standardDraft.closingOdo || 0) - Number(standardDraft.openingOdo || 0);
+  const specialBusinessKm = getBusinessKmValue(specialDraft);
   const gapKm = Math.abs(
     Number(standardDraft.openingOdo || selectedVehicleOpening) - Number(selectedVehicleOpening || 0),
   );
   const standardValidationError = getStandardDraftValidationError(standardDraft);
+  const specialValidationError = getSpecialDraftValidationError(specialDraft);
   const verificationRecords = incomeRecords.slice(0, 8);
   const pendingVerificationCount = verificationRecords.filter(
     (record) => record.status === "pending",
@@ -2023,6 +3924,12 @@ function FinancePanel({
   const lockableCount = snapshot.financeTransactions.filter(
     (record) => record.status === "verified",
   ).length;
+  const canEditFinanceUpdates = canEditModuleUpdates(
+    activeRole,
+    "finance",
+    permissionControls,
+  );
+  const financeAccessStatus = getModuleAccessStatus(permissionControls.finance);
 
   useEffect(() => {
     if (!standardDraft.vehicleId && defaultVehicleId) {
@@ -2135,10 +4042,18 @@ function FinancePanel({
       return;
     }
 
+    const routeParts = String(record.route ?? "").split(" to ");
     setSpecialDraft({
       id: record.id,
       vehicleId: record.vehicleId ?? defaultVehicleId,
-      description: record.description ?? "",
+      tripDate: record.tripDate ?? toDateInputValue(record.timestamp),
+      openingOdo: String(record.openingOdo ?? ""),
+      closingOdo: String(record.closingOdo ?? ""),
+      fromLocation: record.fromLocation ?? routeParts[0] ?? "",
+      toLocation: record.toLocation ?? routeParts.slice(1).join(" to ") ?? "",
+      travelReason: record.travelReason ?? record.description ?? "",
+      fuelOilCost: String(record.fuelOilCost ?? 0),
+      repairMaintenanceCost: String(record.repairMaintenanceCost ?? 0),
       amount: String(record.amount ?? ""),
     });
   };
@@ -2150,6 +4065,9 @@ function FinancePanel({
       id: record.id,
       expenseKind: record.expenseKind,
       category: record.category ?? "",
+      description: record.description ?? "",
+      expenseDate: record.expenseDate ?? toDateInputValue(record.timestamp),
+      reference: record.reference ?? "",
       vehicleId: record.vehicleId ?? defaultVehicleId,
       amount: String(record.amount ?? ""),
       cashExpense: Boolean(record.cashExpense),
@@ -2170,20 +4088,20 @@ function FinancePanel({
       <section className="hero-card hero-card-minimal finance-access-card">
         <div className="hero-copy hero-copy-minimal">
           <p className="eyebrow">Quick access</p>
-          <h2>Daily taking-in log</h2>
+          <h2>Daily earnings log</h2>
           <p className="hero-text">
-            Use this entry point to capture daily route takings and special trip income without
-            hunting through the finance screens.
+            Use this entry point to add daily trip income and extra trip income without searching
+            through the money screens.
           </p>
           <div className="hero-meta-strip">
             <span className="status-chip" data-tone="info">
-              Standard shifts
+              Daily trips
             </span>
             <span className="status-chip" data-tone="warning">
-              Special trips
+              Extra trips
             </span>
             <span className="status-chip" data-tone="success">
-              {finance.shiftsAwaitingVerification} awaiting verification
+              {finance.shiftsAwaitingVerification} waiting to be checked
             </span>
           </div>
         </div>
@@ -2195,7 +4113,7 @@ function FinancePanel({
             onClick={() => openRevenueEntry("standard")}
           >
             <ArrowDownToLine size={16} />
-            Open daily taking-in log
+            Open daily earnings log
           </button>
           <button
             type="button"
@@ -2203,7 +4121,7 @@ function FinancePanel({
             onClick={() => openRevenueEntry("special")}
           >
             <TrendingUp size={16} />
-            Open special trip entry
+            Open extra trip entry
           </button>
         </div>
       </section>
@@ -2211,22 +4129,22 @@ function FinancePanel({
       <div className="finance-module-nav">
         <FinanceModeButton
           active={financeView === "revenue"}
-          label="Daily Taking-In Log"
-          meta="Standard shifts and special trips"
+          label="Daily Earnings"
+          meta="Daily trips and extra trips"
           icon={TrendingUp}
           onClick={() => setFinanceView("revenue")}
         />
         <FinanceModeButton
           active={financeView === "expenses"}
-          label="Expense Management"
-          meta="Vehicle-specific and operational"
+          label="Expenses"
+          meta="Vehicle and business costs"
           icon={Briefcase}
           onClick={() => setFinanceView("expenses")}
         />
         <FinanceModeButton
           active={financeView === "banking"}
-          label="Banking Module"
-          meta="Verification and lock"
+          label="Banking"
+          meta="Check cash and finish deposits"
           icon={Lock}
           onClick={() => setFinanceView("banking")}
         />
@@ -2240,11 +4158,29 @@ function FinancePanel({
         </div>
       )}
 
+      {activeRole === "Admin" && !canEditFinanceUpdates && (
+        <article className="overview-board">
+          <div className="overview-board-head">
+            <p className="eyebrow">Admin access</p>
+            <h3>Money edits are locked</h3>
+          </div>
+          <p className="panel-note">
+            A manager must ask the owner for approval, then grant admin access before you can edit
+            daily takings, verify cash, delete records, or finish deposits.
+          </p>
+          <div className="finance-form-meta">
+            <span className="status-chip" data-tone={financeAccessStatus.tone}>
+              {financeAccessStatus.label}
+            </span>
+          </div>
+        </article>
+      )}
+
       {financeView === "revenue" && (
         <div className="content-stack">
           <div className="analytics-grid finance-analytics">
             <InsightCard
-              title="Standard route shifts"
+              title="Daily route trips"
               metric={`${finance.revenueLogging.standardRouteCount}`}
               meta={formatMoney(finance.revenueLogging.standardRouteRevenue)}
               icon={Banknote}
@@ -2260,7 +4196,7 @@ function FinancePanel({
             </InsightCard>
 
             <InsightCard
-              title="Special trips"
+              title="Extra trips"
               metric={`${finance.revenueLogging.specialTripCount}`}
               meta={formatMoney(finance.revenueLogging.specialTripRevenue)}
               icon={TrendingUp}
@@ -2276,17 +4212,17 @@ function FinancePanel({
             </InsightCard>
 
             <InsightCard
-              title="Claimed today"
+              title="Total entered today"
               metric={formatMoney(finance.todayClaimed)}
-              meta="Pending plus verified"
+              meta="Waiting plus checked"
               icon={ArrowDownToLine}
               tone="warning"
             >
               <SegmentMeter
                 segments={[
-                  { label: "Verified", value: finance.verifiedToday, tone: "success" },
+                  { label: "Checked", value: finance.verifiedToday, tone: "success" },
                   {
-                    label: "Pending",
+                    label: "Waiting",
                     value: finance.shiftsAwaitingVerification,
                     tone: "warning",
                   },
@@ -2295,9 +4231,9 @@ function FinancePanel({
             </InsightCard>
 
             <InsightCard
-              title="Counted today"
+              title="Cash counted today"
               metric={formatMoney(finance.todayCounted)}
-              meta="Physical cash verified"
+              meta="Cash confirmed by hand"
               icon={CheckCircle2}
               tone="success"
             >
@@ -2314,8 +4250,8 @@ function FinancePanel({
           <div className="finance-board-grid finance-board-grid-3">
             <article ref={standardEntryRef} className="overview-board finance-entry-board">
               <div className="overview-board-head">
-                <p className="eyebrow">Daily taking-in log</p>
-                <h3>Standard shift entry</h3>
+                <p className="eyebrow">Daily earnings log</p>
+                <h3>Daily trip entry</h3>
               </div>
 
               <form className="finance-form" onSubmit={handleStandardSubmit}>
@@ -2390,10 +4326,16 @@ function FinancePanel({
 
                 <div className="finance-form-meta">
                   <span className="status-chip" data-tone={gapKm > 0 ? "warning" : "info"}>
-                    Expected opening {Number(selectedVehicleOpening).toLocaleString()} km
+                    Expected start {Number(selectedVehicleOpening).toLocaleString()} km
                   </span>
-                  <span className="status-chip" data-tone={distance > 0 ? "success" : "danger"}>
-                    Distance {Math.max(distance, 0).toLocaleString()} km
+                  <span
+                    className="status-chip"
+                    data-tone={Number(standardDraft.closingOdo || 0) > Number(standardDraft.openingOdo || 0) ? "success" : "danger"}
+                  >
+                    Distance {Math.max(
+                      Number(standardDraft.closingOdo || 0) - Number(standardDraft.openingOdo || 0),
+                      0,
+                    ).toLocaleString()} km
                   </span>
                 </div>
 
@@ -2401,9 +4343,9 @@ function FinancePanel({
                   <button
                     type="submit"
                     className="action-button primary"
-                    disabled={Boolean(standardValidationError)}
+                    disabled={Boolean(standardValidationError) || !canEditFinanceUpdates}
                   >
-                    {standardDraft.id ? "Update shift" : "Save shift"}
+                    {standardDraft.id ? "Update trip" : "Save trip"}
                   </button>
                   {standardDraft.id && (
                     <button
@@ -2429,16 +4371,16 @@ function FinancePanel({
                 >
                   {standardValidationError ??
                     (standardDraft.id
-                      ? "Shift details are complete and ready to update."
-                      : "Shift details are complete and ready to save.")}
+                      ? "Trip details are complete and ready to update."
+                      : "Trip details are complete and ready to save.")}
                 </p>
               </form>
             </article>
 
             <article ref={specialEntryRef} className="overview-board finance-entry-board">
               <div className="overview-board-head">
-                <p className="eyebrow">Daily taking-in log</p>
-                <h3>Special trip entry</h3>
+                <p className="eyebrow">Daily earnings log</p>
+                <h3>Extra trip entry</h3>
               </div>
 
               <form className="finance-form" onSubmit={handleSpecialSubmit}>
@@ -2458,19 +4400,127 @@ function FinancePanel({
                         <option key={vehicle.id} value={vehicle.id}>
                           {vehicle.registration}
                         </option>
-                      ))}
+                        ))}
                     </select>
                   </label>
 
-                  <label className="finance-field finance-field-wide">
-                    <span>Description</span>
+                  <label className="finance-field">
+                    <span>Date</span>
                     <input
-                      type="text"
-                      value={specialDraft.description}
+                      type="date"
+                      value={specialDraft.tripDate}
                       onChange={(event) =>
                         setSpecialDraft((current) => ({
                           ...current,
-                          description: event.target.value,
+                          tripDate: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="finance-field">
+                    <span>Opening odo</span>
+                    <input
+                      type="number"
+                      value={specialDraft.openingOdo}
+                      onChange={(event) =>
+                        setSpecialDraft((current) => ({
+                          ...current,
+                          openingOdo: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="finance-field">
+                    <span>Closing odo</span>
+                    <input
+                      type="number"
+                      min={Number(specialDraft.openingOdo || 0) + 1}
+                      value={specialDraft.closingOdo}
+                      onChange={(event) =>
+                        setSpecialDraft((current) => ({
+                          ...current,
+                          closingOdo: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="finance-field">
+                    <span>Total business km</span>
+                    <input type="number" value={specialBusinessKm} disabled readOnly />
+                  </label>
+
+                  <label className="finance-field">
+                    <span>From</span>
+                    <input
+                      type="text"
+                      value={specialDraft.fromLocation}
+                      onChange={(event) =>
+                        setSpecialDraft((current) => ({
+                          ...current,
+                          fromLocation: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="finance-field">
+                    <span>To</span>
+                    <input
+                      type="text"
+                      value={specialDraft.toLocation}
+                      onChange={(event) =>
+                        setSpecialDraft((current) => ({
+                          ...current,
+                          toLocation: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="finance-field finance-field-wide">
+                    <span>Reason</span>
+                    <input
+                      type="text"
+                      value={specialDraft.travelReason}
+                      onChange={(event) =>
+                        setSpecialDraft((current) => ({
+                          ...current,
+                          travelReason: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="finance-field">
+                    <span>Actual fuel & oil cost</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={specialDraft.fuelOilCost}
+                      onChange={(event) =>
+                        setSpecialDraft((current) => ({
+                          ...current,
+                          fuelOilCost: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="finance-field">
+                    <span>Actual repairs & maintenance cost</span>
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      value={specialDraft.repairMaintenanceCost}
+                      onChange={(event) =>
+                        setSpecialDraft((current) => ({
+                          ...current,
+                          repairMaintenanceCost: event.target.value,
                         }))
                       }
                     />
@@ -2495,15 +4545,19 @@ function FinancePanel({
 
                 <div className="finance-form-meta">
                   <span className="status-chip" data-tone="info">
-                    Tagged as income / special
+                    SARS-style logbook
                   </span>
-                  <span className="status-chip" data-tone="warning">
-                    Excluded from route average metrics
+                  <span className="status-chip" data-tone={specialBusinessKm > 0 ? "success" : "danger"}>
+                    Business km {specialBusinessKm.toLocaleString()} km
                   </span>
                 </div>
 
                 <div className="finance-form-actions">
-                  <button type="submit" className="action-button primary">
+                  <button
+                    type="submit"
+                    className="action-button primary"
+                    disabled={Boolean(specialValidationError) || !canEditFinanceUpdates}
+                  >
                     {specialDraft.id ? "Update trip" : "Save trip"}
                   </button>
                   {specialDraft.id && (
@@ -2516,13 +4570,20 @@ function FinancePanel({
                     </button>
                   )}
                 </div>
+                <p
+                  className="finance-form-note"
+                  data-tone={specialValidationError ? "danger" : "info"}
+                >
+                  {specialValidationError ??
+                    "Extra trip logbook details are complete and ready to save."}
+                </p>
               </form>
             </article>
 
             <article className="overview-board">
               <div className="overview-board-head">
                 <p className="eyebrow">Recent income</p>
-                <h3>Pending, verified, and locked</h3>
+                <h3>Waiting, checked, and deposited</h3>
               </div>
 
               <div className="finance-ledger">
@@ -2531,17 +4592,18 @@ function FinancePanel({
                     <div className="ledger-copy">
                       <strong>
                         {record.incomeKind === "special"
-                          ? record.description
+                          ? `${record.vehicle} / ${formatTripRoute(record)}`
                           : `${record.vehicle} / ${record.route}`}
                       </strong>
                       <span>
-                        {record.incomeKind === "special" ? "Special trip" : "Standard shift"} /{" "}
-                        {formatStamp(record.timestamp)}
+                        {record.incomeKind === "special"
+                          ? formatTripLogMeta(record)
+                          : `Daily trip / ${formatStamp(record.timestamp)}`}
                       </span>
                     </div>
                     <div className="ledger-meta">
                       <span className="status-chip" data-tone={getTransactionTone(record)}>
-                        {record.status}
+                        {formatTransactionStatus(record.status)}
                       </span>
                       <strong>{formatMoney(record.amountClaimed ?? record.amount)}</strong>
                     </div>
@@ -2549,7 +4611,7 @@ function FinancePanel({
                       <button
                         type="button"
                         className="record-button"
-                        disabled={record.status === "banked"}
+                        disabled={record.status === "banked" || !canEditFinanceUpdates}
                         onClick={() => handleEditIncome(record)}
                       >
                         Edit
@@ -2557,7 +4619,7 @@ function FinancePanel({
                       <button
                         type="button"
                         className="record-button danger"
-                        disabled={record.status === "banked"}
+                        disabled={record.status === "banked" || !canEditFinanceUpdates}
                         onClick={() => handleDelete(record.id)}
                       >
                         Delete
@@ -2577,7 +4639,7 @@ function FinancePanel({
                   <ChevronRight size={16} />
                 </button>
                 <button className="cta-link" onClick={() => setFinanceView("banking")} type="button">
-                  Banking module
+                  Banking
                   <ChevronRight size={16} />
                 </button>
               </div>
@@ -2596,7 +4658,7 @@ function FinancePanel({
               }
               onClick={() => handleExpenseViewChange("vehicle")}
             >
-              Vehicle-Specific
+              Vehicle costs
             </button>
             <button
               type="button"
@@ -2605,15 +4667,19 @@ function FinancePanel({
               }
               onClick={() => handleExpenseViewChange("operational")}
             >
-              Operational
+              Business costs
             </button>
           </div>
 
           <div className="analytics-grid finance-analytics">
             <InsightCard
-              title={expenseView === "vehicle" ? "Asset-linked costs" : "Operational costs"}
+              title={expenseView === "vehicle" ? "Vehicle costs" : "Business costs"}
               metric={formatMoney(sumBy(expenseItems, (item) => item.amount))}
-              meta={expenseView === "vehicle" ? "Vehicle net yield impact" : "Global profit impact"}
+              meta={
+                expenseView === "vehicle"
+                  ? "Effect on money left for each vehicle"
+                  : "Effect on money left for the business"
+              }
               icon={Briefcase}
               tone={expenseView === "vehicle" ? "warning" : "info"}
             >
@@ -2627,9 +4693,9 @@ function FinancePanel({
             </InsightCard>
 
             <InsightCard
-              title="Cash-out mix"
+              title="How expenses were paid"
               metric={`${filteredExpenseRecords.length}`}
-              meta="Verified and pending"
+              meta="Checked and waiting"
               icon={FileText}
               tone="navy"
             >
@@ -2659,8 +4725,8 @@ function FinancePanel({
           <div className="finance-board-grid finance-board-grid-3">
             <article className="overview-board">
               <div className="overview-board-head">
-                <p className="eyebrow">Expense engine</p>
-                <h3>{expenseView === "vehicle" ? "Asset-linked" : "Operational"} entry</h3>
+                <p className="eyebrow">Expense form</p>
+                <h3>{expenseView === "vehicle" ? "Vehicle cost" : "Business cost"} entry</h3>
               </div>
 
               <form className="finance-form" onSubmit={handleExpenseSubmit}>
@@ -2674,6 +4740,50 @@ function FinancePanel({
                         setExpenseDraft((current) => ({
                           ...current,
                           category: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="finance-field finance-field-wide">
+                    <span>Description</span>
+                    <input
+                      type="text"
+                      placeholder="Weekly subscription for Rank 12"
+                      value={expenseDraft.description}
+                      onChange={(event) =>
+                        setExpenseDraft((current) => ({
+                          ...current,
+                          description: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="finance-field">
+                    <span>Expense date</span>
+                    <input
+                      type="date"
+                      value={expenseDraft.expenseDate}
+                      onChange={(event) =>
+                        setExpenseDraft((current) => ({
+                          ...current,
+                          expenseDate: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="finance-field">
+                    <span>Receipt no. / reference</span>
+                    <input
+                      type="text"
+                      placeholder="REC-2048"
+                      value={expenseDraft.reference}
+                      onChange={(event) =>
+                        setExpenseDraft((current) => ({
+                          ...current,
+                          reference: event.target.value,
                         }))
                       }
                     />
@@ -2734,19 +4844,23 @@ function FinancePanel({
                 <div className="finance-form-meta">
                   <span className="status-chip" data-tone={expenseView === "vehicle" ? "warning" : "info"}>
                     {expenseView === "vehicle"
-                      ? "Decrements vehicle net yield"
-                      : "Decrements global fleet profit"}
+                      ? "Reduces the money left for this vehicle"
+                      : "Reduces the total money left for the business"}
                   </span>
                   <span
                     className="status-chip"
                     data-tone={PRIVILEGED_ROLES.has(activeRole) ? "success" : "warning"}
                   >
-                    Status defaults to {PRIVILEGED_ROLES.has(activeRole) ? "verified" : "pending"}
+                    Status starts as {PRIVILEGED_ROLES.has(activeRole) ? "checked" : "waiting"}
                   </span>
                 </div>
 
                 <div className="finance-form-actions">
-                  <button type="submit" className="action-button primary">
+                  <button
+                    type="submit"
+                    className="action-button primary"
+                    disabled={!canEditFinanceUpdates}
+                  >
                     {expenseDraft.id ? "Update expense" : "Save expense"}
                   </button>
                   {expenseDraft.id && (
@@ -2766,27 +4880,30 @@ function FinancePanel({
                     </button>
                   )}
                 </div>
+
+                <p className="finance-form-note" data-tone="info">
+                  Capture the expense category, dated description, and receipt reference for items
+                  such as weekly subscriptions, rank fees, fuel, and repairs.
+                </p>
               </form>
             </article>
 
             <article className="overview-board">
               <div className="overview-board-head">
                 <p className="eyebrow">Recent expenses</p>
-                <h3>{expenseView === "vehicle" ? "Vehicle-linked ledger" : "Overhead ledger"}</h3>
+                <h3>{expenseView === "vehicle" ? "Recent vehicle costs" : "Recent business costs"}</h3>
               </div>
 
               <div className="finance-ledger">
                 {filteredExpenseRecords.slice(0, 6).map((record) => (
                   <article key={record.id} className="ledger-row">
                     <div className="ledger-copy">
-                      <strong>{record.category}</strong>
-                      <span>
-                        {record.vehicle ?? "General"} / {formatStamp(record.timestamp)}
-                      </span>
+                      <strong>{formatExpenseHeadline(record)}</strong>
+                      <span>{formatExpenseMeta(record)}</span>
                     </div>
                     <div className="ledger-meta">
                       <span className="status-chip" data-tone={getTransactionTone(record)}>
-                        {record.status}
+                        {formatTransactionStatus(record.status)}
                       </span>
                       <strong>{formatMoney(record.amount)}</strong>
                     </div>
@@ -2794,7 +4911,7 @@ function FinancePanel({
                       <button
                         type="button"
                         className="record-button"
-                        disabled={record.status === "banked"}
+                        disabled={record.status === "banked" || !canEditFinanceUpdates}
                         onClick={() => handleEditExpense(record)}
                       >
                         Edit
@@ -2802,7 +4919,7 @@ function FinancePanel({
                       <button
                         type="button"
                         className="record-button danger"
-                        disabled={record.status === "banked"}
+                        disabled={record.status === "banked" || !canEditFinanceUpdates}
                         onClick={() => handleDelete(record.id)}
                       >
                         Delete
@@ -2815,22 +4932,22 @@ function FinancePanel({
 
             <article className="overview-board">
               <div className="overview-board-head">
-                <p className="eyebrow">Linked modules</p>
-                <h3>Impact controls</h3>
+                <p className="eyebrow">Connected areas</p>
+                <h3>Summary</h3>
               </div>
 
               <div className="compact-feed">
                 <CompactFeedItem
-                  title="Fleet net yield"
-                  subtitle="Vehicle-specific costs"
+                  title="Total vehicle costs"
+                  subtitle="Costs linked to vehicles"
                   tone="warning"
                   meta={formatMoney(
                     sumBy(snapshot.vehicles, (vehicle) => vehicle.assetExpenseTotal ?? 0),
                   )}
                 />
                 <CompactFeedItem
-                  title="Global fleet profit"
-                  subtitle="Income less approved costs"
+                  title="Money left after costs"
+                  subtitle="Income after checked costs"
                   tone="info"
                   meta={formatMoney(finance.globalFleetProfit)}
                 />
@@ -2842,7 +4959,7 @@ function FinancePanel({
                   <ChevronRight size={16} />
                 </button>
                 <button className="cta-link" onClick={() => setFinanceView("banking")} type="button">
-                  Banking module
+                  Banking
                   <ChevronRight size={16} />
                 </button>
                 <button className="cta-link" onClick={() => onNavigate("overview")} type="button">
@@ -2859,11 +4976,11 @@ function FinancePanel({
         <div className="content-stack">
           <article className="overview-board">
             <div className="overview-board-head">
-              <p className="eyebrow">Manager controls</p>
-              <h3>Verify takings and lock deposits</h3>
+              <p className="eyebrow">Manager tools</p>
+              <h3>Check income and finish deposits</h3>
             </div>
             <p className="panel-note">
-              Managers can verify pending takings first, then lock the deposit once the cash count
+              Managers can check waiting income first, then finish the deposit once the cash count
               is complete.
             </p>
             <div className="finance-form-actions">
@@ -2873,7 +4990,7 @@ function FinancePanel({
                 onClick={() => scrollToSection(verificationQueueRef)}
               >
                 <CheckSquare size={16} />
-                Verify pending takings
+                Check waiting income
               </button>
               <button
                 type="button"
@@ -2881,30 +4998,30 @@ function FinancePanel({
                 onClick={() => scrollToSection(depositLockRef)}
               >
                 <Lock size={16} />
-                Open deposit lock
+                Open deposit summary
               </button>
               <span
                 className="status-chip"
                 data-tone={pendingVerificationCount > 0 ? "warning" : "success"}
               >
-                {pendingVerificationCount} pending
+                {pendingVerificationCount} waiting
               </span>
             </div>
           </article>
 
           <div ref={depositLockRef} className="two-up">
-            <Panel eyebrow="Banking loop" title="Digital deposit slip" icon={Lock}>
+            <Panel eyebrow="Bank deposit" title="Deposit summary" icon={Lock}>
               <div className="deposit-card">
                 <div className="deposit-row">
-                  <span>Verified takings</span>
+                  <span>Checked income</span>
                   <strong>{formatMoney(finance.bankingBatch.verifiedTakings)}</strong>
                 </div>
                 <div className="deposit-row">
-                  <span>Cash-out expenses</span>
+                  <span>Cash expenses paid</span>
                   <strong>{formatMoney(finance.bankingBatch.cashExpenses)}</strong>
                 </div>
                 <div className="deposit-row total">
-                  <span>Net bankable cash</span>
+                  <span>Cash ready for bank</span>
                   <strong>{formatMoney(finance.bankingBatch.depositAmount)}</strong>
                 </div>
                 <div className="deposit-meta">
@@ -2918,27 +5035,27 @@ function FinancePanel({
                   </span>
                 </div>
                 <p className="panel-note">
-                  Net bankable cash reacts to verified income minus verified cash expenses.
-                  Confirming the deposit seals {finance.bankingBatch.depositSlip.recordsLocked} records.
+                  Cash ready for bank is checked income minus checked cash expenses. Finishing the
+                  deposit includes {finance.bankingBatch.depositSlip.recordsLocked} records.
                 </p>
                 <div className="finance-form-actions">
                   <button
                     type="button"
                     className="action-button primary"
-                    disabled={lockableCount === 0}
+                    disabled={lockableCount === 0 || !canEditFinanceUpdates}
                     onClick={() => pushFeedback(onLockDeposit())}
                   >
-                    Confirm & lock deposit
+                    Finish deposit
                   </button>
                 </div>
               </div>
             </Panel>
 
-            <Panel eyebrow="Lock flow" title="State-lock and deposit history" icon={ArrowDownToLine}>
+            <Panel eyebrow="Deposit steps" title="Deposit history" icon={ArrowDownToLine}>
               <div className="flow-strip">
-                <FlowLane owner="Verified cash" title="Aggregate takings" tone="teal" />
-                <FlowLane owner="Cash-out" title="Subtract expenses" tone="gold" />
-                <FlowLane owner="Deposit slip" title="Seal records" tone="navy" />
+                <FlowLane owner="Checked cash" title="Add income" tone="teal" />
+                <FlowLane owner="Cash expenses" title="Subtract expenses" tone="gold" />
+                <FlowLane owner="Deposit record" title="Finish deposit" tone="navy" />
               </div>
               <div className="finance-ledger">
                 {depositHistory.map((deposit) => (
@@ -2949,7 +5066,7 @@ function FinancePanel({
                     </div>
                     <div className="ledger-meta">
                       <span className="status-chip" data-tone="navy">
-                        {deposit.recordsLocked} locked
+                        {deposit.recordsLocked} items
                       </span>
                       <strong>{formatMoney(deposit.depositAmount)}</strong>
                     </div>
@@ -2958,11 +5075,11 @@ function FinancePanel({
               </div>
               <div className="module-quick-links stack">
                 <button className="cta-link" onClick={() => setFinanceView("revenue")} type="button">
-                  Daily taking-in log
+                  Daily earnings log
                   <ChevronRight size={16} />
                 </button>
                 <button className="cta-link" onClick={() => setFinanceView("expenses")} type="button">
-                  Expense management
+                  Expenses
                   <ChevronRight size={16} />
                 </button>
                 <button className="cta-link" onClick={() => onNavigate("overview")} type="button">
@@ -2974,7 +5091,7 @@ function FinancePanel({
           </div>
 
           <div ref={verificationQueueRef}>
-            <Panel eyebrow="Verification queue" title="Pending cash and locked records" icon={CheckSquare}>
+            <Panel eyebrow="Cash to check" title="Waiting records" icon={CheckSquare}>
               <div className="queue-grid">
               {verificationRecords.map((record) => {
                 const entry = snapshot.verificationQueue.find((item) => item.id === record.id);
@@ -2983,7 +5100,7 @@ function FinancePanel({
                   counted: Number(record.actualCashReceived ?? 0),
                   shortage: 0,
                   gapKm: 0,
-                  status: "Verified",
+                  status: "Checked",
                   driver: "Driver",
                 };
 
@@ -2993,7 +5110,7 @@ function FinancePanel({
                       <div>
                         <h3>
                           {record.incomeKind === "special"
-                            ? record.description
+                            ? `${record.vehicle} / ${formatTripRoute(record)}`
                             : `${record.vehicle} / ${record.route}`}
                         </h3>
                         <p>
@@ -3006,10 +5123,16 @@ function FinancePanel({
                     </div>
 
                     <div className="queue-stats">
-                      <InfoPair label="Claimed" value={formatMoney(queueEntry.claimed)} />
+                      <InfoPair label="Reported" value={formatMoney(queueEntry.claimed)} />
                       <InfoPair label="Counted" value={formatMoney(queueEntry.counted)} />
-                      <InfoPair label="Shortage" value={formatMoney(queueEntry.shortage)} />
-                      <InfoPair label="Odo gap" value={`${queueEntry.gapKm} km`} />
+                      <InfoPair label="Difference" value={formatMoney(queueEntry.shortage)} />
+                      {record.isSpecial && (
+                        <InfoPair
+                          label="Business km"
+                          value={`${Number(record.businessKm ?? getBusinessKmValue(record)).toLocaleString()} km`}
+                        />
+                      )}
+                      <InfoPair label="Distance gap" value={`${queueEntry.gapKm} km`} />
                     </div>
 
                     <div className="verification-actions">
@@ -3019,27 +5142,27 @@ function FinancePanel({
                         min="0"
                         step="1"
                         value={verificationInputs[record.id] ?? record.actualCashReceived ?? ""}
-                        disabled={record.status !== "pending"}
+                        disabled={record.status !== "pending" || !canEditFinanceUpdates}
                         onChange={(event) =>
                           setVerificationInputs((current) => ({
                             ...current,
                             [record.id]: event.target.value,
                           }))
                         }
-                        placeholder="Actual cash received"
+                        placeholder="Cash received"
                       />
                       <button
                         type="button"
                         className="action-button primary"
-                        disabled={record.status !== "pending"}
+                        disabled={record.status !== "pending" || !canEditFinanceUpdates}
                         onClick={() => handleVerify(record.id)}
                       >
-                        Verify taking
+                        Check income
                       </button>
                       <button
                         type="button"
                         className="record-button"
-                        disabled={record.status === "banked"}
+                        disabled={record.status === "banked" || !canEditFinanceUpdates}
                         onClick={() => handleEditIncome(record)}
                       >
                         Edit entry
@@ -3047,7 +5170,7 @@ function FinancePanel({
                       <button
                         type="button"
                         className="record-button danger"
-                        disabled={record.status === "banked"}
+                        disabled={record.status === "banked" || !canEditFinanceUpdates}
                         onClick={() => handleDelete(record.id)}
                       >
                         Delete entry
@@ -3068,6 +5191,7 @@ function FinancePanel({
 function FleetPanel({
   snapshot,
   activeRole,
+  permissionControls,
   onSaveVehicle,
   onArchiveVehicle,
   onLogDefect,
@@ -3076,20 +5200,28 @@ function FleetPanel({
 }) {
   const isDriver = activeRole === "Driver";
   const linkedVehicles = getDriverLinkedVehicles(snapshot);
+  const availableVehicles = isDriver ? linkedVehicles : snapshot.vehicles;
   const canViewVehicleProfile = !isDriver;
-  const canManageVehicles = ["Owner", "Admin"].includes(activeRole);
-  const canResolveDefects = ["Owner", "Admin", "Manager"].includes(activeRole);
-  const assignedVehicleId =
-    snapshot.driverTerminal.assignedVehicleId ?? linkedVehicles[0]?.id ?? snapshot.vehicles[0]?.id ?? null;
+  const canManageVehicles = PRIVILEGED_ROLES.has(activeRole);
+  const canEditFleetUpdates = canEditModuleUpdates(activeRole, "fleet", permissionControls);
+  const fleetAccessStatus = getModuleAccessStatus(permissionControls.fleet);
+  const canArchiveVehicles = ["Owner", "Admin"].includes(activeRole) && canEditFleetUpdates;
+  const canResolveDefects =
+    activeRole === "Owner" || activeRole === "Manager"
+      ? true
+      : activeRole === "Admin"
+        ? canEditFleetUpdates
+        : false;
+  const assignedVehicleId = isDriver
+    ? snapshot.driverTerminal.assignedVehicleId ?? linkedVehicles[0]?.id ?? null
+    : snapshot.driverTerminal.assignedVehicleId ?? snapshot.vehicles[0]?.id ?? null;
   const [activeFilter, setActiveFilter] = useState(isDriver ? "assigned" : "attention");
   const [selectedVehicleId, setSelectedVehicleId] = useState(assignedVehicleId);
   const [feedback, setFeedback] = useState(null);
   const [vehicleDraft, setVehicleDraft] = useState(() =>
     createVehicleDraft(snapshot.vehicles[0], snapshot.profile.serviceIntervalKm),
   );
-  const [defectDraft, setDefectDraft] = useState(() =>
-    createDefectDraft(assignedVehicleId ?? snapshot.vehicles[0]?.id),
-  );
+  const [defectDraft, setDefectDraft] = useState(() => createDefectDraft(assignedVehicleId));
   const [resolutionCosts, setResolutionCosts] = useState({});
   const vehicleFormRef = useRef(null);
   const vehicleProfileRef = useRef(null);
@@ -3133,16 +5265,29 @@ function FleetPanel({
       return snapshot.vehicles.filter((vehicle) => vehicle.status === "archived");
     }
     return snapshot.vehicles.filter((vehicle) => vehicle.status !== "archived");
-  }, [activeFilter, assignedVehicleId, isDriver, linkedVehicles, snapshot.vehicles]);
+  }, [activeFilter, isDriver, linkedVehicles, snapshot.vehicles]);
 
   useEffect(() => {
-    if (!filteredVehicles.some((vehicle) => vehicle.id === selectedVehicleId)) {
-      setSelectedVehicleId(filteredVehicles[0]?.id ?? null);
+    if (!availableVehicles.some((vehicle) => vehicle.id === selectedVehicleId)) {
+      setSelectedVehicleId(availableVehicles[0]?.id ?? null);
     }
-  }, [filteredVehicles, selectedVehicleId]);
+  }, [availableVehicles, selectedVehicleId]);
+
+  useEffect(() => {
+    if (isDriver || filteredVehicles.length === 0) {
+      return;
+    }
+
+    if (!filteredVehicles.some((vehicle) => vehicle.id === selectedVehicleId)) {
+      setSelectedVehicleId(filteredVehicles[0].id);
+    }
+  }, [filteredVehicles, isDriver, selectedVehicleId]);
 
   const selectedVehicle =
-    snapshot.vehicles.find((vehicle) => vehicle.id === selectedVehicleId) ?? filteredVehicles[0];
+    availableVehicles.find((vehicle) => vehicle.id === selectedVehicleId) ??
+    filteredVehicles[0] ??
+    availableVehicles[0] ??
+    null;
   const vehicleLedger = useMemo(
     () =>
       snapshot.financeTransactions
@@ -3183,11 +5328,11 @@ function FleetPanel({
       Object.values(
         vehicleIncomeRecords.reduce((groups, record) => {
           const key = record.isSpecial
-            ? record.description ?? "Special trip"
+            ? `${formatTripRoute(record)} / ${record.travelReason ?? "Special trip"}`
             : record.route ?? selectedVehicle?.route ?? "Route";
           const current = groups[key] ?? {
-            title: key,
-            subtitle: record.isSpecial ? "Special trip" : "Standard route",
+            title: record.isSpecial ? formatTripRoute(record) : key,
+            subtitle: record.isSpecial ? record.travelReason ?? "Special trip" : "Standard route",
             trips: 0,
             revenue: 0,
             latestTimestamp: record.timestamp,
@@ -3235,11 +5380,11 @@ function FleetPanel({
       .forEach((record) => {
         const driverName =
           snapshot.drivers.find((driver) => driver.staffId === record.createdBy)?.name ?? null;
-        pushEntry(driverName, `Revenue entry / ${formatStamp(record.timestamp)}`, "info");
+        pushEntry(driverName, `Income entry / ${formatStamp(record.timestamp)}`, "info");
       });
 
     vehicleDefects.forEach((defect) => {
-      pushEntry(defect.reportedByName, `Defect report / ${defect.reportedAtLabel}`, "warning");
+      pushEntry(defect.reportedByName, `Problem report / ${defect.reportedAtLabel}`, "warning");
     });
 
     return entries.slice(0, 4);
@@ -3253,13 +5398,13 @@ function FleetPanel({
         meta: `${selectedVehicle?.defectsOpen ?? 0} open defects`,
       },
       {
-        title: "Service runway",
+        title: "Service due in",
         subtitle: `${selectedVehicle?.serviceDueKm?.toLocaleString() ?? 0} km remaining`,
         tone: selectedVehicle?.serviceTone ?? "info",
         meta: `Last service ${selectedVehicle?.lastServiceOdo?.toLocaleString() ?? 0} km`,
       },
       {
-        title: "Compliance runway",
+        title: "Document time left",
         subtitle: `${selectedVehicle?.minimumDocumentDays ?? 0} days minimum`,
         tone: getDocumentTone(selectedVehicle?.minimumDocumentDays ?? 365),
         meta: `Permit ${selectedVehicle?.permitDays ?? 0} / Disc ${selectedVehicle?.discDays ?? 0}`,
@@ -3279,10 +5424,29 @@ function FleetPanel({
     if (targetVehicleId) {
       setDefectDraft((current) => ({
         ...current,
-        vehicleId: current.vehicleId || targetVehicleId,
+        vehicleId: current.id ? current.vehicleId : targetVehicleId,
       }));
     }
   }, [assignedVehicleId, isDriver, selectedVehicle?.id]);
+
+  const fleetListMessage = (() => {
+    if (isDriver) {
+      return "No vehicles are currently linked to your driver profile.";
+    }
+    if (activeFilter === "attention") {
+      return "No vehicles currently need attention. Switch filters or add a vehicle.";
+    }
+    if (activeFilter === "critical") {
+      return "No vehicles are currently in the critical list.";
+    }
+    if (activeFilter === "healthy") {
+      return "No vehicles are currently marked healthy in this workspace.";
+    }
+    if (activeFilter === "archived") {
+      return "No archived vehicles are available yet.";
+    }
+    return "No active vehicles are available in this view.";
+  })();
 
   const pushFeedback = (response) => {
     if (!response) {
@@ -3297,9 +5461,13 @@ function FleetPanel({
 
   const handleVehicleSubmit = (event) => {
     event.preventDefault();
+    const isNewVehicle = !vehicleDraft.id;
     const response = onSaveVehicle(vehicleDraft);
     pushFeedback(response);
     if (response.ok) {
+      if (isNewVehicle && !isDriver) {
+        setActiveFilter("all");
+      }
       setSelectedVehicleId(response.vehicleId);
     }
   };
@@ -3366,36 +5534,57 @@ function FleetPanel({
         </div>
       )}
 
-      <Panel eyebrow="Management by exception" title="Fleet dashboard" icon={Car}>
+      {activeRole === "Admin" && !canEditFleetUpdates && (
+        <article className="overview-board">
+          <div className="overview-board-head">
+            <p className="eyebrow">Admin access</p>
+            <h3>Fleet edits are locked</h3>
+          </div>
+          <p className="panel-note">
+            A manager must ask the owner for approval, then grant admin access before you can
+            update saved vehicle profiles, edit reported problems, archive vehicles, or mark
+            repairs as fixed.
+          </p>
+          <div className="finance-form-meta">
+            <span className="status-chip" data-tone={fleetAccessStatus.tone}>
+              {fleetAccessStatus.label}
+            </span>
+          </div>
+        </article>
+      )}
+
+      <Panel eyebrow="Fleet summary" title="Fleet overview" icon={Car}>
         <div className="fleet-counter-grid">
-          <article className="overview-board">
+          <article className="overview-board fleet-health-card" data-tone="success">
             <p className="eyebrow">Fleet health</p>
             <h3>{fleetHealth.healthy} healthy</h3>
             <p>{fleetHealth.total} active vehicles in service.</p>
           </article>
-          <article className="overview-board">
+          <article className="overview-board fleet-health-card" data-tone="warning">
             <p className="eyebrow">Warning</p>
             <h3>{fleetHealth.warning} orange</h3>
-            <p>Vehicles with defects or sub-1,000km service runway.</p>
+            <p>Vehicles with defects or less than 1,000 km before service.</p>
           </article>
-          <article className="overview-board">
+          <article className="overview-board fleet-health-card" data-tone="danger">
             <p className="eyebrow">Critical</p>
             <h3>{fleetHealth.critical} red</h3>
-            <p>Overdue service or compliance inside the red window.</p>
+            <p>Vehicles with overdue service or documents that need urgent attention.</p>
           </article>
         </div>
 
-        {canManageVehicles && (
-          <div className="finance-form-actions">
-            <button type="button" className="action-button primary" onClick={handleAddVehicle}>
-              <Car size={16} />
-              Add vehicle
-            </button>
-          </div>
-        )}
-
         {!isDriver && (
-          <div className="finance-sub-switch">
+          <div className="finance-sub-switch fleet-toolbar">
+            {canManageVehicles && (
+              <button
+                type="button"
+                className="finance-sub-pill finance-sub-pill-action"
+                disabled={activeRole === "Admin" && !canEditFleetUpdates}
+                onClick={handleAddVehicle}
+              >
+                <Car size={14} />
+                Add vehicle
+              </button>
+            )}
             {[
               ["attention", "Attention"],
               ["critical", "Critical"],
@@ -3436,6 +5625,16 @@ function FleetPanel({
         )}
 
         <div className="fleet-management-grid">
+          {filteredVehicles.length === 0 && (
+            <article className="overview-board">
+              <div className="overview-board-head">
+                <p className="eyebrow">{isDriver ? "Linked vehicles" : "Fleet view"}</p>
+                <h3>No vehicles in this view</h3>
+              </div>
+              <p className="panel-note">{fleetListMessage}</p>
+            </article>
+          )}
+
           {filteredVehicles.map((vehicle) => (
             <article
               key={vehicle.id}
@@ -3491,82 +5690,131 @@ function FleetPanel({
         </div>
       </Panel>
 
-      {selectedVehicle && (
+      {(canManageVehicles || selectedVehicle) && (
         <>
           <div ref={vehicleProfileRef} className="two-up">
-            <Panel eyebrow="Vehicle profile" title={`${selectedVehicle.registration} / ${selectedVehicle.route}`} icon={Activity}>
-              <div className="queue-stats">
-                <InfoPair label="Assigned driver" value={selectedVehicle.assignedDriver} />
-                <InfoPair
-                  label="Driver staffId"
-                  value={selectedVehicle.assignedDriverId ?? "Unassigned"}
-                />
-                <InfoPair
-                  label="Current odo"
-                  value={`${selectedVehicle.currentOdometer.toLocaleString()} km`}
-                />
-                <InfoPair
-                  label="Kms remaining"
-                  value={`${selectedVehicle.serviceDueKm.toLocaleString()} km`}
-                />
-                <InfoPair label="Open defects" value={`${selectedVehicle.defectsOpen}`} />
-                <InfoPair label="Status" value={selectedVehicle.healthLabel} />
-                {!isDriver && (
-                  <>
-                    <InfoPair label="Vehicle revenue" value={formatMoney(selectedVehicle.verifiedRevenue ?? 0)} />
-                    <InfoPair label="Vehicle expenses" value={formatMoney(selectedVehicle.assetExpenseTotal ?? 0)} />
-                    <InfoPair label="Asset net yield" value={formatMoney(selectedVehicle.netYield ?? 0)} />
-                  </>
-                )}
-              </div>
+            <Panel
+              eyebrow="Vehicle profile"
+              title={
+                selectedVehicle
+                  ? `${selectedVehicle.registration} / ${selectedVehicle.route}`
+                  : "Fleet onboarding"
+              }
+              icon={Activity}
+            >
+              {selectedVehicle ? (
+                <>
+                  <div className="queue-stats">
+                    <InfoPair label="Assigned driver" value={selectedVehicle.assignedDriver} />
+                    <InfoPair
+                      label="Driver staffId"
+                      value={selectedVehicle.assignedDriverId ?? "Unassigned"}
+                    />
+                    <InfoPair
+                      label="Current odometer"
+                      value={`${selectedVehicle.currentOdometer.toLocaleString()} km`}
+                    />
+                    <InfoPair
+                      label="KM left"
+                      value={`${selectedVehicle.serviceDueKm.toLocaleString()} km`}
+                    />
+                    <InfoPair label="Open defects" value={`${selectedVehicle.defectsOpen}`} />
+                    <InfoPair label="Status" value={selectedVehicle.healthLabel} />
+                    {!isDriver && (
+                      <>
+                        <InfoPair
+                          label="Vehicle income"
+                          value={formatMoney(selectedVehicle.verifiedRevenue ?? 0)}
+                        />
+                        <InfoPair
+                          label="Vehicle costs"
+                          value={formatMoney(selectedVehicle.assetExpenseTotal ?? 0)}
+                        />
+                        <InfoPair
+                          label="Money left after costs"
+                          value={formatMoney(selectedVehicle.netYield ?? 0)}
+                        />
+                      </>
+                    )}
+                  </div>
 
-              {!isDriver && (
-                <div className="finance-ledger">
-                  {vehicleLedger.map((record) => (
-                    <article key={record.id} className="ledger-row">
-                      <div className="ledger-copy">
-                        <strong>
-                          {record.type === "income"
-                            ? record.isSpecial
-                              ? record.description
-                              : `Revenue / ${record.route}`
-                            : record.category}
-                        </strong>
-                        <span>{formatStamp(record.timestamp)}</span>
-                      </div>
-                      <div className="ledger-meta">
-                        <span className="status-chip" data-tone={getTransactionTone(record)}>
-                          {record.status}
-                        </span>
-                        <strong>
-                          {record.type === "income" ? "+" : "-"}
-                          {formatMoney(record.amountClaimed ?? record.amount)}
-                        </strong>
-                      </div>
-                    </article>
-                  ))}
-                </div>
+                  {!isDriver && (
+                    <div className="finance-ledger">
+                      {vehicleLedger.map((record) => (
+                        <article key={record.id} className="ledger-row">
+                          <div className="ledger-copy">
+                            <strong>
+                              {record.type === "income"
+                                ? record.isSpecial
+                                  ? `Income / ${formatTripRoute(record)}`
+                                  : `Income / ${record.route}`
+                                : formatExpenseHeadline(record)}
+                            </strong>
+                            <span>
+                              {record.type === "expense"
+                                ? formatExpenseMeta(record)
+                                : record.isSpecial
+                                  ? formatTripLogMeta(record)
+                                  : formatStamp(record.timestamp)}
+                            </span>
+                          </div>
+                          <div className="ledger-meta">
+                            <span className="status-chip" data-tone={getTransactionTone(record)}>
+                              {formatTransactionStatus(record.status)}
+                            </span>
+                            <strong>
+                              {record.type === "income" ? "+" : "-"}
+                              {formatMoney(record.amountClaimed ?? record.amount)}
+                            </strong>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <article className="overview-board">
+                  <div className="overview-board-head">
+                    <p className="eyebrow">Fleet setup</p>
+                    <h3>Create the first vehicle</h3>
+                  </div>
+                  <p className="panel-note">
+                    Add a vehicle to activate route assignments, service monitoring, compliance
+                    tracking, and defect reporting.
+                  </p>
+                </article>
               )}
             </Panel>
 
-            <Panel eyebrow="Proactive intelligence" title="Compliance and service engine" icon={ShieldAlert}>
-              <div className="compact-feed">
-                <CompactFeedItem
-                  title="Service countdown"
-                  subtitle={`Last service ${selectedVehicle.lastServiceOdo.toLocaleString()} km`}
-                  tone={selectedVehicle.serviceTone}
-                  meta={`${selectedVehicle.serviceDueKm.toLocaleString()} km remaining`}
-                />
-                {vehicleDocuments.map((document) => (
+            <Panel
+              eyebrow="Service and documents"
+              title={selectedVehicle ? "Service and document reminders" : "Create first vehicle"}
+              icon={ShieldAlert}
+            >
+              {selectedVehicle ? (
+                <div className="compact-feed">
                   <CompactFeedItem
-                    key={document.id}
-                    title={document.document}
-                    subtitle={document.stage}
-                    tone={getDocumentTone(document.daysLeft)}
-                    meta={`${document.daysLeft} days`}
+                    title="Next service"
+                    subtitle={`Last service ${selectedVehicle.lastServiceOdo.toLocaleString()} km`}
+                    tone={selectedVehicle.serviceTone}
+                    meta={`${selectedVehicle.serviceDueKm.toLocaleString()} km remaining`}
                   />
-                ))}
-              </div>
+                  {vehicleDocuments.map((document) => (
+                    <CompactFeedItem
+                      key={document.id}
+                      title={document.document}
+                      subtitle={document.stage}
+                      tone={getDocumentTone(document.daysLeft)}
+                      meta={`${document.daysLeft} days`}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <p className="panel-note">
+                  This panel starts tracking service dates and expiry dates as soon as the first
+                  vehicle is saved.
+                </p>
+              )}
 
               {canManageVehicles && (
                 <form ref={vehicleFormRef} className="finance-form" onSubmit={handleVehicleSubmit}>
@@ -3632,7 +5880,7 @@ function FleetPanel({
                       </select>
                     </label>
                     <label className="finance-field">
-                      <span>Current odo</span>
+                      <span>Current odometer</span>
                       <input
                         type="number"
                         value={vehicleDraft.currentOdometer}
@@ -3645,7 +5893,7 @@ function FleetPanel({
                       />
                     </label>
                     <label className="finance-field">
-                      <span>Last service odo</span>
+                      <span>Last service odometer</span>
                       <input
                         type="number"
                         value={vehicleDraft.lastServiceOdo}
@@ -3698,13 +5946,25 @@ function FleetPanel({
                     </label>
                   </div>
                   <div className="finance-form-actions">
-                    <button type="submit" className="action-button primary">
+                    <button
+                      type="submit"
+                      className="action-button primary"
+                      disabled={activeRole === "Admin" && !canEditFleetUpdates}
+                    >
                       {vehicleDraft.id ? "Save vehicle" : "Create vehicle"}
                     </button>
-                    <button type="button" className="action-button" onClick={handleAddVehicle}>
+                    <button
+                      type="button"
+                      className="action-button"
+                      disabled={activeRole === "Admin" && !canEditFleetUpdates}
+                      onClick={handleAddVehicle}
+                    >
                       Add vehicle
                     </button>
-                    {selectedVehicle.status !== "archived" && selectedVehicle.id && (
+                    {canArchiveVehicles &&
+                      vehicleDraft.id &&
+                      selectedVehicle?.id === vehicleDraft.id &&
+                      selectedVehicle.status !== "archived" && (
                       <button
                         type="button"
                         className="record-button danger"
@@ -3712,7 +5972,7 @@ function FleetPanel({
                       >
                         Archive vehicle
                       </button>
-                    )}
+                      )}
                   </div>
                   <p className="finance-form-note" data-tone="info">
                     Drivers can be linked to multiple vehicles. Save more than one vehicle with the
@@ -3723,31 +5983,37 @@ function FleetPanel({
             </Panel>
           </div>
 
-          {canViewVehicleProfile && (
+          {selectedVehicle && canViewVehicleProfile && (
             <div className="overview-board-grid">
               <article className="overview-board">
                 <div className="overview-board-head">
-                  <p className="eyebrow">Revenue outline</p>
-                  <h3>Takings and route history</h3>
+                  <p className="eyebrow">Income summary</p>
+                  <h3>Income and route history</h3>
                 </div>
                 <div className="queue-stats">
-                  <InfoPair label="Total revenue" value={formatMoney(revenueOutline.totalRevenue)} />
-                  <InfoPair label="Standard routes" value={`${revenueOutline.shiftCount}`} />
-                  <InfoPair label="Special trips" value={`${revenueOutline.specialTripCount}`} />
-                  <InfoPair label="Special revenue" value={formatMoney(revenueOutline.specialRevenue)} />
+                  <InfoPair label="Total income" value={formatMoney(revenueOutline.totalRevenue)} />
+                  <InfoPair label="Daily routes" value={`${revenueOutline.shiftCount}`} />
+                  <InfoPair label="Extra trips" value={`${revenueOutline.specialTripCount}`} />
+                  <InfoPair label="Extra trip income" value={formatMoney(revenueOutline.specialRevenue)} />
                 </div>
                 <div className="finance-ledger">
                   {vehicleIncomeRecords.slice(0, 4).map((record) => (
                     <article key={record.id} className="ledger-row">
                       <div className="ledger-copy">
                         <strong>
-                          {record.isSpecial ? record.description : record.route ?? selectedVehicle.route}
+                          {record.isSpecial
+                            ? formatTripRoute(record)
+                            : record.route ?? selectedVehicle.route}
                         </strong>
-                        <span>{formatStamp(record.timestamp)}</span>
+                        <span>
+                          {record.isSpecial
+                            ? formatTripLogMeta(record)
+                            : formatStamp(record.timestamp)}
+                        </span>
                       </div>
                       <div className="ledger-meta">
                         <span className="status-chip" data-tone={getTransactionTone(record)}>
-                          {record.isSpecial ? "special" : "route"}
+                          {record.isSpecial ? "extra trip" : "route"}
                         </span>
                         <strong>{formatMoney(record.amountClaimed ?? record.amount)}</strong>
                       </div>
@@ -3759,14 +6025,14 @@ function FleetPanel({
               <article className="overview-board">
                 <div className="overview-board-head">
                   <p className="eyebrow">Route history</p>
-                  <h3>Recent earning lanes</h3>
+                  <h3>Recent routes and income</h3>
                 </div>
                 <div className="compact-feed">
                   {routeHistory.map((route) => (
                     <CompactFeedItem
                       key={route.title}
                       title={route.title}
-                      subtitle={`${route.trips} logged runs`}
+                      subtitle={`${route.trips} recorded trips`}
                       tone={route.subtitle === "Special trip" ? "info" : "success"}
                       meta={formatMoney(route.revenue)}
                     />
@@ -3774,7 +6040,7 @@ function FleetPanel({
                   {routeHistory.length === 0 && (
                     <CompactFeedItem
                       title="No route history yet"
-                      subtitle="Awaiting recorded shifts"
+                      subtitle="No trips recorded yet"
                       tone="info"
                       meta={selectedVehicle.route}
                     />
@@ -3784,8 +6050,8 @@ function FleetPanel({
 
               <article className="overview-board">
                 <div className="overview-board-head">
-                  <p className="eyebrow">Driver and health history</p>
-                  <h3>Operators and vehicle condition</h3>
+                  <p className="eyebrow">Driver and vehicle history</p>
+                  <h3>Drivers and vehicle condition</h3>
                 </div>
                 <div className="compact-feed">
                   {driverHistory.map((entry) => (
@@ -3811,218 +6077,246 @@ function FleetPanel({
             </div>
           )}
 
-      <Panel eyebrow="Defect management" title="Immutable audit trail" icon={AlertTriangle}>
-        {canResolveDefects && (
-          <article className="overview-board">
-            <div className="overview-board-head">
-              <p className="eyebrow">Manager controls</p>
-              <h3>Update logged defects</h3>
-            </div>
-            <p className="panel-note">
-              Managers can open any logged defect for editing, then resolve it once repair costs are
-              confirmed.
-            </p>
-            <div className="finance-form-actions">
-              <button
-                type="button"
-                className="action-button primary"
-                onClick={() => openDefectsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-              >
-                <AlertTriangle size={16} />
-                Open logged defects
-              </button>
-              <button
-                type="button"
-                className="action-button"
-                onClick={() => defectFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-              >
-                <Settings2 size={16} />
-                Update defect form
-              </button>
-              <span
-                className="status-chip"
-                data-tone={vehicleDefects.some((defect) => defect.status !== "resolved") ? "warning" : "success"}
-              >
-                {vehicleDefects.filter((defect) => defect.status !== "resolved").length} open
-              </span>
-            </div>
-          </article>
-        )}
+      {selectedVehicle ? (
+        <Panel eyebrow="Vehicle issues" title="Activity history" icon={AlertTriangle}>
+          {canResolveDefects && (
+            <article className="overview-board">
+              <div className="overview-board-head">
+                <p className="eyebrow">Manager tools</p>
+                <h3>Update reported problems</h3>
+              </div>
+              <p className="panel-note">
+                Managers can open any reported problem for editing, then mark it as fixed once the
+                repair amount is confirmed.
+              </p>
+              <div className="finance-form-actions">
+                <button
+                  type="button"
+                  className="action-button primary"
+                  onClick={() =>
+                    openDefectsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+                  }
+                >
+                  <AlertTriangle size={16} />
+                  Open reported problems
+                </button>
+                <button
+                  type="button"
+                  className="action-button"
+                  onClick={() =>
+                    defectFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })
+                  }
+                >
+                  <Settings2 size={16} />
+                  Update problem form
+                </button>
+                <span
+                  className="status-chip"
+                  data-tone={
+                    vehicleDefects.some((defect) => defect.status !== "resolved")
+                      ? "warning"
+                      : "success"
+                  }
+                >
+                  {vehicleDefects.filter((defect) => defect.status !== "resolved").length} open
+                </span>
+              </div>
+            </article>
+          )}
 
-        <div className="finance-board-grid finance-board-grid-3">
-          <article ref={defectFormRef} className="overview-board">
-            <div className="overview-board-head">
-              <p className="eyebrow">Defect form</p>
-              <h3>
-                {defectDraft.id
-                  ? "Update logged defect"
-                  : isDriver
-                    ? "My assigned vehicle"
-                    : "Log a defect"}
-              </h3>
-            </div>
-                <form className="finance-form" onSubmit={handleDefectSubmit}>
-                  {!isDriver && (
-                    <label className="finance-field">
-                      <span>Vehicle</span>
-                      <select
-                        value={defectDraft.vehicleId}
-                        onChange={(event) =>
-                          setDefectDraft((current) => ({
-                            ...current,
-                            vehicleId: event.target.value,
-                          }))
-                        }
-                      >
-                        {snapshot.vehicles
-                          .filter((vehicle) => vehicle.status !== "archived")
-                          .map((vehicle) => (
-                            <option key={vehicle.id} value={vehicle.id}>
-                              {vehicle.registration} / {vehicle.route}
-                            </option>
-                          ))}
-                      </select>
-                    </label>
-                  )}
+          <div className="finance-board-grid finance-board-grid-3">
+            <article ref={defectFormRef} className="overview-board">
+              <div className="overview-board-head">
+                <p className="eyebrow">Problem form</p>
+                <h3>
+                  {defectDraft.id
+                    ? "Update reported problem"
+                    : isDriver
+                      ? "My assigned vehicle"
+                      : "Report a problem"}
+                </h3>
+              </div>
+              <form className="finance-form" onSubmit={handleDefectSubmit}>
+                {!isDriver && (
                   <label className="finance-field">
-                    <span>Category</span>
+                    <span>Vehicle</span>
                     <select
-                      value={defectDraft.category}
+                      value={defectDraft.vehicleId}
                       onChange={(event) =>
                         setDefectDraft((current) => ({
                           ...current,
-                          category: event.target.value,
+                          vehicleId: event.target.value,
                         }))
                       }
                     >
-                      {DEFECT_CATEGORIES.map((category) => (
-                        <option key={category} value={category}>
-                          {category}
-                        </option>
-                      ))}
+                      {snapshot.vehicles
+                        .filter((vehicle) => vehicle.status !== "archived")
+                        .map((vehicle) => (
+                          <option key={vehicle.id} value={vehicle.id}>
+                            {vehicle.registration} / {vehicle.route}
+                          </option>
+                        ))}
                     </select>
                   </label>
-                  <label className="finance-field finance-field-wide">
-                    <span>Detail</span>
-                    <input
-                      type="text"
-                      value={defectDraft.detail}
-                      onChange={(event) =>
-                        setDefectDraft((current) => ({
-                          ...current,
-                          detail: event.target.value,
-                        }))
+                )}
+                <label className="finance-field">
+                  <span>Category</span>
+                  <select
+                    value={defectDraft.category}
+                    onChange={(event) =>
+                      setDefectDraft((current) => ({
+                        ...current,
+                        category: event.target.value,
+                      }))
+                    }
+                  >
+                    {DEFECT_CATEGORIES.map((category) => (
+                      <option key={category} value={category}>
+                        {category}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="finance-field finance-field-wide">
+                  <span>Detail</span>
+                  <input
+                    type="text"
+                    value={defectDraft.detail}
+                    onChange={(event) =>
+                      setDefectDraft((current) => ({
+                        ...current,
+                        detail: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <div className="finance-form-actions">
+                  <button
+                    type="submit"
+                    className="action-button primary"
+                    disabled={activeRole === "Admin" && !canEditFleetUpdates}
+                  >
+                    {defectDraft.id ? "Update problem" : "Report problem"}
+                  </button>
+                  {defectDraft.id && (
+                    <button
+                      type="button"
+                      className="action-button"
+                      onClick={() =>
+                        setDefectDraft(createDefectDraft(isDriver ? assignedVehicleId : selectedVehicle?.id))
                       }
-                    />
-                  </label>
-                  <div className="finance-form-actions">
-                    <button type="submit" className="action-button primary">
-                      {defectDraft.id ? "Update defect" : "Log defect"}
+                    >
+                      Cancel edit
                     </button>
-                    {defectDraft.id && (
-                      <button
-                        type="button"
-                        className="action-button"
-                        onClick={() =>
-                          setDefectDraft(createDefectDraft(isDriver ? assignedVehicleId : selectedVehicle?.id))
-                        }
-                      >
-                        Cancel edit
-                      </button>
-                    )}
-                  </div>
-                </form>
-              </article>
+                  )}
+                </div>
+              </form>
+            </article>
 
-              <article ref={openDefectsRef} className="overview-board">
-                <div className="overview-board-head">
-                  <p className="eyebrow">Open defects</p>
-                  <h3>Resolution chain</h3>
-                </div>
-                <div className="finance-ledger">
-                  {vehicleDefects
-                    .filter((defect) => defect.status !== "resolved")
-                    .map((defect) => (
-                      <article key={defect.id} className="ledger-row">
-                        <div className="ledger-copy">
-                          <strong>{defect.category}</strong>
-                          <span>{defect.detail}</span>
+            <article ref={openDefectsRef} className="overview-board">
+              <div className="overview-board-head">
+                <p className="eyebrow">Open problems</p>
+                <h3>What still needs fixing</h3>
+              </div>
+              <div className="finance-ledger">
+                {vehicleDefects
+                  .filter((defect) => defect.status !== "resolved")
+                  .map((defect) => (
+                    <article key={defect.id} className="ledger-row">
+                      <div className="ledger-copy">
+                        <strong>{defect.category}</strong>
+                        <span>{defect.detail}</span>
+                      </div>
+                      <div className="ledger-meta">
+                        <span className="status-chip" data-tone={getDefectTone(defect.severity)}>
+                          {defect.severity}
+                        </span>
+                        <span>{defect.reportedAtLabel}</span>
+                      </div>
+                      {canResolveDefects ? (
+                        <div className="verification-actions">
+                          <button
+                            type="button"
+                            className="action-button"
+                            onClick={() => handleEditDefect(defect)}
+                          >
+                            <Settings2 size={16} />
+                            Update problem
+                          </button>
+                          <input
+                            className="verification-input"
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={resolutionCosts[defect.id] ?? ""}
+                            onChange={(event) =>
+                              setResolutionCosts((current) => ({
+                                ...current,
+                                [defect.id]: event.target.value,
+                              }))
+                            }
+                            placeholder="Repair amount"
+                          />
+                          <button
+                            type="button"
+                            className="action-button primary"
+                            onClick={() => handleResolve(defect.id)}
+                          >
+                            Mark as fixed
+                          </button>
                         </div>
-                        <div className="ledger-meta">
-                          <span className="status-chip" data-tone={getDefectTone(defect.severity)}>
-                            {defect.severity}
-                          </span>
-                          <span>{defect.reportedAtLabel}</span>
-                        </div>
-                        {canResolveDefects ? (
-                          <div className="verification-actions">
-                            <button
-                              type="button"
-                              className="action-button"
-                              onClick={() => handleEditDefect(defect)}
-                            >
-                              <Settings2 size={16} />
-                              Update defect
-                            </button>
-                            <input
-                              className="verification-input"
-                              type="number"
-                              min="0"
-                              step="1"
-                              value={resolutionCosts[defect.id] ?? ""}
-                              onChange={(event) =>
-                                setResolutionCosts((current) => ({
-                                  ...current,
-                                  [defect.id]: event.target.value,
-                                }))
-                              }
-                              placeholder="Repair cost"
-                            />
-                            <button
-                              type="button"
-                              className="action-button primary"
-                              onClick={() => handleResolve(defect.id)}
-                            >
-                              Resolve defect
-                            </button>
-                          </div>
-                        ) : (
-                          <span className="status-chip" data-tone="warning">
-                            Awaiting manager resolution
-                          </span>
-                        )}
-                      </article>
-                    ))}
-                </div>
-              </article>
+                      ) : (
+                        <span className="status-chip" data-tone="warning">
+                          Waiting for manager action
+                        </span>
+                      )}
+                    </article>
+                  ))}
+              </div>
+            </article>
 
-              <article className="overview-board">
-                <div className="overview-board-head">
-                  <p className="eyebrow">Resolved history</p>
-                  <h3>Read-only trail</h3>
-                </div>
-                <div className="finance-ledger">
-                  {vehicleDefects
-                    .filter((defect) => defect.status === "resolved")
-                    .map((defect) => (
-                      <article key={defect.id} className="ledger-row">
-                        <div className="ledger-copy">
-                          <strong>{defect.category}</strong>
-                          <span>{defect.detail}</span>
-                        </div>
-                        <div className="ledger-meta">
-                          <span className="status-chip" data-tone="success">
-                            Resolved
-                          </span>
-                          <strong>{formatMoney(defect.repairCost ?? 0)}</strong>
-                          <span>{defect.resolvedAtLabel}</span>
-                        </div>
-                      </article>
-                    ))}
-                </div>
-              </article>
+            <article className="overview-board">
+              <div className="overview-board-head">
+                <p className="eyebrow">Fixed history</p>
+                <h3>Past repairs</h3>
+              </div>
+              <div className="finance-ledger">
+                {vehicleDefects
+                  .filter((defect) => defect.status === "resolved")
+                  .map((defect) => (
+                    <article key={defect.id} className="ledger-row">
+                      <div className="ledger-copy">
+                        <strong>{defect.category}</strong>
+                        <span>{defect.detail}</span>
+                      </div>
+                      <div className="ledger-meta">
+                        <span className="status-chip" data-tone="success">
+                          Resolved
+                        </span>
+                        <strong>{formatMoney(defect.repairCost ?? 0)}</strong>
+                        <span>{defect.resolvedAtLabel}</span>
+                      </div>
+                    </article>
+                  ))}
+              </div>
+            </article>
+          </div>
+        </Panel>
+      ) : (
+        <Panel eyebrow="Vehicle issues" title="Activity history" icon={AlertTriangle}>
+          <article className="overview-board">
+            <div className="overview-board-head">
+              <p className="eyebrow">Problem reporting</p>
+              <h3>No vehicle available</h3>
             </div>
-          </Panel>
+            <p className="panel-note">
+              {isDriver
+                ? "A vehicle must be linked to your driver profile before you can report defects."
+                : "Add a vehicle before logging, updating, or resolving defects."}
+            </p>
+          </article>
+        </Panel>
+      )}
         </>
       )}
     </div>
@@ -4034,7 +6328,7 @@ function CompliancePanel({ snapshot }) {
     <div className="content-stack">
       <div className="two-up">
         <Panel
-          eyebrow="Countdown engine"
+          eyebrow="Service reminders"
           title="Service and document alerts"
           icon={ShieldAlert}
         >
@@ -4055,7 +6349,7 @@ function CompliancePanel({ snapshot }) {
           </div>
         </Panel>
 
-        <Panel eyebrow="Expiry engine" title="Expiring documents" icon={FileText}>
+        <Panel eyebrow="Document reminders" title="Expiring documents" icon={FileText}>
           <div className="list-stack">
             {snapshot.documents.map((document) => (
               <StatusRow
@@ -4076,13 +6370,19 @@ function CompliancePanel({ snapshot }) {
 function DriversPanel({
   snapshot,
   activeRole,
+  permissionControls,
   onShortcutAction,
   shortcutIntent,
   onSaveStandardIncome,
   onSaveSpecialIncome,
+  onSaveDriver,
   onSelectDriverVehicle,
 }) {
   const isDriver = activeRole === "Driver";
+  const canManageDrivers = PRIVILEGED_ROLES.has(activeRole);
+  const canEditDriverRecords = canEditModuleUpdates(activeRole, "drivers", permissionControls);
+  const canEditFinanceRecords = canEditModuleUpdates(activeRole, "finance", permissionControls);
+  const canUseFinanceCapture = activeRole === "Admin" ? canEditFinanceRecords : true;
   const linkedVehicles = getDriverLinkedVehicles(snapshot);
   const linkedVehicleIds = new Set(linkedVehicles.map((vehicle) => vehicle.id));
   const linkedVehicleRegistrations = new Set(
@@ -4098,6 +6398,8 @@ function DriversPanel({
     snapshot.driverTerminal.assignedVehicleId ?? linkedVehicles[0]?.id ?? snapshot.vehicles[0]?.id ?? "";
   const [driverAction, setDriverAction] = useState(null);
   const [feedback, setFeedback] = useState(null);
+  const [showDriverForm, setShowDriverForm] = useState(false);
+  const [driverDraft, setDriverDraft] = useState(() => createDriverDraft());
   const [shiftDraft, setShiftDraft] = useState(() =>
     createStandardDraft(
       assignedVehicleId,
@@ -4105,6 +6407,7 @@ function DriversPanel({
     ),
   );
   const [specialDraft, setSpecialDraft] = useState(() => createSpecialDraft(assignedVehicleId));
+  const driverFormRef = useRef(null);
   const assignedVehicle =
     (isDriver
       ? linkedVehicles.find((vehicle) => vehicle.id === assignedVehicleId) ?? linkedVehicles[0]
@@ -4117,10 +6420,12 @@ function DriversPanel({
           linkedVehicleIds.has(defect.vehicleId) || linkedVehicleRegistrations.has(defect.vehicle),
       )
     : snapshot.defects;
-  const shiftDistance =
-    Number(shiftDraft.closingOdo || 0) - Number(shiftDraft.openingOdo || 0);
   const shiftValidationError = getStandardDraftValidationError({
     ...shiftDraft,
+    vehicleId: assignedVehicleId,
+  });
+  const specialValidationError = getSpecialDraftValidationError({
+    ...specialDraft,
     vehicleId: assignedVehicleId,
   });
 
@@ -4206,6 +6511,27 @@ function DriversPanel({
     }
   };
 
+  const handleAddDriver = () => {
+    setDriverDraft(createDriverDraft());
+    setShowDriverForm(true);
+    driverFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const handleDriverSubmit = (event) => {
+    event.preventDefault();
+    const response = onSaveDriver(driverDraft);
+
+    setFeedback({
+      tone: response.ok ? "success" : "danger",
+      message: response.message ?? response.error,
+    });
+
+    if (response.ok) {
+      setDriverDraft(createDriverDraft());
+      setShowDriverForm(false);
+    }
+  };
+
   return (
     <div className="content-stack">
       {feedback && (
@@ -4214,6 +6540,19 @@ function DriversPanel({
             {feedback.message}
           </span>
         </div>
+      )}
+
+      {activeRole === "Admin" && (!canEditFinanceRecords || !canEditDriverRecords) && (
+        <article className="overview-board">
+          <div className="overview-board-head">
+            <p className="eyebrow">Admin access</p>
+            <h3>Some edits are locked</h3>
+          </div>
+          <p className="panel-note">
+            The owner must approve the request first, and then the manager must grant admin access
+            before you can save daily takings or change the driver roster here.
+          </p>
+        </article>
       )}
 
       {isDriver && linkedVehicles.length > 1 && (
@@ -4240,7 +6579,7 @@ function DriversPanel({
       )}
 
       <div className="two-up">
-        <Panel eyebrow="Driver UX" title="Terminal preview" icon={LayoutDashboard}>
+        <Panel eyebrow="Driver view" title="Terminal preview" icon={LayoutDashboard}>
           <div className="terminal-card">
             <div className="terminal-header">
               <div>
@@ -4259,11 +6598,11 @@ function DriversPanel({
 
             <div className="queue-stats">
               <InfoPair
-                label="Opening odo"
+                label="Starting odometer"
                 value={`${snapshot.driverTerminal.lastShift.openOdo.toLocaleString()} km`}
               />
               <InfoPair
-                label="Closing odo"
+                label="Ending odometer"
                 value={`${snapshot.driverTerminal.lastShift.closeOdo.toLocaleString()} km`}
               />
               <InfoPair
@@ -4281,7 +6620,7 @@ function DriversPanel({
                   className="shortcut-button"
                   onClick={() => handleShortcut(shortcut)}
                 >
-                  {shortcut}
+                  {formatShortcutLabel(shortcut)}
                 </button>
               ))}
             </div>
@@ -4289,9 +6628,9 @@ function DriversPanel({
             {driverAction && (
               <div className="driver-action-panel">
                 <div className="overview-board-head">
-                  <p className="eyebrow">Quick capture</p>
+                  <p className="eyebrow">Quick entry</p>
                   <h3>
-                    {driverAction === "shift" ? "Log shift takings" : "Capture special trip"}
+                    {driverAction === "shift" ? "Add daily earnings" : "Add extra trip"}
                   </h3>
                 </div>
 
@@ -4355,18 +6694,25 @@ function DriversPanel({
                       </span>
                       <span
                         className="status-chip"
-                        data-tone={shiftDistance > 0 ? "success" : "danger"}
+                        data-tone={
+                          Number(shiftDraft.closingOdo || 0) > Number(shiftDraft.openingOdo || 0)
+                            ? "success"
+                            : "danger"
+                        }
                       >
-                        Distance {Math.max(shiftDistance, 0).toLocaleString()} km
+                        Distance {Math.max(
+                          Number(shiftDraft.closingOdo || 0) - Number(shiftDraft.openingOdo || 0),
+                          0,
+                        ).toLocaleString()} km
                       </span>
                     </div>
                     <div className="finance-form-actions">
                       <button
                         type="submit"
                         className="action-button primary"
-                        disabled={Boolean(shiftValidationError)}
+                        disabled={Boolean(shiftValidationError) || !canUseFinanceCapture}
                       >
-                        Save shift
+                        Save trip
                       </button>
                       <button
                         type="button"
@@ -4380,7 +6726,7 @@ function DriversPanel({
                       className="finance-form-note"
                       data-tone={shiftValidationError ? "danger" : "info"}
                     >
-                      {shiftValidationError ?? "Shift details are complete and ready to save."}
+                      {shiftValidationError ?? "Trip details are complete and ready to save."}
                     </p>
                   </form>
                 )}
@@ -4389,18 +6735,118 @@ function DriversPanel({
                   <form className="finance-form" onSubmit={handleSpecialSubmit}>
                     <div className="finance-form-grid">
                       <label className="finance-field">
-                        <span>Vehicle</span>
-                        <input type="text" value={assignedVehicle?.registration ?? ""} disabled />
-                      </label>
-                      <label className="finance-field finance-field-wide">
-                        <span>Description</span>
+                        <span>Date</span>
                         <input
-                          type="text"
-                          value={specialDraft.description}
+                          type="date"
+                          value={specialDraft.tripDate}
                           onChange={(event) =>
                             setSpecialDraft((current) => ({
                               ...current,
-                              description: event.target.value,
+                              tripDate: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>Vehicle</span>
+                        <input type="text" value={assignedVehicle?.registration ?? ""} disabled />
+                      </label>
+                      <label className="finance-field">
+                        <span>Opening odo</span>
+                        <input
+                          type="number"
+                          value={specialDraft.openingOdo}
+                          onChange={(event) =>
+                            setSpecialDraft((current) => ({
+                              ...current,
+                              openingOdo: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>Closing odo</span>
+                        <input
+                          type="number"
+                          min={Number(specialDraft.openingOdo || 0) + 1}
+                          value={specialDraft.closingOdo}
+                          onChange={(event) =>
+                            setSpecialDraft((current) => ({
+                              ...current,
+                              closingOdo: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>Total business km</span>
+                        <input type="number" value={getBusinessKmValue(specialDraft)} disabled readOnly />
+                      </label>
+                      <label className="finance-field">
+                        <span>From</span>
+                        <input
+                          type="text"
+                          value={specialDraft.fromLocation}
+                          onChange={(event) =>
+                            setSpecialDraft((current) => ({
+                              ...current,
+                              fromLocation: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>To</span>
+                        <input
+                          type="text"
+                          value={specialDraft.toLocation}
+                          onChange={(event) =>
+                            setSpecialDraft((current) => ({
+                              ...current,
+                              toLocation: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field finance-field-wide">
+                        <span>Reason</span>
+                        <input
+                          type="text"
+                          value={specialDraft.travelReason}
+                          onChange={(event) =>
+                            setSpecialDraft((current) => ({
+                              ...current,
+                              travelReason: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>Actual fuel & oil cost</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={specialDraft.fuelOilCost}
+                          onChange={(event) =>
+                            setSpecialDraft((current) => ({
+                              ...current,
+                              fuelOilCost: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>Actual repairs & maintenance cost</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={specialDraft.repairMaintenanceCost}
+                          onChange={(event) =>
+                            setSpecialDraft((current) => ({
+                              ...current,
+                              repairMaintenanceCost: event.target.value,
                             }))
                           }
                         />
@@ -4423,11 +6869,21 @@ function DriversPanel({
                     </div>
                     <div className="finance-form-meta">
                       <span className="status-chip" data-tone="info">
-                        Tagged as special-trip income
+                        SARS-style logbook
+                      </span>
+                      <span
+                        className="status-chip"
+                        data-tone={getBusinessKmValue(specialDraft) > 0 ? "success" : "danger"}
+                      >
+                        Business km {getBusinessKmValue(specialDraft).toLocaleString()} km
                       </span>
                     </div>
                     <div className="finance-form-actions">
-                      <button type="submit" className="action-button primary">
+                      <button
+                        type="submit"
+                        className="action-button primary"
+                        disabled={!canUseFinanceCapture || Boolean(specialValidationError)}
+                      >
                         Save trip
                       </button>
                       <button
@@ -4438,6 +6894,13 @@ function DriversPanel({
                         Cancel
                       </button>
                     </div>
+                    <p
+                      className="finance-form-note"
+                      data-tone={specialValidationError ? "danger" : "info"}
+                    >
+                      {specialValidationError ??
+                        "Extra trip logbook details are complete and ready to save."}
+                    </p>
                   </form>
                 )}
               </div>
@@ -4446,31 +6909,142 @@ function DriversPanel({
         </Panel>
 
         <Panel eyebrow="People operations" title="Roster and performance" icon={Users}>
-          <div className="list-stack">
-            {filteredDrivers.map((driver) => (
-              <article key={driver.name} className="person-row">
-                <div className="person-copy">
-                  <h3>{driver.name}</h3>
-                  <p>
-                    {driver.role} / {driver.route}
-                  </p>
+          <div className="content-stack">
+            {canManageDrivers && (
+              <article ref={driverFormRef} className="overview-board">
+                <div className="overview-board-head">
+                  <p className="eyebrow">Roster control</p>
+                  <h3>Add driver</h3>
                 </div>
-                <div className="person-metrics">
-                  <span
-                    className="status-chip"
-                    data-tone={driver.cashAccuracy >= 98 ? "success" : "warning"}
+                <div className="finance-form-actions">
+                  <button
+                    type="button"
+                    className="action-button primary"
+                    disabled={activeRole === "Admin" && !canEditDriverRecords}
+                    onClick={handleAddDriver}
                   >
-                    {driver.cashAccuracy}% accuracy
-                  </span>
-                  <span
-                    className="status-chip"
-                    data-tone={driver.prdpDays && driver.prdpDays <= 30 ? "danger" : "info"}
-                  >
-                    {driver.prdpDays ? `${driver.prdpDays} days PrDP` : driver.shiftStatus}
-                  </span>
+                    <Users size={16} />
+                    Add driver
+                  </button>
                 </div>
+                {showDriverForm && (
+                  <form className="finance-form" onSubmit={handleDriverSubmit}>
+                    <div className="finance-form-grid">
+                      <label className="finance-field finance-field-wide">
+                        <span>Full name</span>
+                        <input
+                          type="text"
+                          value={driverDraft.name}
+                          onChange={(event) =>
+                            setDriverDraft((current) => ({
+                              ...current,
+                              name: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>Route</span>
+                        <input
+                          type="text"
+                          value={driverDraft.route}
+                          onChange={(event) =>
+                            setDriverDraft((current) => ({
+                              ...current,
+                              route: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>Shift status</span>
+                        <select
+                          value={driverDraft.shiftStatus}
+                          onChange={(event) =>
+                            setDriverDraft((current) => ({
+                              ...current,
+                              shiftStatus: event.target.value,
+                            }))
+                          }
+                        >
+                          {[
+                            "Ready for dispatch",
+                            "Available",
+                            "On route",
+                            "Needs review",
+                          ].map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="finance-field">
+                        <span>PrDP expiry</span>
+                        <input
+                          type="date"
+                          value={driverDraft.prdpExpiryDate}
+                          onChange={(event) =>
+                            setDriverDraft((current) => ({
+                              ...current,
+                              prdpExpiryDate: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                    <div className="finance-form-actions">
+                      <button
+                        type="submit"
+                        className="action-button primary"
+                        disabled={activeRole === "Admin" && !canEditDriverRecords}
+                      >
+                        Save driver
+                      </button>
+                      <button
+                        type="button"
+                        className="action-button"
+                        onClick={() => {
+                          setDriverDraft(createDriverDraft());
+                          setShowDriverForm(false);
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    <p className="finance-form-note" data-tone="info">
+                      Drivers can then be linked to one or more vehicles from the Fleet module.
+                    </p>
+                  </form>
+                )}
               </article>
-            ))}
+            )}
+            <div className="list-stack">
+              {filteredDrivers.map((driver) => (
+                <article key={driver.staffId ?? driver.name} className="person-row">
+                  <div className="person-copy">
+                    <h3>{driver.name}</h3>
+                    <p>
+                      {driver.role} / {driver.route}
+                    </p>
+                  </div>
+                  <div className="person-metrics">
+                    <span
+                      className="status-chip"
+                      data-tone={driver.cashAccuracy >= 98 ? "success" : "warning"}
+                    >
+                      {driver.cashAccuracy}% accuracy
+                    </span>
+                    <span
+                      className="status-chip"
+                      data-tone={driver.prdpDays && driver.prdpDays <= 30 ? "danger" : "info"}
+                    >
+                      {driver.prdpDays ? `${driver.prdpDays} days PrDP` : driver.shiftStatus}
+                    </span>
+                  </div>
+                </article>
+              ))}
+            </div>
           </div>
         </Panel>
       </div>
@@ -4499,6 +7073,100 @@ function DriversPanel({
           ))}
         </div>
       </Panel>
+    </div>
+  );
+}
+
+function SignInShell({
+  fleetName,
+  authProviderLabel,
+  isLocalAuth,
+  email,
+  password,
+  error,
+  submitting,
+  onChange,
+  onSubmit,
+}) {
+  return (
+    <div className="auth-shell">
+      <div className="auth-card">
+        <div className="brand-lockup auth-brand">
+          <img className="brand-logo auth-logo" src="/taxiflow-favicon.png" alt="TaxiFlow logo" />
+        </div>
+        <div className="auth-copy">
+          <p className="eyebrow">Secure access</p>
+          <h1>{fleetName}</h1>
+          <p>Sign in to open the workspace assigned to your designation and access level.</p>
+          <span className="auth-provider-note">{authProviderLabel}</span>
+        </div>
+        <form className="auth-form" onSubmit={onSubmit}>
+          <label className="finance-field">
+            <span>Email</span>
+            <input
+              autoComplete="username"
+              type="email"
+              value={email}
+              onChange={(event) =>
+                onChange((current) => ({
+                  ...current,
+                  email: event.target.value,
+                }))
+              }
+            />
+          </label>
+          <label className="finance-field">
+            <span>Password</span>
+            <input
+              autoComplete="current-password"
+              type="password"
+              value={password}
+              onChange={(event) =>
+                onChange((current) => ({
+                  ...current,
+                  password: event.target.value,
+                }))
+              }
+            />
+          </label>
+          <div className="finance-form-actions">
+            <button type="submit" className="action-button primary" disabled={submitting}>
+              {submitting ? "Signing in..." : "Sign in"}
+            </button>
+          </div>
+          <p className="finance-form-note" data-tone={error ? "danger" : "info"}>
+            {error ??
+              (isLocalAuth
+                ? "Use one of the configured TaxiFlow accounts. Local setup mode routes you by designation."
+                : "Use the Supabase account issued for your TaxiFlow role. Access is routed by designation.")}
+          </p>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function AccessDeniedShell({ email, onSignOut }) {
+  return (
+    <div className="auth-shell">
+      <div className="auth-card">
+        <div className="panel-icon">
+          <Lock size={20} />
+        </div>
+        <div className="auth-copy">
+          <p className="eyebrow">Access blocked</p>
+          <h1>Account not mapped</h1>
+          <p>
+            {email} signed in successfully, but this account is not linked to an application role
+            yet.
+          </p>
+        </div>
+        <div className="finance-form-actions">
+          <button type="button" className="action-button" onClick={onSignOut}>
+            Sign out
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

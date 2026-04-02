@@ -10,6 +10,37 @@ create table if not exists fleet_profiles (
   created_at timestamptz default now()
 );
 
+create table if not exists workspace_snapshots (
+  workspace_key text primary key,
+  snapshot jsonb not null,
+  updated_at timestamptz not null default now(),
+  updated_by uuid references auth.users(id)
+);
+
+alter table workspace_snapshots enable row level security;
+
+drop policy if exists "Authenticated users can read workspace snapshots" on workspace_snapshots;
+create policy "Authenticated users can read workspace snapshots"
+  on workspace_snapshots
+  for select
+  to authenticated
+  using (true);
+
+drop policy if exists "Authenticated users can insert workspace snapshots" on workspace_snapshots;
+create policy "Authenticated users can insert workspace snapshots"
+  on workspace_snapshots
+  for insert
+  to authenticated
+  with check (true);
+
+drop policy if exists "Authenticated users can update workspace snapshots" on workspace_snapshots;
+create policy "Authenticated users can update workspace snapshots"
+  on workspace_snapshots
+  for update
+  to authenticated
+  using (true)
+  with check (true);
+
 create table if not exists personnel_profiles (
   id uuid primary key default gen_random_uuid(),
   full_name text not null,

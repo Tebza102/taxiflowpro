@@ -1,183 +1,448 @@
 import { mockSnapshot } from "../data/mockData";
-import { hasSupabaseConfig, supabase } from "./supabaseClient";
+import { configuredBackendMode, hasSupabaseConfig, supabase } from "./supabaseClient";
 
-const normalizeRecords = (rows, fallback) => {
-  if (!Array.isArray(rows) || rows.length === 0) {
-    return fallback;
-  }
+const DATA_MODE_STORAGE_KEY = "taxiflow-data-mode-v2";
+const DEMO_SNAPSHOT_STORAGE_KEY = "taxiflow-demo-snapshot-v1";
+const LIVE_SNAPSHOT_STORAGE_KEY = "taxiflow-live-snapshot-v1";
+const LIVE_WORKSPACE_KEY = "taxiflow-live";
 
-  return rows;
-};
+const normalizeBackendMode = (value) =>
+  String(value ?? "mock").trim().toLowerCase() === "live" ? "live" : "mock";
 
-const adaptProfile = (row) => {
-  if (!row) {
-    return mockSnapshot.profile;
+const cloneSnapshot = (snapshot) => JSON.parse(JSON.stringify(snapshot));
+
+const createSnapshotShape = ({
+  legalEntity = "Workspace not configured",
+  district = "Not set",
+  nextBankingWindow = "Not set",
+  activeDriver = "No driver linked",
+  assignedVehicle = "No vehicle linked",
+  assignedRoute = "No route assigned",
+} = {}) => ({
+  profile: {
+    ...cloneSnapshot(mockSnapshot.profile),
+    fleetName: "TaxiFlow Pro",
+    legalEntity,
+    district,
+    nextBankingWindow,
+    monthlyTarget: 0,
+  },
+  operationsLoop: cloneSnapshot(mockSnapshot.operationsLoop),
+  verificationQueue: [],
+  finance: {
+    ...cloneSnapshot(mockSnapshot.finance),
+    todayClaimed: 0,
+    todayCounted: 0,
+    pendingCashInSafe: 0,
+    verifiedToday: 0,
+    shiftsAwaitingVerification: 0,
+    revenueLogging: {
+      ...cloneSnapshot(mockSnapshot.finance.revenueLogging),
+      standardRouteCount: 0,
+      specialTripCount: 0,
+      standardRouteRevenue: 0,
+      specialTripRevenue: 0,
+      routes: [],
+      specialTrips: [],
+    },
+    expenseMix: [],
+    expenseManagement: {
+      vehicleSpecific: [],
+      operational: [],
+    },
+    bankingBatch: {
+      ...cloneSnapshot(mockSnapshot.finance.bankingBatch),
+      reference: "Awaiting first deposit",
+      verifiedTakings: 0,
+      cashExpenses: 0,
+      depositAmount: 0,
+      depositSlip: {
+        ...cloneSnapshot(mockSnapshot.finance.bankingBatch.depositSlip),
+        generatedAt: "No banking captured yet",
+        teller: "Pending setup",
+        recordsLocked: 0,
+      },
+    },
+  },
+  financeTransactions: [],
+  deposits: [],
+  vehicles: [],
+  serviceSchedule: [],
+  documents: [],
+  drivers: [],
+  driverTerminal: {
+    ...cloneSnapshot(mockSnapshot.driverTerminal),
+    activeDriverId: null,
+    assignedVehicleId: null,
+    activeDriver,
+    assignedVehicle,
+    assignedRoute,
+    lastShift: {
+      ...cloneSnapshot(mockSnapshot.driverTerminal.lastShift),
+      openOdo: 0,
+      closeOdo: 0,
+      revenue: 0,
+      status: "Ready for capture",
+    },
+    shortcuts: [...mockSnapshot.driverTerminal.shortcuts],
+    linkedVehicleIds: [],
+    linkedVehicles: [],
+  },
+  defects: [],
+  auditTrail: [],
+});
+
+const normalizeSnapshotShape = (snapshot, defaults = createSnapshotShape()) => {
+  if (!snapshot) {
+    return cloneSnapshot(defaults);
   }
 
   return {
-    ...mockSnapshot.profile,
-    fleetName: row.fleet_name ?? mockSnapshot.profile.fleetName,
-    legalEntity: row.legal_entity ?? mockSnapshot.profile.legalEntity,
-    district: row.district ?? mockSnapshot.profile.district,
-    installReadiness:
-      row.install_readiness ?? mockSnapshot.profile.installReadiness,
-    nextBankingWindow:
-      row.next_banking_window ?? mockSnapshot.profile.nextBankingWindow,
-    serviceIntervalKm:
-      row.service_interval_km ?? mockSnapshot.profile.serviceIntervalKm,
-    monthlyTarget: row.monthly_target ?? mockSnapshot.profile.monthlyTarget,
+    ...cloneSnapshot(defaults),
+    ...snapshot,
+    profile: {
+      ...cloneSnapshot(defaults.profile),
+      ...(snapshot.profile ?? {}),
+      valuePillars: Array.isArray(snapshot.profile?.valuePillars)
+        ? snapshot.profile.valuePillars
+        : cloneSnapshot(defaults.profile.valuePillars ?? []),
+    },
+    operationsLoop: Array.isArray(snapshot.operationsLoop)
+      ? snapshot.operationsLoop
+      : cloneSnapshot(defaults.operationsLoop),
+    verificationQueue: Array.isArray(snapshot.verificationQueue)
+      ? snapshot.verificationQueue
+      : cloneSnapshot(defaults.verificationQueue),
+    finance: {
+      ...cloneSnapshot(defaults.finance),
+      ...(snapshot.finance ?? {}),
+      revenueLogging: {
+        ...cloneSnapshot(defaults.finance.revenueLogging),
+        ...(snapshot.finance?.revenueLogging ?? {}),
+        routes: Array.isArray(snapshot.finance?.revenueLogging?.routes)
+          ? snapshot.finance.revenueLogging.routes
+          : cloneSnapshot(defaults.finance.revenueLogging.routes),
+        specialTrips: Array.isArray(snapshot.finance?.revenueLogging?.specialTrips)
+          ? snapshot.finance.revenueLogging.specialTrips
+          : cloneSnapshot(defaults.finance.revenueLogging.specialTrips),
+      },
+      expenseMix: Array.isArray(snapshot.finance?.expenseMix)
+        ? snapshot.finance.expenseMix
+        : cloneSnapshot(defaults.finance.expenseMix),
+      expenseManagement: {
+        ...cloneSnapshot(defaults.finance.expenseManagement),
+        ...(snapshot.finance?.expenseManagement ?? {}),
+        vehicleSpecific: Array.isArray(snapshot.finance?.expenseManagement?.vehicleSpecific)
+          ? snapshot.finance.expenseManagement.vehicleSpecific
+          : cloneSnapshot(defaults.finance.expenseManagement.vehicleSpecific),
+        operational: Array.isArray(snapshot.finance?.expenseManagement?.operational)
+          ? snapshot.finance.expenseManagement.operational
+          : cloneSnapshot(defaults.finance.expenseManagement.operational),
+      },
+      bankingBatch: {
+        ...cloneSnapshot(defaults.finance.bankingBatch),
+        ...(snapshot.finance?.bankingBatch ?? {}),
+        depositSlip: {
+          ...cloneSnapshot(defaults.finance.bankingBatch.depositSlip),
+          ...(snapshot.finance?.bankingBatch?.depositSlip ?? {}),
+        },
+      },
+    },
+    financeTransactions: Array.isArray(snapshot.financeTransactions)
+      ? snapshot.financeTransactions
+      : cloneSnapshot(defaults.financeTransactions),
+    deposits: Array.isArray(snapshot.deposits) ? snapshot.deposits : cloneSnapshot(defaults.deposits),
+    vehicles: Array.isArray(snapshot.vehicles) ? snapshot.vehicles : cloneSnapshot(defaults.vehicles),
+    serviceSchedule: Array.isArray(snapshot.serviceSchedule)
+      ? snapshot.serviceSchedule
+      : cloneSnapshot(defaults.serviceSchedule),
+    documents: Array.isArray(snapshot.documents)
+      ? snapshot.documents
+      : cloneSnapshot(defaults.documents),
+    drivers: Array.isArray(snapshot.drivers) ? snapshot.drivers : cloneSnapshot(defaults.drivers),
+    driverTerminal: {
+      ...cloneSnapshot(defaults.driverTerminal),
+      ...(snapshot.driverTerminal ?? {}),
+      lastShift: {
+        ...cloneSnapshot(defaults.driverTerminal.lastShift),
+        ...(snapshot.driverTerminal?.lastShift ?? {}),
+      },
+      shortcuts: Array.isArray(snapshot.driverTerminal?.shortcuts)
+        ? snapshot.driverTerminal.shortcuts
+        : [...defaults.driverTerminal.shortcuts],
+      linkedVehicleIds: Array.isArray(snapshot.driverTerminal?.linkedVehicleIds)
+        ? snapshot.driverTerminal.linkedVehicleIds
+        : [...defaults.driverTerminal.linkedVehicleIds],
+      linkedVehicles: Array.isArray(snapshot.driverTerminal?.linkedVehicles)
+        ? snapshot.driverTerminal.linkedVehicles
+        : cloneSnapshot(defaults.driverTerminal.linkedVehicles),
+    },
+    defects: Array.isArray(snapshot.defects) ? snapshot.defects : cloneSnapshot(defaults.defects),
+    auditTrail: Array.isArray(snapshot.auditTrail)
+      ? snapshot.auditTrail
+      : cloneSnapshot(defaults.auditTrail),
   };
 };
 
-const adaptQueue = (rows) =>
-  rows.map((row) => ({
-    id: row.id,
-    driver: row.driver_name ?? row.driver_id ?? "Driver",
-    route: row.route ?? "Route pending",
-    vehicle: row.vehicle_registration ?? row.vehicle_id ?? "Vehicle",
-    submittedAt: row.submitted_at
-      ? new Date(row.submitted_at).toLocaleTimeString("en-ZA", {
-          hour: "2-digit",
-          minute: "2-digit",
-        })
-      : "--:--",
-    claimed: Number(row.claimed_amount ?? 0),
-    counted: Number(row.counted_amount ?? 0),
-    shortage: Number(row.shortage_amount ?? 0),
-    gapKm: Number(row.gap_km ?? 0),
-    status: row.status ?? "Submitted",
-  }));
+const createBlankWorkspaceSnapshot = ({
+  legalEntity,
+  district,
+  nextBankingWindow,
+  activeDriver,
+  assignedVehicle,
+  assignedRoute,
+}) => ({
+  ...createSnapshotShape({
+    legalEntity,
+    district,
+    nextBankingWindow,
+    activeDriver,
+    assignedVehicle,
+    assignedRoute,
+  }),
+});
 
-const adaptVehicles = (rows) =>
-  rows.map((row) => ({
-    id: row.id,
-    registration: row.registration,
-    model: row.model,
-    route: row.route ?? "Route pending",
-    status: row.status ?? "active",
-    utilisation: row.utilisation ?? 0,
-    currentOdometer: row.current_odometer ?? 0,
-    lastServiceOdo: row.last_service_odo ?? row.current_odometer ?? 0,
-    serviceIntervalKm: row.service_interval_km ?? mockSnapshot.profile.serviceIntervalKm,
-    permitExpiryDate: row.permit_expiry_date ?? null,
-    discExpiryDate: row.disc_expiry_date ?? null,
-    assignedDriverId: row.assigned_driver_id ?? null,
-    archivedAt: row.archived_at ?? null,
-  }));
+const createLiveSnapshot = () =>
+  createBlankWorkspaceSnapshot({
+    legalEntity: "Live operations workspace",
+    district: "Client setup pending",
+    nextBankingWindow: "Set banking window",
+    activeDriver: "No driver linked",
+    assignedVehicle: "No vehicle linked",
+    assignedRoute: "No route assigned",
+  });
 
-const adaptDocuments = (rows) =>
-  rows.map((row) => ({
-    subject: row.subject_name ?? row.subject_id ?? row.subject_type,
-    document: row.document_type,
-    daysLeft: Number(row.days_left ?? 0),
-    stage: row.stage ?? "Watch",
-    owner: row.owner_role ?? "Manager",
-    action: row.action_required ?? "Review renewal status.",
-  }));
+const createTrainingSnapshot = () =>
+  createBlankWorkspaceSnapshot({
+    legalEntity: "Training workspace",
+    district: "Demo reset slate",
+    nextBankingWindow: "Training session",
+    activeDriver: "No training driver linked",
+    assignedVehicle: "No training vehicle linked",
+    assignedRoute: "No training route assigned",
+  });
 
-const adaptDrivers = (rows) =>
-  rows.map((row) => ({
-    staffId: row.id ?? row.staff_id ?? row.employee_code ?? row.full_name,
-    name: row.full_name,
-    route: row.route ?? "Route pending",
-    shiftStatus: row.shift_status ?? "Available",
-    avgShiftRevenue: Number(row.avg_shift_revenue ?? 0),
-    cashAccuracy: Number(row.cash_accuracy ?? 0),
-    prdpExpiryDate: row.prdp_expiry_date ?? null,
-    role: row.role ?? "Driver",
-  }));
+const readStoredMode = () => {
+  if (typeof window === "undefined") {
+    return null;
+  }
 
-const adaptDefects = (rows) =>
-  rows.map((row) => ({
-    id: row.id,
-    vehicleId: row.vehicle_id ?? null,
-    category: row.category ?? row.component ?? "Other",
-    vehicle: row.vehicle_registration ?? row.vehicle_id ?? "Vehicle",
-    issue: row.issue,
-    detail: row.detail ?? row.notes ?? row.issue,
-    severity: row.severity,
-    reportedAt: row.reported_at ?? null,
-    reportedByStaffId: row.reported_by_staff_id ?? row.reported_by ?? null,
-    status: row.status ?? "open",
-    costEstimate: Number(row.cost_estimate ?? 0),
-    repairCost: row.repair_cost != null ? Number(row.repair_cost) : null,
-    resolvedAt: row.resolved_at ?? null,
-    resolvedExpenseId: row.resolved_expense_id ?? null,
-  }));
+  try {
+    const value = window.localStorage.getItem(DATA_MODE_STORAGE_KEY);
+    return value ? normalizeBackendMode(value) : null;
+  } catch {
+    return null;
+  }
+};
+
+const persistMode = (mode) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(DATA_MODE_STORAGE_KEY, mode);
+  } catch {
+    // Ignore storage failures and continue with in-memory state.
+  }
+};
+
+const readStoredSnapshot = (storageKey) => {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const value = window.localStorage.getItem(storageKey);
+    return value ? JSON.parse(value) : null;
+  } catch {
+    return null;
+  }
+};
+
+const persistStoredSnapshot = (storageKey, snapshot) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
+  } catch {
+    // Ignore storage failures and continue with in-memory state.
+  }
+};
+
+const clearStoredSnapshot = (storageKey) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.removeItem(storageKey);
+  } catch {
+    // Ignore storage failures.
+  }
+};
+
+const canUseRemoteLiveData = () => hasSupabaseConfig && Boolean(supabase);
+
+const getSupabaseSession = async () => {
+  if (!canUseRemoteLiveData()) {
+    return null;
+  }
+
+  try {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    return session ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const loadSupabaseLiveSnapshot = async () => {
+  const session = await getSupabaseSession();
+  const cachedSnapshot = readStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY);
+  const liveDefaults = createLiveSnapshot();
+
+  if (!session) {
+    return normalizeSnapshotShape(cachedSnapshot, liveDefaults);
+  }
+
+  const { data, error } = await supabase
+    .from("workspace_snapshots")
+    .select("snapshot")
+    .eq("workspace_key", LIVE_WORKSPACE_KEY)
+    .maybeSingle();
+
+  if (error) {
+    console.error("Unable to load the live workspace from Supabase.", error);
+    return normalizeSnapshotShape(cachedSnapshot, liveDefaults);
+  }
+
+  const nextSnapshot = normalizeSnapshotShape(
+    data?.snapshot ?? cachedSnapshot ?? liveDefaults,
+    liveDefaults,
+  );
+  persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, nextSnapshot);
+
+  if (!data?.snapshot) {
+    await persistSupabaseLiveSnapshot(nextSnapshot, session.user.id);
+  }
+
+  return cloneSnapshot(nextSnapshot);
+};
+
+const persistSupabaseLiveSnapshot = async (snapshot, actorId = null) => {
+  if (!canUseRemoteLiveData() || !snapshot) {
+    return;
+  }
+
+  const session = await getSupabaseSession();
+
+  if (!session) {
+    return;
+  }
+
+  const payload = cloneSnapshot(snapshot);
+  const { error } = await supabase.from("workspace_snapshots").upsert(
+    {
+      workspace_key: LIVE_WORKSPACE_KEY,
+      snapshot: payload,
+      updated_at: new Date().toISOString(),
+      updated_by: actorId ?? session.user.id,
+    },
+    {
+      onConflict: "workspace_key",
+    },
+  );
+
+  if (error) {
+    console.error("Unable to persist the live workspace to Supabase.", error);
+  }
+};
+
+let activeBackendMode = normalizeBackendMode(readStoredMode() ?? configuredBackendMode);
+persistMode(activeBackendMode);
 
 export const repository = {
-  backendMode: hasSupabaseConfig ? "supabase" : "mock",
-  async loadSnapshot() {
-    if (!hasSupabaseConfig || !supabase) {
-      return mockSnapshot;
+  get backendMode() {
+    return activeBackendMode;
+  },
+  get supportsLiveMode() {
+    return true;
+  },
+  get liveModeSourceLabel() {
+    return canUseRemoteLiveData() ? "Supabase" : "This browser";
+  },
+  resetModeSnapshot(mode = activeBackendMode) {
+    const normalizedMode = normalizeBackendMode(mode);
+    const nextSnapshot =
+      normalizedMode === "live" ? createLiveSnapshot() : createTrainingSnapshot();
+    const storageKey =
+      normalizedMode === "live" ? LIVE_SNAPSHOT_STORAGE_KEY : DEMO_SNAPSHOT_STORAGE_KEY;
+
+    clearStoredSnapshot(storageKey);
+    persistStoredSnapshot(storageKey, nextSnapshot);
+
+    if (normalizedMode === "live" && canUseRemoteLiveData()) {
+      persistSupabaseLiveSnapshot(nextSnapshot);
     }
 
-    try {
-      const [
-        profileResult,
-        queueResult,
-        vehicleResult,
-        documentResult,
-        driverResult,
-        defectResult,
-      ] = await Promise.all([
-        supabase.from("fleet_profiles").select("*").limit(1).maybeSingle(),
-        supabase
-          .from("shift_reconciliations")
-          .select("*")
-          .order("submitted_at", { ascending: false })
-          .limit(6),
-        supabase.from("vehicles").select("*").order("registration"),
-        supabase
-          .from("compliance_dashboard")
-          .select("*")
-          .order("days_left")
-          .limit(10),
-        supabase.from("personnel_profiles").select("*").order("full_name"),
-        supabase
-          .from("defect_reports")
-          .select("*")
-          .order("reported_at", { ascending: false })
-          .limit(8),
-      ]);
+    return cloneSnapshot(nextSnapshot);
+  },
+  setBackendMode(nextMode) {
+    activeBackendMode = normalizeBackendMode(nextMode);
+    persistMode(activeBackendMode);
+    return activeBackendMode;
+  },
+  resetLiveSnapshot() {
+    const nextSnapshot = createLiveSnapshot();
+    clearStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY);
+    persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, nextSnapshot);
 
-      if (
-        profileResult.error ||
-        queueResult.error ||
-        vehicleResult.error ||
-        documentResult.error ||
-        driverResult.error ||
-        defectResult.error
-      ) {
-        return mockSnapshot;
-      }
-
-      return {
-        ...mockSnapshot,
-        profile: adaptProfile(profileResult.data),
-        verificationQueue: normalizeRecords(
-          adaptQueue(queueResult.data ?? []),
-          mockSnapshot.verificationQueue,
-        ),
-        vehicles: normalizeRecords(
-          adaptVehicles(vehicleResult.data ?? []),
-          mockSnapshot.vehicles,
-        ),
-        documents: normalizeRecords(
-          adaptDocuments(documentResult.data ?? []),
-          mockSnapshot.documents,
-        ),
-        drivers: normalizeRecords(
-          adaptDrivers(driverResult.data ?? []),
-          mockSnapshot.drivers,
-        ),
-        defects: normalizeRecords(
-          adaptDefects(defectResult.data ?? []),
-          mockSnapshot.defects,
-        ),
-      };
-    } catch {
-      return mockSnapshot;
+    if (canUseRemoteLiveData()) {
+      persistSupabaseLiveSnapshot(nextSnapshot);
     }
+
+    return cloneSnapshot(nextSnapshot);
+  },
+  async persistSnapshot(snapshot, mode = activeBackendMode) {
+    if (!snapshot) {
+      return;
+    }
+
+    const normalizedMode = normalizeBackendMode(mode);
+    const storageKey =
+      normalizedMode === "live" ? LIVE_SNAPSHOT_STORAGE_KEY : DEMO_SNAPSHOT_STORAGE_KEY;
+    const defaults =
+      normalizedMode === "live" ? createLiveSnapshot() : createTrainingSnapshot();
+    const nextSnapshot = normalizeSnapshotShape(snapshot, defaults);
+
+    persistStoredSnapshot(storageKey, nextSnapshot);
+
+    if (normalizedMode === "live" && canUseRemoteLiveData()) {
+      await persistSupabaseLiveSnapshot(nextSnapshot);
+    }
+  },
+  async loadSnapshot(nextMode = activeBackendMode) {
+    activeBackendMode = normalizeBackendMode(nextMode);
+    persistMode(activeBackendMode);
+
+    if (activeBackendMode !== "live") {
+      const storedDemoSnapshot = readStoredSnapshot(DEMO_SNAPSHOT_STORAGE_KEY);
+      return normalizeSnapshotShape(storedDemoSnapshot ?? mockSnapshot, mockSnapshot);
+    }
+
+    if (canUseRemoteLiveData()) {
+      return loadSupabaseLiveSnapshot();
+    }
+
+    const storedLiveSnapshot = readStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY);
+    const liveSnapshot = normalizeSnapshotShape(storedLiveSnapshot, createLiveSnapshot());
+
+    persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, liveSnapshot);
+    return liveSnapshot;
   },
 };

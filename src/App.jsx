@@ -163,6 +163,13 @@ const toneLabel = {
 };
 
 const PRIVILEGED_ROLES = new Set(["Owner", "Admin", "Manager"]);
+const DRIVER_SHORTCUTS = [
+  "Log shift takings",
+  "Log daily expense",
+  "Capture special trip",
+  "Report a defect",
+  "View vehicle status",
+];
 
 const createModuleAccessState = () => ({
   requestStatus: "none",
@@ -396,6 +403,66 @@ const formatDateOnly = (value) => {
     : "No date";
 };
 
+const parseTimeInputValue = (value) => {
+  const match = /^(\d{2}):(\d{2})$/.exec(String(value ?? "").trim());
+
+  if (!match) {
+    return null;
+  }
+
+  const [, hour, minute] = match;
+  const numericHour = Number(hour);
+  const numericMinute = Number(minute);
+
+  if (
+    !Number.isInteger(numericHour) ||
+    !Number.isInteger(numericMinute) ||
+    numericHour < 0 ||
+    numericHour > 23 ||
+    numericMinute < 0 ||
+    numericMinute > 59
+  ) {
+    return null;
+  }
+
+  return {
+    hour: numericHour,
+    minute: numericMinute,
+  };
+};
+
+const toTimeInputValue = (value = new Date()) => {
+  const parsedTime = parseTimeInputValue(value);
+
+  if (parsedTime) {
+    return `${String(parsedTime.hour).padStart(2, "0")}:${String(parsedTime.minute).padStart(2, "0")}`;
+  }
+
+  const date = value ? new Date(value) : null;
+
+  if (!date || Number.isNaN(date.getTime())) {
+    return "";
+  }
+
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+};
+
+const formatTimeOnly = (value) => {
+  const parsedTime = parseTimeInputValue(value);
+
+  if (parsedTime) {
+    return `${String(parsedTime.hour).padStart(2, "0")}:${String(parsedTime.minute).padStart(2, "0")}`;
+  }
+
+  return formatTime(value);
+};
+
+const getTimeInputMinutes = (value) => {
+  const parsedTime = parseTimeInputValue(value);
+
+  return parsedTime ? parsedTime.hour * 60 + parsedTime.minute : null;
+};
+
 const createTimestampFromDateInput = (dateValue, fallback = new Date().toISOString()) => {
   const parsedDate = parseDateInputValue(dateValue);
 
@@ -412,6 +479,36 @@ const createTimestampFromDateInput = (dateValue, fallback = new Date().toISOStri
     hasFallbackTime ? fallbackDate.getHours() : 12,
     hasFallbackTime ? fallbackDate.getMinutes() : 0,
     hasFallbackTime ? fallbackDate.getSeconds() : 0,
+    0,
+  );
+
+  return composed.toISOString();
+};
+
+const createTimestampFromDateTimeInput = (
+  dateValue,
+  timeValue,
+  fallback = new Date().toISOString(),
+) => {
+  const parsedDate = parseDateInputValue(dateValue);
+  const parsedTime = parseTimeInputValue(timeValue);
+
+  if (!parsedDate) {
+    return fallback;
+  }
+
+  const fallbackDate = fallback ? new Date(fallback) : new Date();
+  const hasFallbackTime = !Number.isNaN(fallbackDate.getTime());
+  const hour = parsedTime?.hour ?? (hasFallbackTime ? fallbackDate.getHours() : 12);
+  const minute = parsedTime?.minute ?? (hasFallbackTime ? fallbackDate.getMinutes() : 0);
+  const second = hasFallbackTime ? fallbackDate.getSeconds() : 0;
+  const composed = new Date(
+    parsedDate.getFullYear(),
+    parsedDate.getMonth(),
+    parsedDate.getDate(),
+    hour,
+    minute,
+    second,
     0,
   );
 
@@ -475,6 +572,16 @@ const formatTripLogMeta = (record) => {
   return parts.filter(Boolean).join(" / ");
 };
 
+const formatDailyTripMeta = (record) =>
+  [
+    "Daily trip",
+    formatDateOnly(record?.tripDate ?? record?.timestamp),
+    record?.timeIn ? `In ${formatTimeOnly(record.timeIn)}` : null,
+    record?.timeOut ? `Out ${formatTimeOnly(record.timeOut)}` : null,
+  ]
+    .filter(Boolean)
+    .join(" / ");
+
 const formatTransactionStatus = (status) =>
   (
     {
@@ -488,6 +595,7 @@ const formatShortcutLabel = (shortcut) =>
   (
     {
       "Log shift takings": "Add daily earnings",
+      "Log daily expense": "Add daily expense",
       "Capture special trip": "Add extra trip",
       "Report a defect": "Report a problem",
       "View vehicle status": "View vehicle details",
@@ -1255,6 +1363,9 @@ const deriveSnapshot = (source) => {
       assignedVehicle:
         assignedVehicle?.registration ?? source.driverTerminal?.assignedVehicle ?? "Vehicle",
       assignedRoute: assignedVehicle?.route ?? source.driverTerminal?.assignedRoute ?? "Route",
+      shortcuts: Array.from(
+        new Set([...DRIVER_SHORTCUTS, ...(source.driverTerminal?.shortcuts ?? [])]),
+      ),
       linkedVehicleIds: linkedVehicleRecords.map((vehicle) => vehicle.id),
       linkedVehicles: linkedVehicleRecords.map((vehicle) => ({
         id: vehicle.id,
@@ -1342,6 +1453,9 @@ const getTransactionTone = (record) => {
 const createStandardDraft = (vehicleId, openingOdo) => ({
   id: null,
   vehicleId: vehicleId ?? "",
+  tripDate: toDateInputValue(),
+  timeIn: "",
+  timeOut: "",
   openingOdo: openingOdo != null ? String(openingOdo) : "",
   closingOdo: "",
   amountClaimed: "",
@@ -1350,6 +1464,22 @@ const createStandardDraft = (vehicleId, openingOdo) => ({
 const getStandardDraftValidationError = (draft) => {
   if (!draft.vehicleId) {
     return "Select a vehicle before saving the trip log.";
+  }
+
+  if (!draft.tripDate || !parseDateInputValue(draft.tripDate)) {
+    return "Select the trip date.";
+  }
+
+  if (!parseTimeInputValue(draft.timeIn)) {
+    return "Enter a valid time in.";
+  }
+
+  if (!parseTimeInputValue(draft.timeOut)) {
+    return "Enter a valid time out.";
+  }
+
+  if ((getTimeInputMinutes(draft.timeOut) ?? 0) <= (getTimeInputMinutes(draft.timeIn) ?? 0)) {
+    return "Time out must be later than time in.";
   }
 
   if (draft.openingOdo === "") {
@@ -1463,6 +1593,31 @@ const getSpecialDraftValidationError = (draft) => {
   return null;
 };
 
+const getExpenseDraftValidationError = (draft) => {
+  if (draft.expenseKind === "asset" && !draft.vehicleId) {
+    return "A vehicle must be linked before saving a daily expense.";
+  }
+
+  if (!draft.category?.trim()) {
+    return "Enter an expense category.";
+  }
+
+  if (!draft.description?.trim()) {
+    return "Enter an expense description.";
+  }
+
+  if (!draft.expenseDate || !parseDateInputValue(draft.expenseDate)) {
+    return "Select the expense date.";
+  }
+
+  const amount = Number(draft.amount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return "Enter a valid expense amount.";
+  }
+
+  return null;
+};
+
 const createExpenseDraft = (expenseKind, vehicleId) => ({
   id: null,
   expenseKind,
@@ -1496,6 +1651,11 @@ const createDriverDraft = (driver) => ({
   route: driver?.route ?? "",
   shiftStatus: driver?.shiftStatus ?? "Ready for dispatch",
   prdpExpiryDate: driver?.prdpExpiryDate ?? "",
+});
+
+const createDriverAllocationDraft = (staffId = "", vehicleId = "") => ({
+  staffId,
+  vehicleId,
 });
 
 const createDefectDraft = (vehicleId) => ({
@@ -1689,7 +1849,7 @@ function App() {
         },
       };
     });
-  }, [authIdentity]);
+  }, [authIdentity, snapshot]);
 
   useEffect(() => {
     if (!authIdentity?.role) {
@@ -2100,6 +2260,9 @@ function App() {
         (record) => record.id === draft.id,
       );
       const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
+      const tripDate = String(draft.tripDate ?? "").trim();
+      const timeIn = String(draft.timeIn ?? "").trim();
+      const timeOut = String(draft.timeOut ?? "").trim();
       const openingOdo = Number(draft.openingOdo);
       const closingOdo = Number(draft.closingOdo);
       const amountClaimed = Number(draft.amountClaimed);
@@ -2117,6 +2280,18 @@ function App() {
       }
       if (!vehicle) {
         result = { ok: false, error: "Select a valid vehicle before submitting." };
+        return current;
+      }
+      if (!tripDate || !parseDateInputValue(tripDate)) {
+        result = { ok: false, error: "Select the trip date." };
+        return current;
+      }
+      if (!parseTimeInputValue(timeIn) || !parseTimeInputValue(timeOut)) {
+        result = { ok: false, error: "Enter a valid time in and time out." };
+        return current;
+      }
+      if ((getTimeInputMinutes(timeOut) ?? 0) <= (getTimeInputMinutes(timeIn) ?? 0)) {
+        result = { ok: false, error: "Time out must be later than time in." };
         return current;
       }
       if (!Number.isFinite(openingOdo) || !Number.isFinite(closingOdo)) {
@@ -2146,6 +2321,9 @@ function App() {
         vehicleId: draft.vehicleId,
         vehicle: vehicle.registration,
         route: vehicle.route,
+        tripDate,
+        timeIn,
+        timeOut,
         openingOdo,
         closingOdo,
         amountClaimed,
@@ -2154,7 +2332,7 @@ function App() {
         discrepancy: openingOdo !== expectedOpening,
         isSpecial: false,
         status: "pending",
-        timestamp: existing?.timestamp ?? existing?.createdAt ?? now,
+        timestamp: createTimestampFromDateTimeInput(tripDate, timeIn, existing?.timestamp ?? now),
         createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
         createdBy: existing?.createdBy ?? actorId,
         createdByRole: existing?.createdByRole ?? activeRole,
@@ -2181,7 +2359,9 @@ function App() {
           entityType: "income",
           entityId: nextRecord.id,
           title: `${isUpdate ? "Trip income updated" : "Trip income added"} / ${vehicle.registration}`,
-          detail: `${vehicle.route} / ${formatMoney(amountClaimed)}`,
+          detail: `${vehicle.route} / ${formatDateOnly(tripDate)} / In ${formatTimeOnly(timeIn)} / Out ${formatTimeOnly(
+            timeOut,
+          )} / ${formatMoney(amountClaimed)}`,
         }),
       ]);
 
@@ -2689,8 +2869,16 @@ function App() {
       }
 
       const existing = current.vehicles.find((vehicle) => vehicle.id === draft.id);
+      const assignedDriver =
+        draft.assignedDriverId != null && draft.assignedDriverId !== ""
+          ? current.drivers.find((driver) => driver.staffId === draft.assignedDriverId)
+          : null;
       if (activeRole === "Admin" && !hasModuleUpdateAccess(current, "fleet")) {
         result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
+        return current;
+      }
+      if (draft.assignedDriverId && !assignedDriver) {
+        result = { ok: false, error: "Select a valid driver for this vehicle." };
         return current;
       }
       const now = new Date().toISOString();
@@ -2719,11 +2907,22 @@ function App() {
         archivedBy: existing?.archivedBy ?? null,
         archivedByRole: existing?.archivedByRole ?? null,
       };
-      const nextVehicles = draft.id
-        ? current.vehicles.map((vehicle) =>
+      const currentVehicles = current.vehicles ?? [];
+      const nextVehiclesBase = draft.id
+        ? currentVehicles.map((vehicle) =>
             vehicle.id === draft.id ? { ...vehicle, ...nextVehicle } : vehicle,
           )
-        : [nextVehicle, ...(current.vehicles ?? [])];
+        : [nextVehicle, ...currentVehicles];
+      const nextVehicles = nextVehicle.assignedDriverId
+        ? nextVehiclesBase.map((vehicle) =>
+            vehicle.id !== nextVehicle.id && vehicle.assignedDriverId === nextVehicle.assignedDriverId
+              ? {
+                  ...vehicle,
+                  assignedDriverId: null,
+                }
+              : vehicle,
+          )
+        : nextVehiclesBase;
       const nextAuditTrail = appendAuditTrail(current.auditTrail, [
         buildCurrentAuditEvent(current, {
           timestamp: now,
@@ -2740,6 +2939,122 @@ function App() {
         ok: true,
         message: draft.id ? "Vehicle profile updated." : "Vehicle profile created.",
         vehicleId: nextVehicle.id,
+      };
+
+      return {
+        ...current,
+        vehicles: nextVehicles,
+        auditTrail: nextAuditTrail,
+      };
+    });
+
+    return result;
+  };
+
+  const allocateDriverShift = (draft) => {
+    let result = { ok: false, error: "Unable to save the driver allocation." };
+
+    setSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+      if (!PRIVILEGED_ROLES.has(activeRole)) {
+        result = { ok: false, error: "Only management can allocate drivers to vehicles." };
+        return current;
+      }
+      if (activeRole === "Admin" && !hasModuleUpdateAccess(current, "drivers")) {
+        result = { ok: false, error: getModuleAccessErrorMessage("drivers") };
+        return current;
+      }
+
+      const derived = deriveSnapshot(current);
+      const driver = derived.drivers.find((item) => item.staffId === draft.staffId);
+
+      if (!driver) {
+        result = { ok: false, error: "Select a valid driver before saving the allocation." };
+        return current;
+      }
+
+      const targetVehicle = draft.vehicleId
+        ? derived.vehicles.find((vehicle) => vehicle.id === draft.vehicleId)
+        : null;
+
+      if (draft.vehicleId && !targetVehicle) {
+        result = { ok: false, error: "Select a valid vehicle for the shift allocation." };
+        return current;
+      }
+      if (targetVehicle?.status === "archived") {
+        result = { ok: false, error: "Archived vehicles cannot receive a driver allocation." };
+        return current;
+      }
+
+      const currentVehicle =
+        derived.vehicles.find((vehicle) => vehicle.assignedDriverId === driver.staffId) ?? null;
+      const displacedDriver =
+        targetVehicle?.assignedDriverId && targetVehicle.assignedDriverId !== driver.staffId
+          ? derived.drivers.find((item) => item.staffId === targetVehicle.assignedDriverId) ?? null
+          : null;
+
+      if ((currentVehicle?.id ?? "") === (targetVehicle?.id ?? "")) {
+        result = {
+          ok: true,
+          message: targetVehicle
+            ? `${driver.name} is already assigned to ${targetVehicle.registration}.`
+            : `${driver.name} is already unassigned.`,
+          staffId: driver.staffId,
+          vehicleId: targetVehicle?.id ?? "",
+        };
+        return current;
+      }
+
+      const now = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
+      const nextVehicles = (current.vehicles ?? []).map((vehicle) => {
+        if (vehicle.id === targetVehicle?.id) {
+          return {
+            ...vehicle,
+            assignedDriverId: driver.staffId,
+          };
+        }
+
+        if (vehicle.assignedDriverId === driver.staffId) {
+          return {
+            ...vehicle,
+            assignedDriverId: null,
+          };
+        }
+
+        return vehicle;
+      });
+      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp: now,
+          scope: "drivers",
+          action: "update",
+          entityType: "allocation",
+          entityId: `${driver.staffId}:${targetVehicle?.id ?? "unassigned"}`,
+          title: `Shift allocation updated / ${driver.name}`,
+          detail: [
+            targetVehicle
+              ? `${targetVehicle.registration} / ${targetVehicle.route}`
+              : "Removed from vehicle",
+            currentVehicle && currentVehicle.id !== targetVehicle?.id
+              ? `Previous ${currentVehicle.registration}`
+              : null,
+            displacedDriver ? `${displacedDriver.name} removed from vehicle` : null,
+          ]
+            .filter(Boolean)
+            .join(" / "),
+        }),
+      ]);
+
+      result = {
+        ok: true,
+        message: targetVehicle
+          ? `${driver.name} assigned to ${targetVehicle.registration}.`
+          : `${driver.name} removed from the shift allocation.`,
+        staffId: driver.staffId,
+        vehicleId: targetVehicle?.id ?? "",
       };
 
       return {
@@ -3095,6 +3410,11 @@ function App() {
       setActiveView("drivers");
       return;
     }
+    if (shortcut === "Log daily expense") {
+      setDriverShortcutIntent(token);
+      setActiveView("drivers");
+      return;
+    }
     if (shortcut === "Capture special trip") {
       setDriverShortcutIntent(token);
       setActiveView("drivers");
@@ -3343,7 +3663,9 @@ function App() {
               shortcutIntent={driverShortcutIntent}
               onSaveStandardIncome={saveStandardIncome}
               onSaveSpecialIncome={saveSpecialIncome}
+              onSaveExpense={saveExpense}
               onSaveDriver={saveDriver}
+              onAllocateDriverShift={allocateDriverShift}
               onSelectDriverVehicle={selectDriverVehicle}
             />
           )}
@@ -4035,6 +4357,9 @@ function FinancePanel({
       setStandardDraft({
         id: record.id,
         vehicleId: record.vehicleId,
+        tripDate: record.tripDate ?? toDateInputValue(record.timestamp),
+        timeIn: record.timeIn ?? toTimeInputValue(record.timestamp),
+        timeOut: record.timeOut ?? "",
         openingOdo: String(record.openingOdo ?? ""),
         closingOdo: String(record.closingOdo ?? ""),
         amountClaimed: String(record.amountClaimed ?? record.amount ?? ""),
@@ -4276,6 +4601,48 @@ function FinancePanel({
                         </option>
                       ))}
                     </select>
+                  </label>
+
+                  <label className="finance-field">
+                    <span>Date</span>
+                    <input
+                      type="date"
+                      value={standardDraft.tripDate}
+                      onChange={(event) =>
+                        setStandardDraft((current) => ({
+                          ...current,
+                          tripDate: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="finance-field">
+                    <span>Time in</span>
+                    <input
+                      type="time"
+                      value={standardDraft.timeIn}
+                      onChange={(event) =>
+                        setStandardDraft((current) => ({
+                          ...current,
+                          timeIn: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+
+                  <label className="finance-field">
+                    <span>Time out</span>
+                    <input
+                      type="time"
+                      value={standardDraft.timeOut}
+                      onChange={(event) =>
+                        setStandardDraft((current) => ({
+                          ...current,
+                          timeOut: event.target.value,
+                        }))
+                      }
+                    />
                   </label>
 
                   <label className="finance-field">
@@ -4598,7 +4965,7 @@ function FinancePanel({
                       <span>
                         {record.incomeKind === "special"
                           ? formatTripLogMeta(record)
-                          : `Daily trip / ${formatStamp(record.timestamp)}`}
+                          : formatDailyTripMeta(record)}
                       </span>
                     </div>
                     <div className="ledger-meta">
@@ -5114,7 +5481,10 @@ function FinancePanel({
                             : `${record.vehicle} / ${record.route}`}
                         </h3>
                         <p>
-                          {queueEntry.driver} / {formatStamp(record.timestamp)}
+                          {queueEntry.driver} /{" "}
+                          {record.incomeKind === "special"
+                            ? formatTripLogMeta(record)
+                            : formatDailyTripMeta(record)}
                         </p>
                       </div>
                       <span className="status-chip" data-tone={getQueueTone(queueEntry)}>
@@ -5380,7 +5750,13 @@ function FleetPanel({
       .forEach((record) => {
         const driverName =
           snapshot.drivers.find((driver) => driver.staffId === record.createdBy)?.name ?? null;
-        pushEntry(driverName, `Income entry / ${formatStamp(record.timestamp)}`, "info");
+        pushEntry(
+          driverName,
+          `Income entry / ${
+            record.isSpecial ? formatTripLogMeta(record) : formatDailyTripMeta(record)
+          }`,
+          "info",
+        );
       });
 
     vehicleDefects.forEach((defect) => {
@@ -5755,7 +6131,7 @@ function FleetPanel({
                                 ? formatExpenseMeta(record)
                                 : record.isSpecial
                                   ? formatTripLogMeta(record)
-                                  : formatStamp(record.timestamp)}
+                                  : formatDailyTripMeta(record)}
                             </span>
                           </div>
                           <div className="ledger-meta">
@@ -6008,7 +6384,7 @@ function FleetPanel({
                         <span>
                           {record.isSpecial
                             ? formatTripLogMeta(record)
-                            : formatStamp(record.timestamp)}
+                            : formatDailyTripMeta(record)}
                         </span>
                       </div>
                       <div className="ledger-meta">
@@ -6375,7 +6751,9 @@ function DriversPanel({
   shortcutIntent,
   onSaveStandardIncome,
   onSaveSpecialIncome,
+  onSaveExpense,
   onSaveDriver,
+  onAllocateDriverShift,
   onSelectDriverVehicle,
 }) {
   const isDriver = activeRole === "Driver";
@@ -6384,6 +6762,23 @@ function DriversPanel({
   const canEditFinanceRecords = canEditModuleUpdates(activeRole, "finance", permissionControls);
   const canUseFinanceCapture = activeRole === "Admin" ? canEditFinanceRecords : true;
   const linkedVehicles = getDriverLinkedVehicles(snapshot);
+  const allocatableDrivers = useMemo(
+    () => snapshot.drivers.filter((driver) => driver.role === "Driver"),
+    [snapshot.drivers],
+  );
+  const allocatableVehicles = useMemo(
+    () => snapshot.vehicles.filter((vehicle) => vehicle.status !== "archived"),
+    [snapshot.vehicles],
+  );
+  const driverVehicleMap = useMemo(
+    () =>
+      new Map(
+        snapshot.vehicles
+          .filter((vehicle) => vehicle.assignedDriverId)
+          .map((vehicle) => [vehicle.assignedDriverId, vehicle]),
+      ),
+    [snapshot.vehicles],
+  );
   const linkedVehicleIds = new Set(linkedVehicles.map((vehicle) => vehicle.id));
   const linkedVehicleRegistrations = new Set(
     linkedVehicles.map((vehicle) => vehicle.registration),
@@ -6394,26 +6789,45 @@ function DriversPanel({
           (driver) => driver.name === snapshot.driverTerminal.activeDriver,
         )
       : snapshot.drivers;
-  const assignedVehicleId =
-    snapshot.driverTerminal.assignedVehicleId ?? linkedVehicles[0]?.id ?? snapshot.vehicles[0]?.id ?? "";
+  const assignedVehicleId = isDriver
+    ? snapshot.driverTerminal.assignedVehicleId ?? linkedVehicles[0]?.id ?? ""
+    : snapshot.driverTerminal.assignedVehicleId ?? snapshot.vehicles[0]?.id ?? "";
   const [driverAction, setDriverAction] = useState(null);
   const [feedback, setFeedback] = useState(null);
   const [showDriverForm, setShowDriverForm] = useState(false);
   const [driverDraft, setDriverDraft] = useState(() => createDriverDraft());
+  const buildAllocationDraft = (staffId = allocatableDrivers[0]?.staffId ?? "") =>
+    createDriverAllocationDraft(staffId, driverVehicleMap.get(staffId)?.id ?? "");
+  const [allocationDraft, setAllocationDraft] = useState(() => buildAllocationDraft());
   const [shiftDraft, setShiftDraft] = useState(() =>
     createStandardDraft(
       assignedVehicleId,
       snapshot.finance.vehicleOpenings?.[assignedVehicleId],
     ),
   );
+  const [expenseDraft, setExpenseDraft] = useState(() =>
+    createExpenseDraft("asset", assignedVehicleId),
+  );
   const [specialDraft, setSpecialDraft] = useState(() => createSpecialDraft(assignedVehicleId));
   const driverFormRef = useRef(null);
-  const assignedVehicle =
-    (isDriver
-      ? linkedVehicles.find((vehicle) => vehicle.id === assignedVehicleId) ?? linkedVehicles[0]
-      : null) ??
-    snapshot.vehicles.find((vehicle) => vehicle.id === assignedVehicleId) ??
-    snapshot.vehicles[0];
+  const allocationFormRef = useRef(null);
+  const assignedVehicle = isDriver
+    ? linkedVehicles.find((vehicle) => vehicle.id === assignedVehicleId) ?? linkedVehicles[0] ?? null
+    : snapshot.vehicles.find((vehicle) => vehicle.id === assignedVehicleId) ?? snapshot.vehicles[0];
+  const selectedAllocationDriver =
+    allocatableDrivers.find((driver) => driver.staffId === allocationDraft.staffId) ?? null;
+  const currentAllocationVehicle = selectedAllocationDriver
+    ? driverVehicleMap.get(selectedAllocationDriver.staffId) ?? null
+    : null;
+  const selectedAllocationVehicle =
+    allocatableVehicles.find((vehicle) => vehicle.id === allocationDraft.vehicleId) ?? null;
+  const displacedDriver =
+    selectedAllocationVehicle?.assignedDriverId &&
+    selectedAllocationVehicle.assignedDriverId !== selectedAllocationDriver?.staffId
+      ? allocatableDrivers.find(
+          (driver) => driver.staffId === selectedAllocationVehicle.assignedDriverId,
+        ) ?? null
+      : null;
   const visibleDefects = isDriver
     ? snapshot.defects.filter(
         (defect) =>
@@ -6426,6 +6840,11 @@ function DriversPanel({
   });
   const specialValidationError = getSpecialDraftValidationError({
     ...specialDraft,
+    vehicleId: assignedVehicleId,
+  });
+  const expenseValidationError = getExpenseDraftValidationError({
+    ...expenseDraft,
+    expenseKind: "asset",
     vehicleId: assignedVehicleId,
   });
 
@@ -6446,7 +6865,35 @@ function DriversPanel({
       ...current,
       vehicleId: assignedVehicleId,
     }));
+    setExpenseDraft((current) => ({
+      ...current,
+      vehicleId: assignedVehicleId,
+    }));
   }, [assignedVehicleId, snapshot.finance.vehicleOpenings]);
+
+  useEffect(() => {
+    if (!canManageDrivers) {
+      return;
+    }
+
+    if (!allocatableDrivers.some((driver) => driver.staffId === allocationDraft.staffId)) {
+      setAllocationDraft(buildAllocationDraft());
+      return;
+    }
+
+    if (
+      allocationDraft.vehicleId &&
+      !allocatableVehicles.some((vehicle) => vehicle.id === allocationDraft.vehicleId)
+    ) {
+      setAllocationDraft(buildAllocationDraft(allocationDraft.staffId));
+    }
+  }, [
+    allocationDraft.staffId,
+    allocationDraft.vehicleId,
+    allocatableDrivers,
+    allocatableVehicles,
+    canManageDrivers,
+  ]);
 
   useEffect(() => {
     if (!shortcutIntent) {
@@ -6456,6 +6903,9 @@ function DriversPanel({
     if (shortcutIntent.type === "Log shift takings") {
       setDriverAction("shift");
     }
+    if (shortcutIntent.type === "Log daily expense") {
+      setDriverAction("expense");
+    }
     if (shortcutIntent.type === "Capture special trip") {
       setDriverAction("special");
     }
@@ -6464,6 +6914,10 @@ function DriversPanel({
   const handleShortcut = (shortcut) => {
     if (shortcut === "Log shift takings") {
       setDriverAction("shift");
+      return;
+    }
+    if (shortcut === "Log daily expense") {
+      setDriverAction("expense");
       return;
     }
     if (shortcut === "Capture special trip") {
@@ -6511,6 +6965,25 @@ function DriversPanel({
     }
   };
 
+  const handleExpenseSubmit = (event) => {
+    event.preventDefault();
+    const response = onSaveExpense({
+      ...expenseDraft,
+      expenseKind: "asset",
+      vehicleId: assignedVehicleId,
+    });
+
+    setFeedback({
+      tone: response.ok ? "success" : "danger",
+      message: response.message ?? response.error,
+    });
+
+    if (response.ok) {
+      setExpenseDraft(createExpenseDraft("asset", assignedVehicleId));
+      setDriverAction(null);
+    }
+  };
+
   const handleAddDriver = () => {
     setDriverDraft(createDriverDraft());
     setShowDriverForm(true);
@@ -6532,6 +7005,25 @@ function DriversPanel({
     }
   };
 
+  const handleOpenAllocation = (driver = null) => {
+    setAllocationDraft(buildAllocationDraft(driver?.staffId ?? allocatableDrivers[0]?.staffId ?? ""));
+    allocationFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const handleAllocationSubmit = (event) => {
+    event.preventDefault();
+    const response = onAllocateDriverShift(allocationDraft);
+
+    setFeedback({
+      tone: response.ok ? "success" : "danger",
+      message: response.message ?? response.error,
+    });
+
+    if (response.ok) {
+      setAllocationDraft(buildAllocationDraft(response.staffId));
+    }
+  };
+
   return (
     <div className="content-stack">
       {feedback && (
@@ -6550,7 +7042,7 @@ function DriversPanel({
           </div>
           <p className="panel-note">
             The owner must approve the request first, and then the manager must grant admin access
-            before you can save daily takings or change the driver roster here.
+            before you can save daily takings, daily expenses, or change the driver roster here.
           </p>
         </article>
       )}
@@ -6630,7 +7122,13 @@ function DriversPanel({
                 <div className="overview-board-head">
                   <p className="eyebrow">Quick entry</p>
                   <h3>
-                    {driverAction === "shift" ? "Add daily earnings" : "Add extra trip"}
+                    {(
+                      {
+                        shift: "Add daily earnings",
+                        expense: "Add daily expense",
+                        special: "Add extra trip",
+                      }[driverAction]
+                    ) ?? "Quick entry"}
                   </h3>
                 </div>
 
@@ -6640,6 +7138,45 @@ function DriversPanel({
                       <label className="finance-field">
                         <span>Vehicle</span>
                         <input type="text" value={assignedVehicle?.registration ?? ""} disabled />
+                      </label>
+                      <label className="finance-field">
+                        <span>Date</span>
+                        <input
+                          type="date"
+                          value={shiftDraft.tripDate}
+                          onChange={(event) =>
+                            setShiftDraft((current) => ({
+                              ...current,
+                              tripDate: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>Time in</span>
+                        <input
+                          type="time"
+                          value={shiftDraft.timeIn}
+                          onChange={(event) =>
+                            setShiftDraft((current) => ({
+                              ...current,
+                              timeIn: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>Time out</span>
+                        <input
+                          type="time"
+                          value={shiftDraft.timeOut}
+                          onChange={(event) =>
+                            setShiftDraft((current) => ({
+                              ...current,
+                              timeOut: event.target.value,
+                            }))
+                          }
+                        />
                       </label>
                       <label className="finance-field">
                         <span>Opening odo</span>
@@ -6903,6 +7440,133 @@ function DriversPanel({
                     </p>
                   </form>
                 )}
+
+                {driverAction === "expense" && (
+                  <form className="finance-form" onSubmit={handleExpenseSubmit}>
+                    <div className="finance-form-grid">
+                      <label className="finance-field">
+                        <span>Vehicle</span>
+                        <input type="text" value={assignedVehicle?.registration ?? ""} disabled />
+                      </label>
+                      <label className="finance-field">
+                        <span>Category</span>
+                        <input
+                          type="text"
+                          value={expenseDraft.category}
+                          onChange={(event) =>
+                            setExpenseDraft((current) => ({
+                              ...current,
+                              category: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field finance-field-wide">
+                        <span>Description</span>
+                        <input
+                          type="text"
+                          placeholder="Fuel top-up, wash bay, rank fee"
+                          value={expenseDraft.description}
+                          onChange={(event) =>
+                            setExpenseDraft((current) => ({
+                              ...current,
+                              description: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>Expense date</span>
+                        <input
+                          type="date"
+                          value={expenseDraft.expenseDate}
+                          onChange={(event) =>
+                            setExpenseDraft((current) => ({
+                              ...current,
+                              expenseDate: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>Receipt no. / reference</span>
+                        <input
+                          type="text"
+                          placeholder="REC-2048"
+                          value={expenseDraft.reference}
+                          onChange={(event) =>
+                            setExpenseDraft((current) => ({
+                              ...current,
+                              reference: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>Amount</span>
+                        <input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={expenseDraft.amount}
+                          onChange={(event) =>
+                            setExpenseDraft((current) => ({
+                              ...current,
+                              amount: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field finance-field-check">
+                        <span>Paid from safe</span>
+                        <input
+                          type="checkbox"
+                          checked={expenseDraft.cashExpense}
+                          onChange={(event) =>
+                            setExpenseDraft((current) => ({
+                              ...current,
+                              cashExpense: event.target.checked,
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                    <div className="finance-form-meta">
+                      <span className="status-chip" data-tone="warning">
+                        Logged against {assignedVehicle?.registration ?? "the assigned vehicle"}
+                      </span>
+                      <span
+                        className="status-chip"
+                        data-tone={PRIVILEGED_ROLES.has(activeRole) ? "success" : "warning"}
+                      >
+                        Status starts as {PRIVILEGED_ROLES.has(activeRole) ? "checked" : "waiting"}
+                      </span>
+                    </div>
+                    <div className="finance-form-actions">
+                      <button
+                        type="submit"
+                        className="action-button primary"
+                        disabled={!canUseFinanceCapture || Boolean(expenseValidationError)}
+                      >
+                        Save expense
+                      </button>
+                      <button
+                        type="button"
+                        className="action-button"
+                        onClick={() => setDriverAction(null)}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    <p
+                      className="finance-form-note"
+                      data-tone={expenseValidationError ? "danger" : "info"}
+                    >
+                      {expenseValidationError ??
+                        "Daily expense details are complete and ready to save."}
+                    </p>
+                  </form>
+                )}
               </div>
             )}
           </div>
@@ -7013,10 +7677,94 @@ function DriversPanel({
                       </button>
                     </div>
                     <p className="finance-form-note" data-tone="info">
-                      Drivers can then be linked to one or more vehicles from the Fleet module.
+                      Add the driver here, then use shift allocation below to place the driver on
+                      a vehicle.
                     </p>
                   </form>
                 )}
+              </article>
+            )}
+            {canManageDrivers && (
+              <article ref={allocationFormRef} className="overview-board">
+                <div className="overview-board-head">
+                  <p className="eyebrow">Shift allocation</p>
+                  <h3>Assign driver to vehicle</h3>
+                </div>
+                <form className="finance-form" onSubmit={handleAllocationSubmit}>
+                  <div className="finance-form-grid">
+                    <label className="finance-field">
+                      <span>Driver</span>
+                      <select
+                        value={allocationDraft.staffId}
+                        onChange={(event) =>
+                          setAllocationDraft(buildAllocationDraft(event.target.value))
+                        }
+                      >
+                        {allocatableDrivers.map((driver) => (
+                          <option key={driver.staffId} value={driver.staffId}>
+                            {driver.name} / {driver.staffId}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="finance-field">
+                      <span>Vehicle</span>
+                      <select
+                        value={allocationDraft.vehicleId}
+                        onChange={(event) =>
+                          setAllocationDraft((current) => ({
+                            ...current,
+                            vehicleId: event.target.value,
+                          }))
+                        }
+                      >
+                        <option value="">Unassigned</option>
+                        {allocatableVehicles.map((vehicle) => (
+                          <option key={vehicle.id} value={vehicle.id}>
+                            {vehicle.registration} / {vehicle.route}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="finance-form-meta">
+                    <span className="status-chip" data-tone="info">
+                      Current vehicle {currentAllocationVehicle?.registration ?? "Unassigned"}
+                    </span>
+                    <span
+                      className="status-chip"
+                      data-tone={selectedAllocationVehicle ? "success" : "warning"}
+                    >
+                      Next vehicle {selectedAllocationVehicle?.registration ?? "Unassigned"}
+                    </span>
+                    {displacedDriver && (
+                      <span className="status-chip" data-tone="warning">
+                        {displacedDriver.name} will be removed from{" "}
+                        {selectedAllocationVehicle?.registration}
+                      </span>
+                    )}
+                  </div>
+                  <div className="finance-form-actions">
+                    <button
+                      type="submit"
+                      className="action-button primary"
+                      disabled={!selectedAllocationDriver || (activeRole === "Admin" && !canEditDriverRecords)}
+                    >
+                      Save allocation
+                    </button>
+                    <button
+                      type="button"
+                      className="action-button"
+                      onClick={() => setAllocationDraft(buildAllocationDraft())}
+                    >
+                      Reset
+                    </button>
+                  </div>
+                  <p className="finance-form-note" data-tone="info">
+                    Choose another vehicle to move a driver for the shift. If the vehicle already
+                    has a driver, that driver will be removed from it.
+                  </p>
+                </form>
               </article>
             )}
             <div className="list-stack">
@@ -7031,6 +7779,12 @@ function DriversPanel({
                   <div className="person-metrics">
                     <span
                       className="status-chip"
+                      data-tone={driverVehicleMap.has(driver.staffId) ? "success" : "info"}
+                    >
+                      {driverVehicleMap.get(driver.staffId)?.registration ?? "Unassigned"}
+                    </span>
+                    <span
+                      className="status-chip"
                       data-tone={driver.cashAccuracy >= 98 ? "success" : "warning"}
                     >
                       {driver.cashAccuracy}% accuracy
@@ -7042,6 +7796,18 @@ function DriversPanel({
                       {driver.prdpDays ? `${driver.prdpDays} days PrDP` : driver.shiftStatus}
                     </span>
                   </div>
+                  {canManageDrivers && driver.role === "Driver" && (
+                    <div className="finance-form-actions">
+                      <button
+                        type="button"
+                        className="record-button"
+                        disabled={activeRole === "Admin" && !canEditDriverRecords}
+                        onClick={() => handleOpenAllocation(driver)}
+                      >
+                        {driverVehicleMap.has(driver.staffId) ? "Change vehicle" : "Assign vehicle"}
+                      </button>
+                    </div>
+                  )}
                 </article>
               ))}
             </div>

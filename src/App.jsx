@@ -530,6 +530,134 @@ const formatExpenseMeta = (record) => {
   return parts.filter(Boolean).join(" / ");
 };
 
+const getRouteStops = (routeValue) => {
+  const route = String(routeValue ?? "").trim();
+
+  if (!route) {
+    return {
+      fromLocation: "",
+      toLocation: "",
+    };
+  }
+
+  const toMatch = /^(.+?)\s+to\s+(.+)$/i.exec(route);
+  if (toMatch) {
+    return {
+      fromLocation: toMatch[1].trim(),
+      toLocation: toMatch[2].trim(),
+    };
+  }
+
+  const slashParts = route.split("/").map((part) => part.trim()).filter(Boolean);
+  if (slashParts.length === 2) {
+    return {
+      fromLocation: slashParts[0],
+      toLocation: slashParts[1],
+    };
+  }
+
+  return {
+    fromLocation: route,
+    toLocation: "",
+  };
+};
+
+const createDailyTripLogEntry = (routeValue, entry = {}) => {
+  const routeStops = getRouteStops(routeValue);
+
+  return {
+    id: entry.id ?? createRecordId("trip-leg"),
+    fromLocation: entry.fromLocation ?? routeStops.fromLocation,
+    toLocation: entry.toLocation ?? routeStops.toLocation,
+    passengerCount:
+      entry.passengerCount != null && entry.passengerCount !== ""
+        ? String(entry.passengerCount)
+        : "",
+    amountCollected:
+      entry.amountCollected != null && entry.amountCollected !== ""
+        ? String(entry.amountCollected)
+        : "",
+  };
+};
+
+const createDailyTripLogbook = (routeValue, entries = []) =>
+  Array.isArray(entries) && entries.length > 0
+    ? entries.map((entry) => createDailyTripLogEntry(routeValue, entry))
+    : [createDailyTripLogEntry(routeValue)];
+
+const getDailyTripLogbookTotals = (entries = []) => {
+  const safeEntries = Array.isArray(entries) ? entries : [];
+
+  return safeEntries.reduce(
+    (totals, entry) => {
+      const passengerCount = Number(entry?.passengerCount ?? 0);
+      const amountCollected = Number(entry?.amountCollected ?? 0);
+
+      return {
+        tripCount: totals.tripCount + 1,
+        totalPassengers:
+          totals.totalPassengers +
+          (Number.isFinite(passengerCount) && passengerCount > 0 ? passengerCount : 0),
+        totalAmount:
+          totals.totalAmount +
+          (Number.isFinite(amountCollected) && amountCollected > 0 ? amountCollected : 0),
+      };
+    },
+    {
+      tripCount: 0,
+      totalPassengers: 0,
+      totalAmount: 0,
+    },
+  );
+};
+
+const getDailyTripTripCount = (record) => {
+  if (Number.isFinite(Number(record?.tripCount))) {
+    return Number(record.tripCount);
+  }
+
+  return Array.isArray(record?.tripLogbook) ? record.tripLogbook.length : 0;
+};
+
+const getDailyTripPassengerTotal = (record) => {
+  if (Number.isFinite(Number(record?.totalPassengers))) {
+    return Number(record.totalPassengers);
+  }
+
+  return getDailyTripLogbookTotals(record?.tripLogbook).totalPassengers;
+};
+
+const syncStandardDraftTripLogbook = (draft) => {
+  const nextTripLogbook = Array.isArray(draft?.tripLogbook) ? draft.tripLogbook : [];
+  const totals = getDailyTripLogbookTotals(nextTripLogbook);
+
+  return {
+    ...draft,
+    tripLogbook: nextTripLogbook,
+    amountClaimed: totals.totalAmount > 0 ? String(totals.totalAmount) : "",
+  };
+};
+
+const buildStandardTripLogbookDraft = (
+  routeValue,
+  entries = [],
+  fallbackAmount = "",
+  fallbackPassengers = "",
+) => {
+  if (Array.isArray(entries) && entries.length > 0) {
+    return createDailyTripLogbook(routeValue, entries);
+  }
+
+  return createDailyTripLogbook(routeValue, [
+    {
+      passengerCount:
+        fallbackPassengers != null && fallbackPassengers !== "" ? String(fallbackPassengers) : "",
+      amountCollected:
+        fallbackAmount != null && fallbackAmount !== "" ? String(fallbackAmount) : "",
+    },
+  ]);
+};
+
 const getBusinessKmValue = (record) => {
   const openingOdo = Number(record?.openingOdo ?? 0);
   const closingOdo = Number(record?.closingOdo ?? 0);
@@ -578,6 +706,12 @@ const formatDailyTripMeta = (record) =>
     formatDateOnly(record?.tripDate ?? record?.timestamp),
     record?.timeIn ? `In ${formatTimeOnly(record.timeIn)}` : null,
     record?.timeOut ? `Out ${formatTimeOnly(record.timeOut)}` : null,
+    getDailyTripTripCount(record) > 0
+      ? `${getDailyTripTripCount(record)} ${getDailyTripTripCount(record) === 1 ? "trip" : "trips"}`
+      : null,
+    getDailyTripPassengerTotal(record) > 0
+      ? `${getDailyTripPassengerTotal(record).toLocaleString()} passengers`
+      : null,
   ]
     .filter(Boolean)
     .join(" / ");
@@ -711,7 +845,7 @@ const buildHistoricalAuditTrail = (source, drivers) => {
               )}`
             : `${formatMoney(record.amountClaimed ?? record.amount ?? 0)} / ${
                 record.route ?? "Pending route"
-              }`
+              } / ${formatDailyTripMeta(record)}`
           : `${record.description ?? record.vehicle ?? "General"} / ${formatMoney(
               record.amount ?? 0,
             )}${record.reference ? ` / Receipt ${record.reference}` : ""}`,
@@ -1450,16 +1584,19 @@ const getTransactionTone = (record) => {
   return "warning";
 };
 
-const createStandardDraft = (vehicleId, openingOdo) => ({
-  id: null,
-  vehicleId: vehicleId ?? "",
-  tripDate: toDateInputValue(),
-  timeIn: "",
-  timeOut: "",
-  openingOdo: openingOdo != null ? String(openingOdo) : "",
-  closingOdo: "",
-  amountClaimed: "",
-});
+const createStandardDraft = (vehicleId, openingOdo, route = "") =>
+  syncStandardDraftTripLogbook({
+    id: null,
+    vehicleId: vehicleId ?? "",
+    route,
+    tripDate: toDateInputValue(),
+    timeIn: "",
+    timeOut: "",
+    tripLogbook: createDailyTripLogbook(route),
+    openingOdo: openingOdo != null ? String(openingOdo) : "",
+    closingOdo: "",
+    amountClaimed: "",
+  });
 
 const getStandardDraftValidationError = (draft) => {
   if (!draft.vehicleId) {
@@ -1503,13 +1640,33 @@ const getStandardDraftValidationError = (draft) => {
     return "Closing odometer must be greater than opening odometer.";
   }
 
-  if (draft.amountClaimed === "") {
-    return "Enter the amount collected to save the trip.";
+  const tripLogbook = Array.isArray(draft.tripLogbook) ? draft.tripLogbook : [];
+  if (tripLogbook.length === 0) {
+    return "Add at least one passenger trip to the daily logbook.";
   }
 
-  const amountClaimed = Number(draft.amountClaimed);
-  if (!Number.isFinite(amountClaimed) || amountClaimed <= 0) {
-    return "Amount collected must be greater than zero.";
+  for (const [index, entry] of tripLogbook.entries()) {
+    const fromLocation = String(entry?.fromLocation ?? "").trim();
+    const toLocation = String(entry?.toLocation ?? "").trim();
+    const passengerCount = Number(entry?.passengerCount);
+    const amountCollected = Number(entry?.amountCollected);
+
+    if (!fromLocation || !toLocation) {
+      return `Complete the from and to stops for trip ${index + 1}.`;
+    }
+    if (fromLocation.toLowerCase() === toLocation.toLowerCase()) {
+      return `Trip ${index + 1} must use two different stops.`;
+    }
+    if (!Number.isInteger(passengerCount) || passengerCount <= 0) {
+      return `Enter the passenger count for trip ${index + 1}.`;
+    }
+    if (!Number.isFinite(amountCollected) || amountCollected <= 0) {
+      return `Enter the amount collected for trip ${index + 1}.`;
+    }
+  }
+
+  if (getDailyTripLogbookTotals(tripLogbook).totalAmount <= 0) {
+    return "The daily trip total must be greater than zero.";
   }
 
   return null;
@@ -2263,9 +2420,9 @@ function App() {
       const tripDate = String(draft.tripDate ?? "").trim();
       const timeIn = String(draft.timeIn ?? "").trim();
       const timeOut = String(draft.timeOut ?? "").trim();
+      const tripLogbook = Array.isArray(draft.tripLogbook) ? draft.tripLogbook : [];
       const openingOdo = Number(draft.openingOdo);
       const closingOdo = Number(draft.closingOdo);
-      const amountClaimed = Number(draft.amountClaimed);
       const now = new Date().toISOString();
       const actorId = resolveCurrentActorId(current);
       const isUpdate = Boolean(existing);
@@ -2302,8 +2459,49 @@ function App() {
         result = { ok: false, error: "Closing odometer must be greater than opening odometer." };
         return current;
       }
-      if (!Number.isFinite(amountClaimed) || amountClaimed <= 0) {
-        result = { ok: false, error: "Enter the amount collected for the trip." };
+
+      if (tripLogbook.length === 0) {
+        result = { ok: false, error: "Add at least one passenger trip to the daily logbook." };
+        return current;
+      }
+
+      const normalizedTripLogbook = [];
+      for (const [index, entry] of tripLogbook.entries()) {
+        const fromLocation = String(entry?.fromLocation ?? "").trim();
+        const toLocation = String(entry?.toLocation ?? "").trim();
+        const passengerCount = Number(entry?.passengerCount);
+        const amountCollected = Number(entry?.amountCollected);
+
+        if (!fromLocation || !toLocation) {
+          result = { ok: false, error: `Complete the from and to stops for trip ${index + 1}.` };
+          return current;
+        }
+        if (fromLocation.toLowerCase() === toLocation.toLowerCase()) {
+          result = { ok: false, error: `Trip ${index + 1} must use two different stops.` };
+          return current;
+        }
+        if (!Number.isInteger(passengerCount) || passengerCount <= 0) {
+          result = { ok: false, error: `Enter the passenger count for trip ${index + 1}.` };
+          return current;
+        }
+        if (!Number.isFinite(amountCollected) || amountCollected <= 0) {
+          result = { ok: false, error: `Enter the amount collected for trip ${index + 1}.` };
+          return current;
+        }
+
+        normalizedTripLogbook.push({
+          id: entry.id ?? createRecordId("trip-leg"),
+          fromLocation,
+          toLocation,
+          passengerCount,
+          amountCollected,
+        });
+      }
+
+      const tripLogTotals = getDailyTripLogbookTotals(normalizedTripLogbook);
+      const amountClaimed = tripLogTotals.totalAmount;
+      if (amountClaimed <= 0) {
+        result = { ok: false, error: "The daily trip total must be greater than zero." };
         return current;
       }
 
@@ -2324,6 +2522,9 @@ function App() {
         tripDate,
         timeIn,
         timeOut,
+        tripLogbook: normalizedTripLogbook,
+        tripCount: tripLogTotals.tripCount,
+        totalPassengers: tripLogTotals.totalPassengers,
         openingOdo,
         closingOdo,
         amountClaimed,
@@ -2359,9 +2560,9 @@ function App() {
           entityType: "income",
           entityId: nextRecord.id,
           title: `${isUpdate ? "Trip income updated" : "Trip income added"} / ${vehicle.registration}`,
-          detail: `${vehicle.route} / ${formatDateOnly(tripDate)} / In ${formatTimeOnly(timeIn)} / Out ${formatTimeOnly(
-            timeOut,
-          )} / ${formatMoney(amountClaimed)}`,
+          detail: `${vehicle.route} / ${tripLogTotals.tripCount} trips / ${tripLogTotals.totalPassengers} passengers / ${formatMoney(
+            amountClaimed,
+          )}`,
         }),
       ]);
 
@@ -4203,7 +4404,9 @@ function FinancePanel({
   onLockDeposit,
 }) {
   const finance = snapshot.finance;
-  const defaultVehicleId = snapshot.vehicles[0]?.id ?? "";
+  const defaultVehicle = snapshot.vehicles[0] ?? null;
+  const defaultVehicleId = defaultVehicle?.id ?? "";
+  const defaultVehicleRoute = defaultVehicle?.route ?? "";
   const [financeView, setFinanceView] = useState("revenue");
   const [expenseView, setExpenseView] = useState("vehicle");
   const [feedback, setFeedback] = useState(null);
@@ -4214,7 +4417,11 @@ function FinancePanel({
   const depositLockRef = useRef(null);
   const verificationQueueRef = useRef(null);
   const [standardDraft, setStandardDraft] = useState(() =>
-    createStandardDraft(defaultVehicleId, finance.vehicleOpenings?.[defaultVehicleId]),
+    createStandardDraft(
+      defaultVehicleId,
+      finance.vehicleOpenings?.[defaultVehicleId],
+      defaultVehicleRoute,
+    ),
   );
   const [specialDraft, setSpecialDraft] = useState(() => createSpecialDraft(defaultVehicleId));
   const [expenseDraft, setExpenseDraft] = useState(() =>
@@ -4232,6 +4439,10 @@ function FinancePanel({
       : finance.expenseManagement.operational;
   const selectedVehicleOpening =
     finance.vehicleOpenings?.[standardDraft.vehicleId || defaultVehicleId] ?? 0;
+  const selectedStandardVehicleRoute =
+    snapshot.vehicles.find((vehicle) => vehicle.id === standardDraft.vehicleId)?.route ??
+    defaultVehicleRoute;
+  const standardTripTotals = getDailyTripLogbookTotals(standardDraft.tripLogbook);
   const specialBusinessKm = getBusinessKmValue(specialDraft);
   const gapKm = Math.abs(
     Number(standardDraft.openingOdo || selectedVehicleOpening) - Number(selectedVehicleOpening || 0),
@@ -4255,9 +4466,15 @@ function FinancePanel({
 
   useEffect(() => {
     if (!standardDraft.vehicleId && defaultVehicleId) {
-      setStandardDraft(createStandardDraft(defaultVehicleId, finance.vehicleOpenings?.[defaultVehicleId]));
+      setStandardDraft(
+        createStandardDraft(
+          defaultVehicleId,
+          finance.vehicleOpenings?.[defaultVehicleId],
+          defaultVehicleRoute,
+        ),
+      );
     }
-  }, [defaultVehicleId, finance.vehicleOpenings, standardDraft.vehicleId]);
+  }, [defaultVehicleId, defaultVehicleRoute, finance.vehicleOpenings, standardDraft.vehicleId]);
 
   useEffect(() => {
     if (!specialDraft.vehicleId && defaultVehicleId) {
@@ -4311,7 +4528,13 @@ function FinancePanel({
     const response = onSaveStandardIncome(standardDraft);
     pushFeedback(response);
     if (response.ok) {
-      setStandardDraft(createStandardDraft(standardDraft.vehicleId, response.nextOpeningOdo));
+      setStandardDraft(
+        createStandardDraft(
+          standardDraft.vehicleId,
+          response.nextOpeningOdo,
+          selectedStandardVehicleRoute,
+        ),
+      );
     }
   };
 
@@ -4354,16 +4577,29 @@ function FinancePanel({
   const handleEditIncome = (record) => {
     setFinanceView("revenue");
     if (record.incomeKind === "standard") {
-      setStandardDraft({
-        id: record.id,
-        vehicleId: record.vehicleId,
-        tripDate: record.tripDate ?? toDateInputValue(record.timestamp),
-        timeIn: record.timeIn ?? toTimeInputValue(record.timestamp),
-        timeOut: record.timeOut ?? "",
-        openingOdo: String(record.openingOdo ?? ""),
-        closingOdo: String(record.closingOdo ?? ""),
-        amountClaimed: String(record.amountClaimed ?? record.amount ?? ""),
-      });
+      const route =
+        record.route ??
+        snapshot.vehicles.find((vehicle) => vehicle.id === record.vehicleId)?.route ??
+        "";
+      setStandardDraft(
+        syncStandardDraftTripLogbook({
+          id: record.id,
+          vehicleId: record.vehicleId,
+          route,
+          tripDate: record.tripDate ?? toDateInputValue(record.timestamp),
+          timeIn: record.timeIn ?? toTimeInputValue(record.timestamp),
+          timeOut: record.timeOut ?? "",
+          tripLogbook: buildStandardTripLogbookDraft(
+            route,
+            record.tripLogbook,
+            record.amountClaimed ?? record.amount ?? "",
+            record.totalPassengers ?? "",
+          ),
+          openingOdo: String(record.openingOdo ?? ""),
+          closingOdo: String(record.closingOdo ?? ""),
+          amountClaimed: String(record.amountClaimed ?? record.amount ?? ""),
+        }),
+      );
       return;
     }
 
@@ -4585,15 +4821,23 @@ function FinancePanel({
                     <span>Vehicle</span>
                     <select
                       value={standardDraft.vehicleId}
-                      onChange={(event) =>
-                        setStandardDraft((current) => ({
-                          ...current,
-                          vehicleId: event.target.value,
-                          openingOdo: String(
-                            finance.vehicleOpenings?.[event.target.value] ?? "",
-                          ),
-                        }))
-                      }
+                      onChange={(event) => {
+                        const nextVehicle =
+                          snapshot.vehicles.find((vehicle) => vehicle.id === event.target.value) ?? null;
+
+                        setStandardDraft((current) =>
+                          syncStandardDraftTripLogbook({
+                            ...current,
+                            vehicleId: event.target.value,
+                            route: nextVehicle?.route ?? "",
+                            tripLogbook: createDailyTripLogbook(nextVehicle?.route ?? ""),
+                            openingOdo: String(
+                              finance.vehicleOpenings?.[event.target.value] ?? "",
+                            ),
+                            closingOdo: "",
+                          }),
+                        );
+                      }}
                     >
                       {snapshot.vehicles.map((vehicle) => (
                         <option key={vehicle.id} value={vehicle.id}>
@@ -4675,21 +4919,38 @@ function FinancePanel({
                   </label>
 
                   <label className="finance-field">
-                    <span>Amount claimed</span>
+                    <span>Total passengers</span>
                     <input
-                      type="number"
-                      min="1"
-                      step="1"
-                      value={standardDraft.amountClaimed}
-                      onChange={(event) =>
-                        setStandardDraft((current) => ({
-                          ...current,
-                          amountClaimed: event.target.value,
-                        }))
-                      }
+                      type="text"
+                      value={standardTripTotals.totalPassengers.toLocaleString()}
+                      disabled
+                      readOnly
+                    />
+                  </label>
+
+                  <label className="finance-field">
+                    <span>Total collected</span>
+                    <input
+                      type="text"
+                      value={formatMoney(standardTripTotals.totalAmount)}
+                      disabled
+                      readOnly
                     />
                   </label>
                 </div>
+
+                <DailyTripLogbookFields
+                  route={selectedStandardVehicleRoute}
+                  tripLogbook={standardDraft.tripLogbook}
+                  onChange={(nextTripLogbook) =>
+                    setStandardDraft((current) =>
+                      syncStandardDraftTripLogbook({
+                        ...current,
+                        tripLogbook: nextTripLogbook,
+                      }),
+                    )
+                  }
+                />
 
                 <div className="finance-form-meta">
                   <span className="status-chip" data-tone={gapKm > 0 ? "warning" : "info"}>
@@ -4723,6 +4984,7 @@ function FinancePanel({
                           createStandardDraft(
                             defaultVehicleId,
                             finance.vehicleOpenings?.[defaultVehicleId],
+                            defaultVehicleRoute,
                           ),
                         )
                       }
@@ -4738,8 +5000,8 @@ function FinancePanel({
                 >
                   {standardValidationError ??
                     (standardDraft.id
-                      ? "Trip details are complete and ready to update."
-                      : "Trip details are complete and ready to save.")}
+                      ? "Passenger trip logbook is complete and ready to update."
+                      : "Passenger trip logbook is complete and ready to save.")}
                 </p>
               </form>
             </article>
@@ -5496,6 +5758,15 @@ function FinancePanel({
                       <InfoPair label="Reported" value={formatMoney(queueEntry.claimed)} />
                       <InfoPair label="Counted" value={formatMoney(queueEntry.counted)} />
                       <InfoPair label="Difference" value={formatMoney(queueEntry.shortage)} />
+                      {!record.isSpecial && (
+                        <InfoPair
+                          label="Passengers"
+                          value={`${getDailyTripPassengerTotal(record).toLocaleString()}`}
+                        />
+                      )}
+                      {!record.isSpecial && (
+                        <InfoPair label="Trips logged" value={`${getDailyTripTripCount(record)}`} />
+                      )}
                       {record.isSpecial && (
                         <InfoPair
                           label="Business km"
@@ -6743,6 +7014,189 @@ function CompliancePanel({ snapshot }) {
   );
 }
 
+function DailyTripLogbookFields({ route, tripLogbook, onChange }) {
+  const routeStops = getRouteStops(route);
+  const hasPresetStops = Boolean(routeStops.fromLocation && routeStops.toLocation);
+  const safeTripLogbook = Array.isArray(tripLogbook) ? tripLogbook : [];
+  const totals = getDailyTripLogbookTotals(safeTripLogbook);
+
+  const updateEntry = (entryId, updates) => {
+    onChange(
+      safeTripLogbook.map((entry) =>
+        entry.id === entryId
+          ? {
+              ...entry,
+              ...updates,
+            }
+          : entry,
+      ),
+    );
+  };
+
+  return (
+    <div className="content-stack">
+      <div className="overview-board-head">
+        <p className="eyebrow">Passenger logbook</p>
+        <h3>Trips between stops</h3>
+      </div>
+
+      <div className="finance-form-meta">
+        <span className="status-chip" data-tone={hasPresetStops ? "info" : "warning"}>
+          Route {route?.trim() || "Not set"}
+        </span>
+        <span className="status-chip" data-tone="navy">
+          Logged trips {totals.tripCount}
+        </span>
+        <span className="status-chip" data-tone="info">
+          Passengers {totals.totalPassengers.toLocaleString()}
+        </span>
+        <span className="status-chip" data-tone="success">
+          Total collected {formatMoney(totals.totalAmount)}
+        </span>
+      </div>
+
+      {!hasPresetStops && (
+        <p className="finance-form-note" data-tone="info">
+          Set the vehicle route in Fleet to prefill the two stops for this daily logbook.
+        </p>
+      )}
+
+      <div className="list-stack">
+        {safeTripLogbook.map((entry, index) => (
+          <article key={entry.id ?? index} className="person-row">
+            <div className="finance-form-grid">
+              <label className="finance-field">
+                <span>From</span>
+                {hasPresetStops ? (
+                  <select
+                    value={entry.fromLocation}
+                    onChange={(event) =>
+                      updateEntry(entry.id, {
+                        fromLocation: event.target.value,
+                      })
+                    }
+                  >
+                    {[routeStops.fromLocation, routeStops.toLocation].map((stop) => (
+                      <option key={`from-${entry.id}-${stop}`} value={stop}>
+                        {stop}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={entry.fromLocation}
+                    onChange={(event) =>
+                      updateEntry(entry.id, {
+                        fromLocation: event.target.value,
+                      })
+                    }
+                  />
+                )}
+              </label>
+
+              <label className="finance-field">
+                <span>To</span>
+                {hasPresetStops ? (
+                  <select
+                    value={entry.toLocation}
+                    onChange={(event) =>
+                      updateEntry(entry.id, {
+                        toLocation: event.target.value,
+                      })
+                    }
+                  >
+                    {[routeStops.fromLocation, routeStops.toLocation].map((stop) => (
+                      <option key={`to-${entry.id}-${stop}`} value={stop}>
+                        {stop}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    value={entry.toLocation}
+                    onChange={(event) =>
+                      updateEntry(entry.id, {
+                        toLocation: event.target.value,
+                      })
+                    }
+                  />
+                )}
+              </label>
+
+              <label className="finance-field">
+                <span>Passengers</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={entry.passengerCount}
+                  onChange={(event) =>
+                    updateEntry(entry.id, {
+                      passengerCount: event.target.value,
+                    })
+                  }
+                />
+              </label>
+
+              <label className="finance-field">
+                <span>Amount collected</span>
+                <input
+                  type="number"
+                  min="1"
+                  step="1"
+                  value={entry.amountCollected}
+                  onChange={(event) =>
+                    updateEntry(entry.id, {
+                      amountCollected: event.target.value,
+                    })
+                  }
+                />
+              </label>
+            </div>
+
+            <div className="finance-form-actions">
+              <button
+                type="button"
+                className="record-button"
+                onClick={() =>
+                  updateEntry(entry.id, {
+                    fromLocation: entry.toLocation,
+                    toLocation: entry.fromLocation,
+                  })
+                }
+              >
+                Swap stops
+              </button>
+              <button
+                type="button"
+                className="record-button danger"
+                disabled={safeTripLogbook.length === 1}
+                onClick={() => onChange(safeTripLogbook.filter((item) => item.id !== entry.id))}
+              >
+                Remove trip
+              </button>
+            </div>
+          </article>
+        ))}
+      </div>
+
+      <div className="finance-form-actions">
+        <button
+          type="button"
+          className="action-button"
+          onClick={() =>
+            onChange([...safeTripLogbook, createDailyTripLogEntry(route)])
+          }
+        >
+          Add passenger trip
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function DriversPanel({
   snapshot,
   activeRole,
@@ -6803,6 +7257,11 @@ function DriversPanel({
     createStandardDraft(
       assignedVehicleId,
       snapshot.finance.vehicleOpenings?.[assignedVehicleId],
+      (isDriver
+        ? linkedVehicles.find((vehicle) => vehicle.id === assignedVehicleId)?.route ??
+          linkedVehicles[0]?.route
+        : snapshot.vehicles.find((vehicle) => vehicle.id === assignedVehicleId)?.route ??
+          snapshot.vehicles[0]?.route) ?? "",
     ),
   );
   const [expenseDraft, setExpenseDraft] = useState(() =>
@@ -6814,6 +7273,7 @@ function DriversPanel({
   const assignedVehicle = isDriver
     ? linkedVehicles.find((vehicle) => vehicle.id === assignedVehicleId) ?? linkedVehicles[0] ?? null
     : snapshot.vehicles.find((vehicle) => vehicle.id === assignedVehicleId) ?? snapshot.vehicles[0];
+  const assignedVehicleRoute = assignedVehicle?.route ?? "";
   const selectedAllocationDriver =
     allocatableDrivers.find((driver) => driver.staffId === allocationDraft.staffId) ?? null;
   const currentAllocationVehicle = selectedAllocationDriver
@@ -6842,6 +7302,7 @@ function DriversPanel({
     ...specialDraft,
     vehicleId: assignedVehicleId,
   });
+  const shiftTripTotals = getDailyTripLogbookTotals(shiftDraft.tripLogbook);
   const expenseValidationError = getExpenseDraftValidationError({
     ...expenseDraft,
     expenseKind: "asset",
@@ -6853,14 +7314,21 @@ function DriversPanel({
       return;
     }
 
-    setShiftDraft((current) => ({
-      ...current,
-      vehicleId: assignedVehicleId,
-      openingOdo:
-        current.vehicleId === assignedVehicleId && current.openingOdo
-          ? current.openingOdo
-          : String(snapshot.finance.vehicleOpenings?.[assignedVehicleId] ?? ""),
-    }));
+    setShiftDraft((current) => {
+      const nextVehicleId = assignedVehicleId;
+      const sameVehicle = current.vehicleId === nextVehicleId;
+
+      return syncStandardDraftTripLogbook({
+        ...current,
+        vehicleId: nextVehicleId,
+        route: assignedVehicleRoute,
+        tripLogbook: sameVehicle ? current.tripLogbook : createDailyTripLogbook(assignedVehicleRoute),
+        openingOdo:
+          sameVehicle && current.openingOdo
+            ? current.openingOdo
+            : String(snapshot.finance.vehicleOpenings?.[assignedVehicleId] ?? ""),
+      });
+    });
     setSpecialDraft((current) => ({
       ...current,
       vehicleId: assignedVehicleId,
@@ -6869,7 +7337,7 @@ function DriversPanel({
       ...current,
       vehicleId: assignedVehicleId,
     }));
-  }, [assignedVehicleId, snapshot.finance.vehicleOpenings]);
+  }, [assignedVehicleId, assignedVehicleRoute, snapshot.finance.vehicleOpenings]);
 
   useEffect(() => {
     if (!canManageDrivers) {
@@ -6941,7 +7409,7 @@ function DriversPanel({
 
     if (response.ok) {
       setShiftDraft(
-        createStandardDraft(assignedVehicleId, response.nextOpeningOdo),
+        createStandardDraft(assignedVehicleId, response.nextOpeningOdo, assignedVehicleRoute),
       );
       setDriverAction(null);
     }
@@ -7206,21 +7674,36 @@ function DriversPanel({
                         />
                       </label>
                       <label className="finance-field">
-                        <span>Amount claimed</span>
+                        <span>Total passengers</span>
                         <input
-                          type="number"
-                          min="1"
-                          step="1"
-                          value={shiftDraft.amountClaimed}
-                          onChange={(event) =>
-                            setShiftDraft((current) => ({
-                              ...current,
-                              amountClaimed: event.target.value,
-                            }))
-                          }
+                          type="text"
+                          value={shiftTripTotals.totalPassengers.toLocaleString()}
+                          disabled
+                          readOnly
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>Total collected</span>
+                        <input
+                          type="text"
+                          value={formatMoney(shiftTripTotals.totalAmount)}
+                          disabled
+                          readOnly
                         />
                       </label>
                     </div>
+                    <DailyTripLogbookFields
+                      route={assignedVehicleRoute}
+                      tripLogbook={shiftDraft.tripLogbook}
+                      onChange={(nextTripLogbook) =>
+                        setShiftDraft((current) =>
+                          syncStandardDraftTripLogbook({
+                            ...current,
+                            tripLogbook: nextTripLogbook,
+                          }),
+                        )
+                      }
+                    />
                     <div className="finance-form-meta">
                       <span className="status-chip" data-tone="info">
                         Expected opening{" "}
@@ -7263,7 +7746,8 @@ function DriversPanel({
                       className="finance-form-note"
                       data-tone={shiftValidationError ? "danger" : "info"}
                     >
-                      {shiftValidationError ?? "Trip details are complete and ready to save."}
+                      {shiftValidationError ??
+                        "Passenger trip logbook is complete and ready to save."}
                     </p>
                   </form>
                 )}

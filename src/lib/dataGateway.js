@@ -4,12 +4,81 @@ import { configuredBackendMode, hasSupabaseConfig, supabase } from "./supabaseCl
 const DATA_MODE_STORAGE_KEY = "taxiflow-data-mode-v2";
 const DEMO_SNAPSHOT_STORAGE_KEY = "taxiflow-demo-snapshot-v1";
 const LIVE_SNAPSHOT_STORAGE_KEY = "taxiflow-live-snapshot-v1";
+const LIVE_PENDING_SNAPSHOT_STORAGE_KEY = "taxiflow-live-pending-snapshot-v1";
 const LIVE_WORKSPACE_KEY = "taxiflow-live";
 
 const normalizeBackendMode = (value) =>
   String(value ?? "mock").trim().toLowerCase() === "live" ? "live" : "mock";
 
 const cloneSnapshot = (snapshot) => JSON.parse(JSON.stringify(snapshot));
+const IS_DEV = Boolean(import.meta.env?.DEV);
+
+const toDevErrorDetail = (error) => {
+  if (!error) {
+    return undefined;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+};
+
+const logHandledWarning = (warning, error = null) => {
+  if (!IS_DEV || !warning) {
+    return;
+  }
+
+  if (error) {
+    console.warn(`[dataGateway] ${warning}`, error);
+    return;
+  }
+
+  console.warn(`[dataGateway] ${warning}`);
+};
+
+const createStructuredResult = (data, { ok = true, warning = null, error = null } = {}) => {
+  const result = {
+    ok,
+    data,
+    warning,
+  };
+
+  if (IS_DEV && error) {
+    result.error = toDevErrorDetail(error);
+  }
+
+  return result;
+};
+
+const attachStructuredResult = (data, options = {}) => {
+  if (!data || typeof data !== "object") {
+    return createStructuredResult(data, options);
+  }
+
+  const detail = IS_DEV ? toDevErrorDetail(options.error) : undefined;
+  const descriptors = {
+    ok: { value: options.ok ?? true, enumerable: false, configurable: true },
+    data: { value: data, enumerable: false, configurable: true },
+    warning: { value: options.warning ?? null, enumerable: false, configurable: true },
+  };
+
+  if (detail) {
+    descriptors.error = { value: detail, enumerable: false, configurable: true };
+  }
+
+  Object.defineProperties(data, descriptors);
+  return data;
+};
 
 const createSnapshotShape = ({
   legalEntity = "Workspace not configured",
@@ -66,6 +135,7 @@ const createSnapshotShape = ({
   },
   financeTransactions: [],
   deposits: [],
+  appUsers: [],
   vehicles: [],
   serviceSchedule: [],
   documents: [],
@@ -152,6 +222,7 @@ const normalizeSnapshotShape = (snapshot, defaults = createSnapshotShape()) => {
       ? snapshot.financeTransactions
       : cloneSnapshot(defaults.financeTransactions),
     deposits: Array.isArray(snapshot.deposits) ? snapshot.deposits : cloneSnapshot(defaults.deposits),
+    appUsers: Array.isArray(snapshot.appUsers) ? snapshot.appUsers : cloneSnapshot(defaults.appUsers),
     vehicles: Array.isArray(snapshot.vehicles) ? snapshot.vehicles : cloneSnapshot(defaults.vehicles),
     serviceSchedule: Array.isArray(snapshot.serviceSchedule)
       ? snapshot.serviceSchedule
@@ -242,8 +313,8 @@ const persistMode = (mode) => {
 
   try {
     window.localStorage.setItem(DATA_MODE_STORAGE_KEY, mode);
-  } catch {
-    // Ignore storage failures and continue with in-memory state.
+  } catch (error) {
+    logHandledWarning("Unable to persist the selected data mode in local storage.", error);
   }
 };
 
@@ -255,20 +326,23 @@ const readStoredSnapshot = (storageKey) => {
   try {
     const value = window.localStorage.getItem(storageKey);
     return value ? JSON.parse(value) : null;
-  } catch {
+  } catch (error) {
+    logHandledWarning(`Unable to read the workspace snapshot from local storage (${storageKey}).`, error);
     return null;
   }
 };
 
 const persistStoredSnapshot = (storageKey, snapshot) => {
   if (typeof window === "undefined") {
-    return;
+    return true;
   }
 
   try {
     window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
-  } catch {
-    // Ignore storage failures and continue with in-memory state.
+    return true;
+  } catch (error) {
+    logHandledWarning(`Unable to save the workspace snapshot in local storage (${storageKey}).`, error);
+    return false;
   }
 };
 
@@ -279,12 +353,26 @@ const clearStoredSnapshot = (storageKey) => {
 
   try {
     window.localStorage.removeItem(storageKey);
-  } catch {
-    // Ignore storage failures.
+  } catch (error) {
+    logHandledWarning(`Unable to clear the workspace snapshot from local storage (${storageKey}).`, error);
   }
 };
 
+const readPendingLiveSnapshot = () => readStoredSnapshot(LIVE_PENDING_SNAPSHOT_STORAGE_KEY);
+const persistPendingLiveSnapshot = (snapshot) =>
+  persistStoredSnapshot(LIVE_PENDING_SNAPSHOT_STORAGE_KEY, snapshot);
+const clearPendingLiveSnapshot = () => clearStoredSnapshot(LIVE_PENDING_SNAPSHOT_STORAGE_KEY);
+
 const canUseRemoteLiveData = () => hasSupabaseConfig && Boolean(supabase);
+const getInitialBackendMode = () => {
+  const storedMode = readStoredMode();
+
+  if (storedMode) {
+    return storedMode;
+  }
+
+  return canUseRemoteLiveData() ? "live" : configuredBackendMode;
+};
 
 const getSupabaseSession = async () => {
   if (!canUseRemoteLiveData()) {
@@ -304,66 +392,138 @@ const getSupabaseSession = async () => {
 const loadSupabaseLiveSnapshot = async () => {
   const session = await getSupabaseSession();
   const cachedSnapshot = readStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY);
+  const pendingSnapshot = readPendingLiveSnapshot();
   const liveDefaults = createLiveSnapshot();
 
   if (!session) {
-    return normalizeSnapshotShape(cachedSnapshot, liveDefaults);
+    const fallbackSnapshot = normalizeSnapshotShape(
+      pendingSnapshot ?? cachedSnapshot,
+      liveDefaults,
+    );
+    const warning = pendingSnapshot
+      ? "Live session unavailable. Showing unsynced live changes until they can be saved."
+      : cachedSnapshot
+        ? "Live session unavailable. Showing the last available local workspace."
+        : "Live session unavailable. Showing a fresh live workspace.";
+
+    logHandledWarning(warning);
+    return attachStructuredResult(cloneSnapshot(fallbackSnapshot), { ok: false, warning });
   }
 
-  const { data, error } = await supabase
-    .from("workspace_snapshots")
-    .select("snapshot")
-    .eq("workspace_key", LIVE_WORKSPACE_KEY)
-    .maybeSingle();
+  try {
+    if (pendingSnapshot) {
+      const nextSnapshot = normalizeSnapshotShape(pendingSnapshot, liveDefaults);
+      persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, nextSnapshot);
+      const persistResult = await persistSupabaseLiveSnapshot(nextSnapshot, session.user.id);
 
-  if (error) {
-    console.error("Unable to load the live workspace from Supabase.", error);
-    return normalizeSnapshotShape(cachedSnapshot, liveDefaults);
+      return attachStructuredResult(cloneSnapshot(nextSnapshot), {
+        ok: persistResult.ok,
+        warning: persistResult.warning,
+        error: persistResult.error,
+      });
+    }
+
+    const { data, error } = await supabase
+      .from("workspace_snapshots")
+      .select("snapshot")
+      .eq("workspace_key", LIVE_WORKSPACE_KEY)
+      .maybeSingle();
+
+    if (error) {
+      const fallbackSnapshot = normalizeSnapshotShape(cachedSnapshot, liveDefaults);
+      const warning =
+        "Unable to load the latest live workspace. Showing the last available local workspace.";
+
+      logHandledWarning(warning, error);
+      return attachStructuredResult(cloneSnapshot(fallbackSnapshot), {
+        ok: false,
+        warning,
+        error,
+      });
+    }
+
+    const nextSnapshot = normalizeSnapshotShape(
+      data?.snapshot ?? cachedSnapshot ?? liveDefaults,
+      liveDefaults,
+    );
+    persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, nextSnapshot);
+
+    let warning = null;
+    let handledError = null;
+    if (!data?.snapshot) {
+      const persistResult = await persistSupabaseLiveSnapshot(nextSnapshot, session.user.id);
+      warning = persistResult.warning;
+      handledError = persistResult.error;
+    }
+
+    return attachStructuredResult(cloneSnapshot(nextSnapshot), {
+      ok: true,
+      warning,
+      error: handledError,
+    });
+  } catch (error) {
+    const fallbackSnapshot = normalizeSnapshotShape(cachedSnapshot, liveDefaults);
+    const warning =
+      "Unable to load the latest live workspace. Showing the last available local workspace.";
+
+    logHandledWarning(warning, error);
+    return attachStructuredResult(cloneSnapshot(fallbackSnapshot), {
+      ok: false,
+      warning,
+      error,
+    });
   }
-
-  const nextSnapshot = normalizeSnapshotShape(
-    data?.snapshot ?? cachedSnapshot ?? liveDefaults,
-    liveDefaults,
-  );
-  persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, nextSnapshot);
-
-  if (!data?.snapshot) {
-    await persistSupabaseLiveSnapshot(nextSnapshot, session.user.id);
-  }
-
-  return cloneSnapshot(nextSnapshot);
 };
 
 const persistSupabaseLiveSnapshot = async (snapshot, actorId = null) => {
   if (!canUseRemoteLiveData() || !snapshot) {
-    return;
+    return createStructuredResult(snapshot, { ok: true, warning: null });
   }
 
   const session = await getSupabaseSession();
 
   if (!session) {
-    return;
+    persistPendingLiveSnapshot(snapshot);
+    const warning = "Live session unavailable. Changes are queued and will save when the session returns.";
+    logHandledWarning(warning);
+    return createStructuredResult(snapshot, { ok: false, warning });
   }
 
-  const payload = cloneSnapshot(snapshot);
-  const { error } = await supabase.from("workspace_snapshots").upsert(
-    {
-      workspace_key: LIVE_WORKSPACE_KEY,
-      snapshot: payload,
-      updated_at: new Date().toISOString(),
-      updated_by: actorId ?? session.user.id,
-    },
-    {
-      onConflict: "workspace_key",
-    },
-  );
+  try {
+    const payload = cloneSnapshot(snapshot);
+    const { error } = await supabase.from("workspace_snapshots").upsert(
+      {
+        workspace_key: LIVE_WORKSPACE_KEY,
+        snapshot: payload,
+        updated_at: new Date().toISOString(),
+        updated_by: actorId ?? session.user.id,
+      },
+      {
+        onConflict: "workspace_key",
+      },
+    );
 
-  if (error) {
-    console.error("Unable to persist the live workspace to Supabase.", error);
+    if (error) {
+      persistPendingLiveSnapshot(snapshot);
+      const warning =
+        "Unable to save the live workspace remotely. Changes are queued and will retry automatically.";
+      logHandledWarning(warning, error);
+      return createStructuredResult(snapshot, { ok: false, warning, error });
+    }
+
+    persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, payload);
+    clearPendingLiveSnapshot();
+    return createStructuredResult(snapshot, { ok: true, warning: null });
+  } catch (error) {
+    persistPendingLiveSnapshot(snapshot);
+    const warning =
+      "Unable to save the live workspace remotely. Changes are queued and will retry automatically.";
+    logHandledWarning(warning, error);
+    return createStructuredResult(snapshot, { ok: false, warning, error });
   }
 };
 
-let activeBackendMode = normalizeBackendMode(readStoredMode() ?? configuredBackendMode);
+let activeBackendMode = normalizeBackendMode(getInitialBackendMode());
 persistMode(activeBackendMode);
 
 export const repository = {
@@ -384,6 +544,9 @@ export const repository = {
       normalizedMode === "live" ? LIVE_SNAPSHOT_STORAGE_KEY : DEMO_SNAPSHOT_STORAGE_KEY;
 
     clearStoredSnapshot(storageKey);
+    if (normalizedMode === "live") {
+      clearPendingLiveSnapshot();
+    }
     persistStoredSnapshot(storageKey, nextSnapshot);
 
     if (normalizedMode === "live" && canUseRemoteLiveData()) {
@@ -400,6 +563,7 @@ export const repository = {
   resetLiveSnapshot() {
     const nextSnapshot = createLiveSnapshot();
     clearStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY);
+    clearPendingLiveSnapshot();
     persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, nextSnapshot);
 
     if (canUseRemoteLiveData()) {
@@ -408,41 +572,97 @@ export const repository = {
 
     return cloneSnapshot(nextSnapshot);
   },
-  async persistSnapshot(snapshot, mode = activeBackendMode) {
-    if (!snapshot) {
-      return;
+  async flushPendingLiveSnapshot() {
+    const pendingSnapshot = readPendingLiveSnapshot();
+
+    if (!pendingSnapshot) {
+      return createStructuredResult(null, { ok: true, warning: null });
     }
 
-    const normalizedMode = normalizeBackendMode(mode);
-    const storageKey =
-      normalizedMode === "live" ? LIVE_SNAPSHOT_STORAGE_KEY : DEMO_SNAPSHOT_STORAGE_KEY;
-    const defaults =
-      normalizedMode === "live" ? createLiveSnapshot() : createTrainingSnapshot();
-    const nextSnapshot = normalizeSnapshotShape(snapshot, defaults);
+    const nextSnapshot = normalizeSnapshotShape(pendingSnapshot, createLiveSnapshot());
+    return persistSupabaseLiveSnapshot(nextSnapshot);
+  },
+  async persistSnapshot(snapshot, mode = activeBackendMode) {
+    if (!snapshot) {
+      return createStructuredResult(null, {
+        ok: false,
+        warning: "No workspace snapshot was provided for saving.",
+      });
+    }
 
-    persistStoredSnapshot(storageKey, nextSnapshot);
+    try {
+      const normalizedMode = normalizeBackendMode(mode);
+      const storageKey =
+        normalizedMode === "live" ? LIVE_SNAPSHOT_STORAGE_KEY : DEMO_SNAPSHOT_STORAGE_KEY;
+      const defaults =
+        normalizedMode === "live" ? createLiveSnapshot() : createTrainingSnapshot();
+      const nextSnapshot = normalizeSnapshotShape(snapshot, defaults);
 
-    if (normalizedMode === "live" && canUseRemoteLiveData()) {
-      await persistSupabaseLiveSnapshot(nextSnapshot);
+      const storedLocally = persistStoredSnapshot(storageKey, nextSnapshot);
+      const localWarning = storedLocally
+        ? null
+        : "Unable to save the workspace snapshot in local storage.";
+
+      if (normalizedMode === "live" && canUseRemoteLiveData()) {
+        const remoteResult = await persistSupabaseLiveSnapshot(nextSnapshot);
+        return createStructuredResult(nextSnapshot, {
+          ok: remoteResult.ok,
+          warning: remoteResult.warning ?? localWarning,
+          error: remoteResult.error,
+        });
+      }
+
+      return createStructuredResult(nextSnapshot, {
+        ok: storedLocally,
+        warning: localWarning,
+      });
+    } catch (error) {
+      const warning = "Unable to save the workspace snapshot.";
+      logHandledWarning(warning, error);
+      return createStructuredResult(snapshot, { ok: false, warning, error });
     }
   },
   async loadSnapshot(nextMode = activeBackendMode) {
     activeBackendMode = normalizeBackendMode(nextMode);
     persistMode(activeBackendMode);
 
-    if (activeBackendMode !== "live") {
-      const storedDemoSnapshot = readStoredSnapshot(DEMO_SNAPSHOT_STORAGE_KEY);
-      return normalizeSnapshotShape(storedDemoSnapshot ?? mockSnapshot, mockSnapshot);
+    try {
+      if (activeBackendMode !== "live") {
+        const storedDemoSnapshot = readStoredSnapshot(DEMO_SNAPSHOT_STORAGE_KEY);
+        const nextSnapshot = normalizeSnapshotShape(
+          storedDemoSnapshot ?? mockSnapshot,
+          createTrainingSnapshot(),
+        );
+        return attachStructuredResult(nextSnapshot, { ok: true, warning: null });
+      }
+
+      if (canUseRemoteLiveData()) {
+        return loadSupabaseLiveSnapshot();
+      }
+
+      const storedLiveSnapshot = readStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY);
+      const liveSnapshot = normalizeSnapshotShape(storedLiveSnapshot, createLiveSnapshot());
+
+      persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, liveSnapshot);
+      return attachStructuredResult(liveSnapshot, { ok: true, warning: null });
+    } catch (error) {
+      const fallbackSnapshot =
+        activeBackendMode === "live"
+          ? normalizeSnapshotShape(
+              readStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY),
+              createLiveSnapshot(),
+            )
+          : normalizeSnapshotShape(
+              readStoredSnapshot(DEMO_SNAPSHOT_STORAGE_KEY) ?? mockSnapshot,
+              createTrainingSnapshot(),
+            );
+      const warning =
+        activeBackendMode === "live"
+          ? "Unable to load the live workspace. Showing the last available workspace."
+          : "Unable to load the workspace. Showing the last available workspace.";
+
+      logHandledWarning(warning, error);
+      return attachStructuredResult(fallbackSnapshot, { ok: false, warning, error });
     }
-
-    if (canUseRemoteLiveData()) {
-      return loadSupabaseLiveSnapshot();
-    }
-
-    const storedLiveSnapshot = readStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY);
-    const liveSnapshot = normalizeSnapshotShape(storedLiveSnapshot, createLiveSnapshot());
-
-    persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, liveSnapshot);
-    return liveSnapshot;
   },
 };

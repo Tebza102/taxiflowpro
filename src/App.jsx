@@ -38,22 +38,27 @@ const ZAR = new Intl.NumberFormat("en-ZA", {
 const ROLES = ["Owner", "Admin", "Manager", "Driver"];
 const AUTH_ACCOUNT_DIRECTORY = {
   "owner@taxiflow.local": {
+    name: "Owner account",
     role: "Owner",
     actorId: "owner-session",
   },
   "admin@taxiflow.local": {
+    name: "Admin account",
     role: "Admin",
     actorId: "admin-session",
   },
   "manager@taxiflow.local": {
+    name: "Lerato Maseko",
     role: "Manager",
     actorId: "mgr-01",
   },
   "driver.one@taxiflow.local": {
+    name: "Sizwe Mokoena",
     role: "Driver",
     actorId: "drv-01",
   },
   "driver.two@taxiflow.local": {
+    name: "Thabo Ndlovu",
     role: "Driver",
     actorId: "drv-02",
   },
@@ -81,6 +86,36 @@ const MODULE_EDIT_ACCESS = {
   },
 };
 
+const MODULE_VIEW_ACCESS = {
+  overview: {
+    label: "Overview",
+    detail: "Dashboard and activity summary.",
+    roles: ROLES,
+  },
+  finance: {
+    label: "Money",
+    detail: "Daily earnings, expenses, and banking.",
+    roles: ["Owner", "Admin", "Manager"],
+  },
+  fleet: {
+    label: "Fleet",
+    detail: "Vehicles, defects, and service status.",
+    roles: ROLES,
+  },
+  drivers: {
+    label: "Drivers",
+    detail: "Driver activity, roster, and shift allocation.",
+    roles: ROLES,
+  },
+  settings: {
+    label: "Settings",
+    detail: "User roles and access rights.",
+    roles: ["Owner"],
+  },
+};
+
+const SETTINGS_ASSIGNABLE_MODULES = ["finance", "fleet", "drivers"];
+
 const NAV_ITEMS = [
   { id: "overview", label: "Overview", icon: LayoutDashboard, roles: ROLES },
   {
@@ -95,28 +130,78 @@ const NAV_ITEMS = [
     icon: Activity,
     roles: ROLES,
   },
-  {
-    id: "compliance",
-    label: "Documents",
-    icon: Shield,
-    roles: ["Owner", "Admin", "Manager"],
-  },
   { id: "drivers", label: "Drivers", icon: Users, roles: ROLES },
+  { id: "settings", label: "Settings", icon: Settings2, roles: ["Owner"] },
 ];
 
 const formatMoney = (value) => ZAR.format(value ?? 0);
 
 const DEFECT_CATEGORIES = ["Windscreen", "Tires", "Seats", "Engine", "Other"];
 
+const createRecordId = (prefix) =>
+  `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+const LIVE_SYNC_WARNING_MESSAGE =
+  "Live sync is temporarily unavailable. Showing the safest available state.";
+const LIVE_SAVE_WARNING_MESSAGE = "Save failed. Please retry after checking connection.";
+const OPERATIONS_WORKFLOW = [
+  {
+    id: "submit",
+    title: "Submission",
+    owner: "Driver",
+    accent: "teal",
+    detail:
+      "Driver records daily trips and extra trips before handing the collected cash to admin.",
+  },
+  {
+    id: "handover",
+    title: "Cash hand-in",
+    owner: "Admin",
+    accent: "gold",
+    detail:
+      "Administrator counts the cash received and compares it with the total captured in TaxiFlow.",
+  },
+  {
+    id: "verify",
+    title: "Verification",
+    owner: "Manager",
+    accent: "navy",
+    detail:
+      "Manager reviews the cash checking, shortages, and distance gaps before money is ready for banking.",
+  },
+];
+
+const syncLiveWarning = (setter, nextWarning) => {
+  setter((current) => (current === nextWarning ? current : nextWarning));
+};
+
+const isStandaloneDisplay = () => {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  return Boolean(
+    window.matchMedia?.("(display-mode: standalone)")?.matches ||
+      window.navigator?.standalone === true,
+  );
+};
+
 const getQueueTone = (entry) => {
-  if (entry.shortage > 0 || entry.gapKm > 0 || entry.status === "Needs review") {
+  if (
+    entry.shortage > 0 ||
+    entry.gapKm > 0 ||
+    ["Needs manager review", "Checked with issues"].includes(entry.status)
+  ) {
     return "danger";
   }
-  if (entry.status === "Waiting for cash check") {
+  if (["Waiting for admin hand-in", "Waiting for manager check"].includes(entry.status)) {
     return "warning";
   }
   return "success";
 };
+
+const canRecordCashHandoverForRole = (role) => ["Owner", "Admin"].includes(role);
+const canVerifyCashCheckForRole = (role) => ["Owner", "Manager"].includes(role);
 
 const getVehicleTone = (vehicle) => {
   if (vehicle.status === "archived") {
@@ -254,7 +339,233 @@ const getModuleAccessErrorMessage = (moduleKey) =>
 const normalizeRole = (value) =>
   ROLES.find((role) => role.toLowerCase() === String(value ?? "").trim().toLowerCase()) ?? null;
 
-const resolveAuthIdentity = (user) => {
+const createDefaultModuleViewAccess = (role) => {
+  const normalizedRole = normalizeRole(role) ?? "Driver";
+
+  if (normalizedRole === "Owner") {
+    return Object.fromEntries(Object.keys(MODULE_VIEW_ACCESS).map((moduleKey) => [moduleKey, true]));
+  }
+
+  return Object.fromEntries(
+    Object.entries(MODULE_VIEW_ACCESS).map(([moduleKey, moduleConfig]) => [
+      moduleKey,
+      moduleKey === "overview"
+        ? true
+        : moduleKey === "settings"
+          ? false
+          : moduleConfig.roles.includes(normalizedRole),
+    ]),
+  );
+};
+
+const normalizeModuleViewAccess = (value = {}, role) => {
+  const normalizedRole = normalizeRole(role) ?? "Driver";
+  const defaults = createDefaultModuleViewAccess(normalizedRole);
+
+  return Object.fromEntries(
+    Object.keys(MODULE_VIEW_ACCESS).map((moduleKey) => {
+      if (moduleKey === "overview") {
+        return [moduleKey, true];
+      }
+
+      if (moduleKey === "settings") {
+        return [moduleKey, normalizedRole === "Owner"];
+      }
+
+      const allowedByRole = MODULE_VIEW_ACCESS[moduleKey].roles.includes(normalizedRole);
+      return [moduleKey, allowedByRole ? Boolean(value?.[moduleKey] ?? defaults[moduleKey]) : false];
+    }),
+  );
+};
+
+const sanitizeEmailLocalPart = (value) =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^\x00-\x7F]/g, "")
+    .replace(/[^a-z0-9]+/g, ".")
+    .replace(/^\.+|\.+$/g, "");
+
+const createGeneratedLocalEmail = (name, usedEmails) => {
+  const base = sanitizeEmailLocalPart(name) || "user";
+  let nextLocalPart = base;
+  let sequence = 2;
+
+  while (usedEmails.has(`${nextLocalPart}@taxiflow.local`)) {
+    nextLocalPart = `${base}.${sequence}`;
+    sequence += 1;
+  }
+
+  return `${nextLocalPart}@taxiflow.local`;
+};
+
+const sortAppUsers = (users) => {
+  const roleOrder = new Map(ROLES.map((role, index) => [role, index]));
+
+  return [...users].sort((left, right) => {
+    const roleDelta = (roleOrder.get(left.role) ?? 99) - (roleOrder.get(right.role) ?? 99);
+    if (roleDelta !== 0) {
+      return roleDelta;
+    }
+
+    return String(left.name ?? left.email).localeCompare(String(right.name ?? right.email));
+  });
+};
+
+const normalizeAppUser = (user = {}) => {
+  const role = normalizeRole(user.role) ?? "Driver";
+  const email = String(user.email ?? "")
+    .trim()
+    .toLowerCase();
+  const actorId =
+    String(user.actorId ?? user.staffId ?? email ?? "")
+      .trim() || createRecordId("usr");
+  const staffId =
+    user.staffId != null && String(user.staffId).trim()
+      ? String(user.staffId).trim()
+      : role === "Driver"
+        ? actorId
+        : null;
+
+  return {
+    id: user.id ?? email ?? actorId,
+    email,
+    name: String(user.name ?? email ?? actorId).trim() || email || actorId,
+    role,
+    actorId,
+    staffId,
+    moduleAccess: normalizeModuleViewAccess(user.moduleAccess, role),
+    createdAt: user.createdAt ?? null,
+    createdBy: user.createdBy ?? null,
+    createdByRole: user.createdByRole ?? null,
+    updatedAt: user.updatedAt ?? null,
+    updatedBy: user.updatedBy ?? null,
+    updatedByRole: user.updatedByRole ?? null,
+  };
+};
+
+const buildDefaultAppUsers = (snapshot) => {
+  const users = [];
+  const usedEmails = new Set();
+  const accountByActorId = new Map(
+    Object.entries(AUTH_ACCOUNT_DIRECTORY).map(([email, account]) => [account.actorId, { email, ...account }]),
+  );
+
+  const pushUser = (user) => {
+    const normalizedUser = normalizeAppUser(user);
+
+    if (!normalizedUser.email || usedEmails.has(normalizedUser.email)) {
+      return;
+    }
+
+    usedEmails.add(normalizedUser.email);
+    users.push(normalizedUser);
+  };
+
+  pushUser({
+    email: "owner@taxiflow.local",
+    name: AUTH_ACCOUNT_DIRECTORY["owner@taxiflow.local"].name,
+    role: "Owner",
+    actorId: "owner-session",
+  });
+  pushUser({
+    email: "admin@taxiflow.local",
+    name: AUTH_ACCOUNT_DIRECTORY["admin@taxiflow.local"].name,
+    role: "Admin",
+    actorId: "admin-session",
+  });
+
+  (snapshot?.drivers ?? []).forEach((driver) => {
+    const mappedAccount = accountByActorId.get(driver.staffId);
+    const email = mappedAccount?.email ?? createGeneratedLocalEmail(driver.name, usedEmails);
+
+    pushUser({
+      email,
+      name: driver.name,
+      role: normalizeRole(driver.role) ?? "Driver",
+      actorId: mappedAccount?.actorId ?? driver.staffId,
+      staffId: driver.staffId,
+      createdAt: driver.createdAt ?? null,
+      createdBy: driver.createdBy ?? null,
+      createdByRole: driver.createdByRole ?? null,
+    });
+  });
+
+  if (!users.some((user) => user.email === "manager@taxiflow.local")) {
+    pushUser({
+      email: "manager@taxiflow.local",
+      name: AUTH_ACCOUNT_DIRECTORY["manager@taxiflow.local"].name,
+      role: "Manager",
+      actorId: "mgr-01",
+      staffId: "mgr-01",
+    });
+  }
+
+  return sortAppUsers(users);
+};
+
+const getAppUsers = (snapshot) => {
+  const defaultUsers = buildDefaultAppUsers(snapshot);
+  const storedUsers = Array.isArray(snapshot?.appUsers) ? snapshot.appUsers.map(normalizeAppUser) : [];
+  const usersByEmail = new Map(defaultUsers.map((user) => [user.email, user]));
+  const usersByActorId = new Map(defaultUsers.map((user) => [user.actorId, user]));
+
+  storedUsers.forEach((user) => {
+    const fallbackUser = usersByEmail.get(user.email) ?? usersByActorId.get(user.actorId);
+    const nextUser = fallbackUser
+      ? normalizeAppUser({
+          ...fallbackUser,
+          ...user,
+          moduleAccess: user.moduleAccess ?? fallbackUser.moduleAccess,
+        })
+      : user;
+
+    usersByEmail.set(nextUser.email, nextUser);
+    usersByActorId.set(nextUser.actorId, nextUser);
+  });
+
+  return sortAppUsers(Array.from(usersByEmail.values()));
+};
+
+const getAppUserByEmail = (snapshot, email) =>
+  getAppUsers(snapshot).find(
+    (user) => user.email === String(email ?? "").trim().toLowerCase(),
+  ) ?? null;
+
+const canAssignRoleToUser = (role, user) => {
+  const normalizedRole = normalizeRole(role);
+
+  if (!normalizedRole) {
+    return false;
+  }
+
+  if (normalizedRole !== "Driver") {
+    return true;
+  }
+
+  return Boolean(user?.staffId);
+};
+
+const canAssignModuleToRole = (role, moduleKey) =>
+  SETTINGS_ASSIGNABLE_MODULES.includes(moduleKey) &&
+  Boolean(MODULE_VIEW_ACCESS[moduleKey]?.roles.includes(normalizeRole(role) ?? ""));
+
+const createUserAccessDraft = (user) => {
+  const role = normalizeRole(user?.role) ?? "Driver";
+
+  return {
+    id: user?.id ?? null,
+    email: user?.email ?? "",
+    name: user?.name ?? "",
+    role,
+    actorId: user?.actorId ?? "",
+    staffId: user?.staffId ?? null,
+    moduleAccess: normalizeModuleViewAccess(user?.moduleAccess, role),
+  };
+};
+
+const resolveAuthIdentity = (user, snapshot) => {
   if (!user) {
     return null;
   }
@@ -262,6 +573,7 @@ const resolveAuthIdentity = (user) => {
   const email = String(user.email ?? "")
     .trim()
     .toLowerCase();
+  const snapshotAccount = getAppUserByEmail(snapshot, email);
   const mappedAccount = AUTH_ACCOUNT_DIRECTORY[email];
   const metadataRole = normalizeRole(user.app_metadata?.role ?? user.user_metadata?.role);
   const metadataStaffId =
@@ -270,6 +582,17 @@ const resolveAuthIdentity = (user) => {
     user.user_metadata?.staffId ??
     user.user_metadata?.staff_id ??
     null;
+
+  if (snapshotAccount) {
+    return {
+      email,
+      role: snapshotAccount.role,
+      actorId: snapshotAccount.actorId,
+      staffId: snapshotAccount.staffId,
+      moduleAccess: snapshotAccount.moduleAccess,
+      name: snapshotAccount.name,
+    };
+  }
 
   if (mappedAccount) {
     return {
@@ -289,16 +612,20 @@ const resolveAuthIdentity = (user) => {
       metadataRole === "Driver"
         ? metadataStaffId ?? "driver-terminal"
         : metadataStaffId ?? `${metadataRole.toLowerCase()}-session`,
+    staffId: metadataStaffId ?? null,
+    moduleAccess: normalizeModuleViewAccess({}, metadataRole),
   };
 };
 
-const createLocalAuthSession = (email, account) => ({
+const createLocalAuthSession = (email, account = null) => ({
   user: {
     email,
-    app_metadata: {
-      role: account.role,
-      staffId: account.actorId,
-    },
+    app_metadata: account
+      ? {
+          role: account.role,
+          staffId: account.actorId,
+        }
+      : {},
     user_metadata: {},
   },
 });
@@ -310,9 +637,9 @@ const readStoredLocalAuthSession = () => {
 
   try {
     const email = window.localStorage.getItem(LOCAL_AUTH_STORAGE_KEY);
-    const account = AUTH_ACCOUNT_DIRECTORY[String(email ?? "").trim().toLowerCase()];
+    const account = AUTH_ACCOUNT_DIRECTORY[String(email ?? "").trim().toLowerCase()] ?? null;
 
-    return account && email ? createLocalAuthSession(email, account) : null;
+    return email ? createLocalAuthSession(email, account) : null;
   } catch {
     return null;
   }
@@ -719,8 +1046,9 @@ const formatDailyTripMeta = (record) =>
 const formatTransactionStatus = (status) =>
   (
     {
-      pending: "Waiting",
-      verified: "Checked",
+      pending: "Waiting hand-in",
+      counted: "Waiting manager check",
+      verified: "Manager checked",
       banked: "Deposited",
     }[status]
   ) ?? status;
@@ -1082,12 +1410,15 @@ const deriveQueueStatus = (record, shortage, gapKm) => {
     return "Deposited";
   }
   if (record.status === "pending") {
-    return "Waiting for cash check";
+    return "Waiting for admin hand-in";
+  }
+  if (record.status === "counted") {
+    return shortage > 0 || gapKm > 0 ? "Needs manager review" : "Waiting for manager check";
   }
   if (shortage > 0 || gapKm > 0) {
-    return "Needs review";
+    return "Checked with issues";
   }
-  return "Checked";
+  return "Manager checked";
 };
 
 const getDaysLeft = (expiryDate, currentDate) => {
@@ -1265,9 +1596,19 @@ const deriveSnapshot = (source) => {
   const deposits = [...(source.deposits ?? [])].sort(
     (left, right) => new Date(right.timestamp) - new Date(left.timestamp),
   );
+  const activeIncomeBatch = transactions.filter(
+    (record) => record.type === "income" && record.status !== "banked",
+  );
   const verifiedIncome = transactions.filter(
     (record) => record.type === "income" && record.status === "verified",
   );
+  const countedIncome = transactions.filter(
+    (record) =>
+      record.type === "income" &&
+      ["counted", "verified", "banked"].includes(record.status) &&
+      record.actualCashReceived != null,
+  );
+  const activeCountedIncome = countedIncome.filter((record) => record.status !== "banked");
   const settledIncome = transactions.filter(
     (record) =>
       record.type === "income" &&
@@ -1316,8 +1657,7 @@ const deriveSnapshot = (source) => {
     ]),
   );
 
-  const verificationQueue = transactions
-    .filter((record) => record.type === "income")
+  const verificationQueue = activeIncomeBatch
     .map((record) => {
       const assignedDriver =
         enrichedVehicles.find((vehicle) => vehicle.id === record.vehicleId)?.assignedDriver ??
@@ -1359,10 +1699,10 @@ const deriveSnapshot = (source) => {
     })
     .slice(0, 8);
 
-  const standardIncome = transactions.filter(
+  const standardIncome = activeIncomeBatch.filter(
     (record) => record.type === "income" && record.incomeKind === "standard",
   );
-  const specialIncome = transactions.filter(
+  const specialIncome = activeIncomeBatch.filter(
     (record) => record.type === "income" && record.isSpecial,
   );
   const routeSeries = standardIncome.slice(0, 4).map((record) => ({
@@ -1487,6 +1827,7 @@ const deriveSnapshot = (source) => {
     drivers,
     defects,
     auditTrail,
+    operationsLoop: OPERATIONS_WORKFLOW,
     documents,
     serviceSchedule,
     driverTerminal: {
@@ -1512,19 +1853,24 @@ const deriveSnapshot = (source) => {
     finance: {
       ...source.finance,
       todayClaimed: sumBy(
-        transactions.filter((record) => record.type === "income"),
+        activeIncomeBatch,
         (record) => record.amountClaimed ?? record.amount,
       ),
       todayCounted: sumBy(
-        transactions.filter(
-          (record) => record.type === "income" && record.actualCashReceived != null,
-        ),
+        activeCountedIncome,
         (record) => record.actualCashReceived,
       ),
       pendingCashInSafe: bankableCash,
       verifiedToday: verifiedIncome.length,
       shiftsAwaitingVerification: transactions.filter(
+        (record) =>
+          record.type === "income" && !["verified", "banked"].includes(record.status),
+      ).length,
+      handoversAwaitingAdmin: transactions.filter(
         (record) => record.type === "income" && record.status === "pending",
+      ).length,
+      checksAwaitingManager: transactions.filter(
+        (record) => record.type === "income" && record.status === "counted",
       ).length,
       globalFleetProfit:
         sumBy(settledIncome, getIncomeCashValue) - sumBy(settledExpenses, (record) => record.amount),
@@ -1829,17 +2175,73 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [backendMode, setBackendMode] = useState(() => repository.backendMode);
   const [backendFeedback, setBackendFeedback] = useState(null);
+  const [liveLoadWarning, setLiveLoadWarning] = useState(null);
+  const [liveSaveWarning, setLiveSaveWarning] = useState(null);
+  const [installPromptEvent, setInstallPromptEvent] = useState(null);
+  const [installPromptOpen, setInstallPromptOpen] = useState(false);
+  const [pwaInstalled, setPwaInstalled] = useState(() => isStandaloneDisplay());
   const [activeRole, setActiveRole] = useState("Owner");
   const [activeView, setActiveView] = useState("overview");
   const [driverShortcutIntent, setDriverShortcutIntent] = useState(null);
   const [authSession, setAuthSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authSubmitting, setAuthSubmitting] = useState(false);
+  const [factoryResetSubmitting, setFactoryResetSubmitting] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [authDraft, setAuthDraft] = useState({
     email: "",
     password: "",
   });
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const displayModeQuery = window.matchMedia?.("(display-mode: standalone)");
+    const syncInstallState = () => {
+      const installed = isStandaloneDisplay();
+      setPwaInstalled(installed);
+
+      if (installed) {
+        setInstallPromptEvent(null);
+        setInstallPromptOpen(false);
+      }
+    };
+
+    const handleBeforeInstallPrompt = (event) => {
+      event.preventDefault();
+      setInstallPromptEvent(event);
+      syncInstallState();
+    };
+
+    const handleAppInstalled = () => {
+      setInstallPromptEvent(null);
+      setInstallPromptOpen(false);
+      setPwaInstalled(true);
+    };
+
+    syncInstallState();
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    window.addEventListener("appinstalled", handleAppInstalled);
+
+    if (displayModeQuery?.addEventListener) {
+      displayModeQuery.addEventListener("change", syncInstallState);
+    } else if (displayModeQuery?.addListener) {
+      displayModeQuery.addListener(syncInstallState);
+    }
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", handleAppInstalled);
+
+      if (displayModeQuery?.removeEventListener) {
+        displayModeQuery.removeEventListener("change", syncInstallState);
+      } else if (displayModeQuery?.removeListener) {
+        displayModeQuery.removeListener(syncInstallState);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!authEnabled) {
@@ -1900,12 +2302,22 @@ function App() {
       .loadSnapshot(backendMode)
       .then((data) => {
         if (isMounted) {
+          syncLiveWarning(
+            setLiveLoadWarning,
+            backendMode === "live" && (data?.ok === false || data?.warning)
+              ? LIVE_SYNC_WARNING_MESSAGE
+              : null,
+          );
           setSnapshot(data);
           setLoading(false);
         }
       })
       .catch(() => {
         if (isMounted) {
+          syncLiveWarning(
+            setLiveLoadWarning,
+            backendMode === "live" ? LIVE_SYNC_WARNING_MESSAGE : null,
+          );
           setLoading(false);
         }
       });
@@ -1916,30 +2328,117 @@ function App() {
   }, [authEnabled, authLoading, authSession?.user?.id, backendMode]);
 
   useEffect(() => {
-    if (!loading && snapshot) {
-      repository.persistSnapshot(snapshot, backendMode);
+    if (loading || !snapshot) {
+      return undefined;
     }
+
+    let isCurrent = true;
+
+    repository
+      .persistSnapshot(snapshot, backendMode)
+      .then((result) => {
+        if (!isCurrent) {
+          return;
+        }
+
+        syncLiveWarning(
+          setLiveSaveWarning,
+          backendMode === "live" && (result?.ok === false || result?.warning)
+            ? LIVE_SAVE_WARNING_MESSAGE
+            : null,
+        );
+      })
+      .catch(() => {
+        if (!isCurrent) {
+          return;
+        }
+
+        syncLiveWarning(
+          setLiveSaveWarning,
+          backendMode === "live" ? LIVE_SAVE_WARNING_MESSAGE : null,
+        );
+      });
+
+    return () => {
+      isCurrent = false;
+    };
   }, [backendMode, loading, snapshot]);
 
+  useEffect(() => {
+    if (backendMode !== "live" || (authEnabled && (authLoading || !authSession))) {
+      return undefined;
+    }
+
+    let isCurrent = true;
+
+    const flushPendingLiveSave = async () => {
+      const result = await repository.flushPendingLiveSnapshot();
+
+      if (!isCurrent) {
+        return;
+      }
+
+      syncLiveWarning(
+        setLiveSaveWarning,
+        result?.ok === false || result?.warning ? LIVE_SAVE_WARNING_MESSAGE : null,
+      );
+    };
+
+    void flushPendingLiveSave();
+
+    if (typeof window === "undefined") {
+      return () => {
+        isCurrent = false;
+      };
+    }
+
+    const handleOnline = () => {
+      void flushPendingLiveSave();
+    };
+    const retryId = window.setInterval(handleOnline, 30_000);
+
+    window.addEventListener("online", handleOnline);
+
+    return () => {
+      isCurrent = false;
+      window.clearInterval(retryId);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [authEnabled, authLoading, authSession, backendMode]);
+
+  useEffect(() => {
+    if (backendMode === "live") {
+      return;
+    }
+
+    syncLiveWarning(setLiveLoadWarning, null);
+    syncLiveWarning(setLiveSaveWarning, null);
+  }, [backendMode]);
+
   const currentSnapshot = useMemo(() => deriveSnapshot(snapshot), [snapshot]);
+  const liveOperationalWarning = useMemo(
+    () => (backendMode === "live" ? liveLoadWarning ?? liveSaveWarning : null),
+    [backendMode, liveLoadWarning, liveSaveWarning],
+  );
+  const appUsers = useMemo(() => getAppUsers(currentSnapshot), [currentSnapshot]);
   const permissionControls = useMemo(
     () => getPermissionControls(currentSnapshot),
     [currentSnapshot],
   );
-  const authIdentity = useMemo(() => resolveAuthIdentity(authSession?.user ?? null), [authSession]);
+  const authIdentity = useMemo(
+    () => resolveAuthIdentity(authSession?.user ?? null, currentSnapshot),
+    [authSession, currentSnapshot],
+  );
+  const authModuleAccess = useMemo(
+    () => normalizeModuleViewAccess(authIdentity?.moduleAccess, authIdentity?.role),
+    [authIdentity],
+  );
   const authDisplayName = useMemo(() => {
     if (!authIdentity || !currentSnapshot) {
       return authIdentity?.email ?? null;
     }
 
-    if (authIdentity.role === "Driver") {
-      return (
-        currentSnapshot.drivers.find((driver) => driver.staffId === authIdentity.actorId)?.name ??
-        authIdentity.email
-      );
-    }
-
-    return authIdentity.email;
+    return authIdentity.name ?? authIdentity.email;
   }, [authIdentity, currentSnapshot]);
 
   useEffect(() => {
@@ -2018,8 +2517,11 @@ function App() {
   }, [authIdentity?.email, authIdentity?.role]);
 
   const allowedViews = useMemo(
-    () => NAV_ITEMS.filter((item) => item.roles.includes(activeRole)),
-    [activeRole],
+    () =>
+      NAV_ITEMS.filter(
+        (item) => item.roles.includes(activeRole) && Boolean(authModuleAccess[item.id]),
+      ),
+    [activeRole, authModuleAccess],
   );
 
   useEffect(() => {
@@ -2041,8 +2543,6 @@ function App() {
   }
 
   const resolveCurrentActorId = (current) => getCurrentActorId(activeRole, current, authIdentity);
-  const createRecordId = (prefix) =>
-    `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
   const buildCurrentAuditEvent = (current, event) =>
     createAuditEvent({
@@ -2063,7 +2563,7 @@ function App() {
     const normalizedEmail = authDraft.email.trim().toLowerCase();
 
     if (!authEnabled) {
-      const account = AUTH_ACCOUNT_DIRECTORY[normalizedEmail];
+      const account = getAppUserByEmail(currentSnapshot, normalizedEmail);
 
       if (!account) {
         setAuthError("This email is not assigned to a TaxiFlow account.");
@@ -2378,6 +2878,107 @@ function App() {
     return result;
   };
 
+  const saveUserAccess = (draft) => {
+    let result = { ok: false, error: "Unable to save this user access change." };
+
+    setSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+      if (activeRole !== "Owner") {
+        result = { ok: false, error: "Only the owner can change roles and access rights." };
+        return current;
+      }
+
+      const currentUsers = getAppUsers(current);
+      const existingUser =
+        currentUsers.find(
+          (user) =>
+            user.id === draft.id ||
+            user.email === String(draft.email ?? "").trim().toLowerCase(),
+        ) ?? null;
+
+      if (!existingUser) {
+        result = { ok: false, error: "This user account could not be found." };
+        return current;
+      }
+
+      if (existingUser.email === String(authSession?.user?.email ?? "").trim().toLowerCase()) {
+        result = {
+          ok: false,
+          error: "Use another owner account if you need to change the signed-in owner profile.",
+        };
+        return current;
+      }
+
+      const nextRole = normalizeRole(draft.role);
+      if (!nextRole) {
+        result = { ok: false, error: "Select a valid TaxiFlow role." };
+        return current;
+      }
+
+      if (!canAssignRoleToUser(nextRole, existingUser)) {
+        result = {
+          ok: false,
+          error: "This account must be linked to a driver profile before it can use the Driver role.",
+        };
+        return current;
+      }
+
+      const ownerCount = currentUsers.filter((user) => user.role === "Owner").length;
+      if (existingUser.role === "Owner" && nextRole !== "Owner" && ownerCount <= 1) {
+        result = { ok: false, error: "TaxiFlow must always keep at least one owner account." };
+        return current;
+      }
+
+      const timestamp = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
+      const nextUser = normalizeAppUser({
+        ...existingUser,
+        role: nextRole,
+        moduleAccess: normalizeModuleViewAccess(draft.moduleAccess, nextRole),
+        updatedAt: timestamp,
+        updatedBy: actorId,
+        updatedByRole: activeRole,
+      });
+      const nextUsers = sortAppUsers(
+        currentUsers.map((user) => (user.email === existingUser.email ? nextUser : normalizeAppUser(user))),
+      );
+      const enabledModules = SETTINGS_ASSIGNABLE_MODULES.filter(
+        (moduleKey) => nextUser.moduleAccess[moduleKey],
+      ).map((moduleKey) => MODULE_VIEW_ACCESS[moduleKey].label);
+
+      result = {
+        ok: true,
+        message: `${nextUser.name} updated as ${nextUser.role}.`,
+      };
+
+      return {
+        ...current,
+        appUsers: nextUsers,
+        auditTrail: appendAuditTrail(current.auditTrail, [
+          buildCurrentAuditEvent(current, {
+            timestamp,
+            scope: "system",
+            action: "update",
+            entityType: "user-access",
+            entityId: nextUser.id,
+            title: `User access updated / ${nextUser.name}`,
+            detail: [
+              nextUser.email,
+              `Role ${nextUser.role}`,
+              enabledModules.length > 0
+                ? `Rights ${enabledModules.join(", ")}`
+                : "Rights overview only",
+            ].join(" / "),
+          }),
+        ]),
+      };
+    });
+
+    return result;
+  };
+
   const selectDriverVehicle = (vehicleId) => {
     setSnapshot((current) => {
       if (!current) {
@@ -2569,8 +3170,8 @@ function App() {
       result = {
         ok: true,
         message: nextRecord.discrepancy
-          ? "Trip saved, but the opening odometer does not match the last record."
-          : "Trip saved and waiting to be checked.",
+          ? "Trip saved and added to the daily total, but the opening odometer does not match the last record."
+          : "Trip saved, added to the daily total, and waiting for admin cash hand-in.",
         nextOpeningOdo: closingOdo,
       };
 
@@ -2711,7 +3312,7 @@ function App() {
 
       result = {
         ok: true,
-        message: "Extra trip saved and waiting to be checked.",
+        message: "Extra trip saved, added to the daily total, and waiting for admin cash hand-in.",
       };
 
       return {
@@ -2836,7 +3437,7 @@ function App() {
   };
 
   const verifyIncome = (transactionId, actualCashReceived) => {
-    let result = { ok: false, error: "Unable to check this income record." };
+    let result = { ok: false, error: "Unable to update this cash hand-in record." };
 
     setSnapshot((current) => {
       if (!current) {
@@ -2848,10 +3449,6 @@ function App() {
       const now = new Date().toISOString();
       const actorId = resolveCurrentActorId(current);
 
-      if (!hasModuleUpdateAccess(current, "finance")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
-        return current;
-      }
       if (!target || target.type !== "income") {
         result = { ok: false, error: "Income record not found." };
         return current;
@@ -2860,46 +3457,127 @@ function App() {
         result = { ok: false, error: "Deposited records can no longer be changed." };
         return current;
       }
-      if (!Number.isFinite(amount) || amount < 0) {
-        result = { ok: false, error: "Enter the cash received before checking this record." };
-        return current;
+
+      if (target.status === "pending") {
+        if (!canRecordCashHandoverForRole(activeRole)) {
+          result = {
+            ok: false,
+            error: "Administrator must record the cash hand-in before manager verification.",
+          };
+          return current;
+        }
+        if (!Number.isFinite(amount) || amount < 0) {
+          result = {
+            ok: false,
+            error: "Enter the cash received before recording the hand-in.",
+          };
+          return current;
+        }
+
+        const nextTransactions = current.financeTransactions.map((record) =>
+          record.id === transactionId
+            ? {
+                ...record,
+                actualCashReceived: amount,
+                status: "counted",
+                countedAt: now,
+                countedBy: actorId,
+                countedByRole: activeRole,
+                verifiedAt: null,
+                verifiedBy: null,
+                verifiedByRole: null,
+              }
+            : record,
+        );
+        const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+          buildCurrentAuditEvent(current, {
+            timestamp: now,
+            scope: "finance",
+            action: "update",
+            entityType: "income",
+            entityId: transactionId,
+            title: `Cash hand-in recorded / ${target.vehicle ?? "General"}`,
+            detail: `${formatMoney(amount)} handed in to admin`,
+          }),
+        ]);
+
+        result = {
+          ok: true,
+          message: "Cash hand-in recorded and waiting for manager verification.",
+          shortage: Math.max(Number(target.amountClaimed ?? target.amount ?? 0) - amount, 0),
+        };
+
+        return {
+          ...current,
+          financeTransactions: nextTransactions,
+          auditTrail: nextAuditTrail,
+        };
       }
 
-      const nextTransactions = current.financeTransactions.map((record) =>
-        record.id === transactionId
-          ? {
-              ...record,
-              actualCashReceived: amount,
-              status: "verified",
-              verifiedAt: now,
-              verifiedBy: actorId,
-              verifiedByRole: activeRole,
-            }
-          : record,
-      );
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "finance",
-          action: "verify",
-          entityType: "income",
-          entityId: transactionId,
-          title: `Trip income checked / ${target.vehicle ?? "General"}`,
-          detail: `${formatMoney(amount)} counted`,
-        }),
-      ]);
+      if (target.status === "counted") {
+        if (!canVerifyCashCheckForRole(activeRole)) {
+          result = {
+            ok: false,
+            error: "Manager must verify the admin cash checking before banking.",
+          };
+          return current;
+        }
+
+        const finalAmount =
+          Number.isFinite(amount) && amount >= 0 ? amount : Number(target.actualCashReceived ?? NaN);
+        if (!Number.isFinite(finalAmount) || finalAmount < 0) {
+          result = {
+            ok: false,
+            error: "Administrator must record the cash hand-in before manager verification.",
+          };
+          return current;
+        }
+
+        const nextTransactions = current.financeTransactions.map((record) =>
+          record.id === transactionId
+            ? {
+                ...record,
+                actualCashReceived: finalAmount,
+                status: "verified",
+                verifiedAt: now,
+                verifiedBy: actorId,
+                verifiedByRole: activeRole,
+              }
+            : record,
+        );
+        const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+          buildCurrentAuditEvent(current, {
+            timestamp: now,
+            scope: "finance",
+            action: "verify",
+            entityType: "income",
+            entityId: transactionId,
+            title: `Cash checking verified / ${target.vehicle ?? "General"}`,
+            detail: `${formatMoney(finalAmount)} manager checked`,
+          }),
+        ]);
+
+        result = {
+          ok: true,
+          message: "Cash checking verified and added to cash ready for banking.",
+          shortage: Math.max(Number(target.amountClaimed ?? target.amount ?? 0) - finalAmount, 0),
+        };
+
+        return {
+          ...current,
+          financeTransactions: nextTransactions,
+          auditTrail: nextAuditTrail,
+        };
+      }
 
       result = {
-        ok: true,
-        message: "Income record checked and added to cash ready for banking.",
-        shortage: Math.max(Number(target.amountClaimed ?? target.amount ?? 0) - amount, 0),
+        ok: false,
+        error:
+          target.status === "verified"
+            ? "This cash checking has already been verified."
+            : "This income record is not ready for another cash action.",
       };
-
-      return {
-        ...current,
-        financeTransactions: nextTransactions,
-        auditTrail: nextAuditTrail,
-      };
+      return current;
     });
 
     return result;
@@ -2967,7 +3645,7 @@ function App() {
   };
 
   const lockDeposit = () => {
-    let result = { ok: false, error: "No checked records are ready to finalise." };
+    let result = { ok: false, error: "No manager-checked records are ready to finalise." };
 
     setSnapshot((current) => {
       if (!current) {
@@ -3029,7 +3707,7 @@ function App() {
 
       result = {
         ok: true,
-        message: `${lockableTransactions.length} checked records were added to ${reference}.`,
+        message: `${lockableTransactions.length} manager-checked records were added to ${reference}.`,
         reference,
       };
 
@@ -3635,6 +4313,7 @@ function App() {
     backendMode === "live"
       ? `Client data is stored in ${repository.liveModeSourceLabel} with a clean live slate.`
       : "Training and presentation data is active. Reset demo to start from zero.";
+  const showInstallButton = Boolean(installPromptEvent) && !pwaInstalled;
 
   const handleBackendModeChange = (nextMode) => {
     const resolvedMode = repository.setBackendMode(nextMode);
@@ -3657,13 +4336,74 @@ function App() {
     }
   };
 
-  const handleResetDemoMode = () => {
-    const resetSnapshot = repository.resetModeSnapshot("mock");
+  const handleInstallApp = async () => {
+    if (!installPromptEvent) {
+      return;
+    }
+
+    setInstallPromptOpen(true);
+
+    try {
+      await installPromptEvent.prompt();
+      await installPromptEvent.userChoice;
+      setInstallPromptEvent(null);
+    } catch {
+      // Ignore prompt failures and keep the current shell usable.
+    } finally {
+      setInstallPromptOpen(false);
+    }
+  };
+
+  const handleFactoryReset = async (password) => {
+    if (activeRole !== "Owner") {
+      return { ok: false, error: "Only the owner can run a factory reset." };
+    }
+
+    const submittedPassword = String(password ?? "");
+    if (!submittedPassword.trim()) {
+      return { ok: false, error: "Enter the owner password before resetting the workspace." };
+    }
+
+    setFactoryResetSubmitting(true);
+
+    if (!authEnabled) {
+      if (submittedPassword !== LOCAL_AUTH_PASSWORD) {
+        setFactoryResetSubmitting(false);
+        return { ok: false, error: "Incorrect owner password." };
+      }
+    } else {
+      try {
+        const { error } = await supabase.auth.signInWithPassword({
+          email: String(authSession?.user?.email ?? "").trim().toLowerCase(),
+          password: submittedPassword,
+        });
+
+        if (error) {
+          setFactoryResetSubmitting(false);
+          return { ok: false, error: "Incorrect owner password." };
+        }
+      } catch {
+        setFactoryResetSubmitting(false);
+        return { ok: false, error: "Unable to confirm the owner password right now." };
+      }
+    }
+
+    const resetSnapshot = repository.resetModeSnapshot(backendMode);
     setSnapshot(resetSnapshot);
     setBackendFeedback({
       tone: "warning",
-      message: "Demo workspace reset. Training capture now starts from zero.",
+      message: `${
+        backendMode === "live" ? "Live" : "Demo"
+      } workspace reset to factory settings.`,
     });
+    setFactoryResetSubmitting(false);
+
+    return {
+      ok: true,
+      message: `${
+        backendMode === "live" ? "Live" : "Demo"
+      } workspace reset to factory settings.`,
+    };
   };
 
   const openDefects = currentSnapshot.defects.filter(
@@ -3676,16 +4416,15 @@ function App() {
   const activeDrivers = currentSnapshot.drivers.filter(
     (driver) => driver.role === "Driver",
   ).length;
+  const overviewAttentionCount = openDefects + criticalDocs;
 
   const moduleMeta = {
     overview: {
       stat:
         activeRole === "Driver"
           ? currentSnapshot.driverTerminal.assignedVehicle
-          : backendMode === "live"
-            ? "Live"
-            : "Demo",
-      sub: activeRole === "Driver" ? "My terminal" : "Operations",
+          : `${overviewAttentionCount}`,
+      sub: activeRole === "Driver" ? "My terminal" : "Need action",
     },
     finance: {
       stat: `${currentSnapshot.finance.shiftsAwaitingVerification}`,
@@ -3695,13 +4434,13 @@ function App() {
       stat: activeRole === "Driver" ? currentSnapshot.driverTerminal.assignedVehicle : `${visibleFleetCount}`,
       sub: activeRole === "Driver" ? "My vehicle" : "Visible fleet",
     },
-    compliance: {
-      stat: `${criticalDocs}`,
-      sub: "Critical docs",
-    },
     drivers: {
       stat: `${activeDrivers}`,
       sub: "Active drivers",
+    },
+    settings: {
+      stat: `${appUsers.length}`,
+      sub: "User access",
     },
   };
 
@@ -3730,52 +4469,14 @@ function App() {
                   <Clock size={14} />
                   <span>Banking window {currentSnapshot.profile.nextBankingWindow}</span>
                 </span>
-                <article className="backend-mode-panel">
-                  <div className="backend-mode-head">
-                    <Settings2 size={14} />
-                    <div>
-                      <p className="eyebrow">Data mode</p>
-                      <strong>{backendModeLabel}</strong>
-                    </div>
-                  </div>
-                  <div className="backend-mode-switch" role="group" aria-label="Data mode toggle">
-                    <button
-                      type="button"
-                      className={
-                        backendMode === "mock" ? "role-pill compact active" : "role-pill compact"
-                      }
-                      onClick={() => handleBackendModeChange("mock")}
-                    >
-                      Demo
-                    </button>
-                    <button
-                      type="button"
-                      className={
-                        backendMode === "live"
-                          ? "role-pill compact active"
-                          : "role-pill compact"
-                      }
-                      onClick={() => handleBackendModeChange("live")}
-                    >
-                      Live
-                    </button>
-                  </div>
-                  {backendMode === "mock" && (
-                    <div className="backend-mode-actions">
-                      <button
-                        type="button"
-                        className="role-pill compact"
-                        onClick={handleResetDemoMode}
-                      >
-                        Reset demo
-                      </button>
-                    </div>
-                  )}
-                  <p className="backend-mode-note">{backendModeNote}</p>
-                </article>
                 {backendFeedback && (
                   <span className="status-chip" data-tone={backendFeedback.tone}>
                     {backendFeedback.message}
+                  </span>
+                )}
+                {liveOperationalWarning && (
+                  <span className="status-chip" data-tone="warning">
+                    {liveOperationalWarning}
                   </span>
                 )}
               </div>
@@ -3788,6 +4489,17 @@ function App() {
                   <strong>{authDisplayName}</strong>
                   <span>{authSession?.user?.email}</span>
                 </div>
+                {showInstallButton && (
+                  <button
+                    type="button"
+                    className="role-pill compact"
+                    onClick={handleInstallApp}
+                    disabled={installPromptOpen}
+                  >
+                    <ArrowDownToLine size={14} />
+                    <span>{installPromptOpen ? "Installing..." : "Install app"}</span>
+                  </button>
+                )}
                 <button
                   type="button"
                   className="role-pill compact"
@@ -3854,7 +4566,6 @@ function App() {
               onSelectDriverVehicle={selectDriverVehicle}
             />
           )}
-          {activeView === "compliance" && <CompliancePanel snapshot={currentSnapshot} />}
           {activeView === "drivers" && (
             <DriversPanel
               snapshot={currentSnapshot}
@@ -3868,6 +4579,20 @@ function App() {
               onSaveDriver={saveDriver}
               onAllocateDriverShift={allocateDriverShift}
               onSelectDriverVehicle={selectDriverVehicle}
+            />
+          )}
+          {activeView === "settings" && (
+            <SettingsPanel
+              snapshot={currentSnapshot}
+              backendMode={backendMode}
+              backendModeLabel={backendModeLabel}
+              backendModeNote={backendModeNote}
+              currentUserEmail={authSession?.user?.email ?? ""}
+              factoryResetSubmitting={factoryResetSubmitting}
+              isLocalAuth={!authEnabled}
+              onChangeBackendMode={handleBackendModeChange}
+              onFactoryReset={handleFactoryReset}
+              onSaveUserAccess={saveUserAccess}
             />
           )}
         </main>
@@ -4054,9 +4779,9 @@ function OverviewPanel({
               <h3>Quick actions</h3>
             </div>
             <div className="shortcut-grid compact">
-              {snapshot.driverTerminal.shortcuts.map((shortcut) => (
+              {snapshot.driverTerminal.shortcuts.map((shortcut, index) => (
                 <button
-                  key={shortcut}
+                  key={`${shortcut}-${index}`}
                   type="button"
                   className="shortcut-button"
                   onClick={() => onShortcutAction(shortcut)}
@@ -4073,9 +4798,9 @@ function OverviewPanel({
               <h3>My alerts</h3>
             </div>
             <div className="compact-feed">
-              {driverDefects.slice(0, 2).map((defect) => (
+              {driverDefects.slice(0, 2).map((defect, index) => (
                 <CompactFeedItem
-                  key={`${defect.vehicle}-${defect.issue}`}
+                  key={defect.id ?? `${defect.vehicle}-${defect.issue}-${index}`}
                   title={defect.issue}
                   subtitle={defect.statusLabel ?? defect.status}
                   tone={getDefectTone(defect.severity)}
@@ -4099,11 +4824,27 @@ function OverviewPanel({
     <div className="content-stack">
       <div className="analytics-grid overview-analytics">
         <InsightCard
-          title="Cash on hand"
-          metric={formatMoney(snapshot.finance.pendingCashInSafe)}
-          meta={`${snapshot.finance.verifiedToday} checked`}
-          icon={Lock}
+          title="Daily total entered"
+          metric={formatMoney(snapshot.finance.todayClaimed)}
+          meta={`${snapshot.finance.handoversAwaitingAdmin} waiting hand-in / ${snapshot.finance.checksAwaitingManager} waiting manager`}
+          icon={Banknote}
           tone="warning"
+        >
+          <SegmentMeter
+            segments={[
+              { label: "Hand-in", value: snapshot.finance.handoversAwaitingAdmin, tone: "warning" },
+              { label: "Manager", value: snapshot.finance.checksAwaitingManager, tone: "info" },
+              { label: "Ready", value: snapshot.finance.verifiedToday, tone: "success" },
+            ]}
+          />
+        </InsightCard>
+
+        <InsightCard
+          title="Cash handed in"
+          metric={formatMoney(snapshot.finance.todayCounted)}
+          meta={`${snapshot.finance.checksAwaitingManager} waiting manager check`}
+          icon={Lock}
+          tone={snapshot.finance.checksAwaitingManager > 0 ? "warning" : "success"}
         >
           <MiniCompareChart items={cashSeries} />
         </InsightCard>
@@ -4210,13 +4951,15 @@ function OverviewPanel({
               Fleet
               <ChevronRight size={16} />
             </button>
-            <button className="cta-link" onClick={() => onNavigate("compliance")} type="button">
-              Documents
+            <button className="cta-link" onClick={() => onNavigate("drivers")} type="button">
+              Drivers
               <ChevronRight size={16} />
             </button>
           </div>
         </article>
       </div>
+
+      <CompliancePanel snapshot={snapshot} />
 
       {activeRole !== "Driver" && (
         <AdminEditAccessPanel
@@ -4449,7 +5192,9 @@ function FinancePanel({
   );
   const standardValidationError = getStandardDraftValidationError(standardDraft);
   const specialValidationError = getSpecialDraftValidationError(specialDraft);
-  const verificationRecords = incomeRecords.slice(0, 8);
+  const verificationRecords = incomeRecords
+    .filter((record) => record.status !== "banked")
+    .slice(0, 8);
   const pendingVerificationCount = verificationRecords.filter(
     (record) => record.status === "pending",
   ).length;
@@ -4462,6 +5207,8 @@ function FinancePanel({
     "finance",
     permissionControls,
   );
+  const canRecordCashHandIn = canRecordCashHandoverForRole(activeRole);
+  const canVerifyFinanceChecks = canVerifyCashCheckForRole(activeRole);
   const financeAccessStatus = getModuleAccessStatus(permissionControls.finance);
 
   useEffect(() => {
@@ -4662,7 +5409,7 @@ function FinancePanel({
               Extra trips
             </span>
             <span className="status-chip" data-tone="success">
-              {finance.shiftsAwaitingVerification} waiting to be checked
+              {finance.todayClaimed > 0 ? formatMoney(finance.todayClaimed) : "No takings yet"}
             </span>
           </div>
         </div>
@@ -4705,7 +5452,7 @@ function FinancePanel({
         <FinanceModeButton
           active={financeView === "banking"}
           label="Banking"
-          meta="Check cash and finish deposits"
+          meta="Cash hand-in, manager check, and deposits"
           icon={Lock}
           onClick={() => setFinanceView("banking")}
         />
@@ -4727,7 +5474,8 @@ function FinancePanel({
           </div>
           <p className="panel-note">
             A manager must ask the owner for approval, then grant admin access before you can edit
-            daily takings, verify cash, delete records, or finish deposits.
+            saved daily takings, delete records, or finish deposits. Cash hand-ins stay available
+            so you can compare what was received against the app.
           </p>
           <div className="finance-form-meta">
             <span className="status-chip" data-tone={financeAccessStatus.tone}>
@@ -4775,26 +5523,27 @@ function FinancePanel({
             <InsightCard
               title="Total entered today"
               metric={formatMoney(finance.todayClaimed)}
-              meta="Waiting plus checked"
+              meta="Daily trips plus extra trips"
               icon={ArrowDownToLine}
               tone="warning"
             >
               <SegmentMeter
                 segments={[
-                  { label: "Checked", value: finance.verifiedToday, tone: "success" },
+                  { label: "Hand-in", value: finance.handoversAwaitingAdmin, tone: "warning" },
                   {
-                    label: "Waiting",
-                    value: finance.shiftsAwaitingVerification,
-                    tone: "warning",
+                    label: "Manager",
+                    value: finance.checksAwaitingManager,
+                    tone: "info",
                   },
+                  { label: "Ready", value: finance.verifiedToday, tone: "success" },
                 ]}
               />
             </InsightCard>
 
             <InsightCard
-              title="Cash counted today"
+              title="Cash handed in"
               metric={formatMoney(finance.todayCounted)}
-              meta="Cash confirmed by hand"
+              meta="Admin compared cash with the app"
               icon={CheckCircle2}
               tone="success"
             >
@@ -5212,7 +5961,7 @@ function FinancePanel({
             <article className="overview-board">
               <div className="overview-board-head">
                 <p className="eyebrow">Recent income</p>
-                <h3>Waiting, checked, and deposited</h3>
+                <h3>Waiting, handed in, checked, and deposited</h3>
               </div>
 
               <div className="finance-ledger">
@@ -5605,12 +6354,12 @@ function FinancePanel({
         <div className="content-stack">
           <article className="overview-board">
             <div className="overview-board-head">
-              <p className="eyebrow">Manager tools</p>
-              <h3>Check income and finish deposits</h3>
+              <p className="eyebrow">Cash workflow</p>
+              <h3>Admin hand-in and manager verification</h3>
             </div>
             <p className="panel-note">
-              Managers can check waiting income first, then finish the deposit once the cash count
-              is complete.
+              Administrator records the cash handed in against the app total. Manager then verifies
+              the checking before the money moves into the ready-for-bank total.
             </p>
             <div className="finance-form-actions">
               <button
@@ -5619,7 +6368,7 @@ function FinancePanel({
                 onClick={() => scrollToSection(verificationQueueRef)}
               >
                 <CheckSquare size={16} />
-                Check waiting income
+                Open hand-in queue
               </button>
               <button
                 type="button"
@@ -5631,9 +6380,9 @@ function FinancePanel({
               </button>
               <span
                 className="status-chip"
-                data-tone={pendingVerificationCount > 0 ? "warning" : "success"}
+                data-tone={finance.shiftsAwaitingVerification > 0 ? "warning" : "success"}
               >
-                {pendingVerificationCount} waiting
+                {finance.handoversAwaitingAdmin} hand-in / {finance.checksAwaitingManager} manager
               </span>
             </div>
           </article>
@@ -5642,7 +6391,7 @@ function FinancePanel({
             <Panel eyebrow="Bank deposit" title="Deposit summary" icon={Lock}>
               <div className="deposit-card">
                 <div className="deposit-row">
-                  <span>Checked income</span>
+                  <span>Manager-checked income</span>
                   <strong>{formatMoney(finance.bankingBatch.verifiedTakings)}</strong>
                 </div>
                 <div className="deposit-row">
@@ -5664,8 +6413,8 @@ function FinancePanel({
                   </span>
                 </div>
                 <p className="panel-note">
-                  Cash ready for bank is checked income minus checked cash expenses. Finishing the
-                  deposit includes {finance.bankingBatch.depositSlip.recordsLocked} records.
+                  Cash ready for bank is manager-checked income minus checked cash expenses.
+                  Finishing the deposit includes {finance.bankingBatch.depositSlip.recordsLocked} records.
                 </p>
                 <div className="finance-form-actions">
                   <button
@@ -5682,9 +6431,9 @@ function FinancePanel({
 
             <Panel eyebrow="Deposit steps" title="Deposit history" icon={ArrowDownToLine}>
               <div className="flow-strip">
-                <FlowLane owner="Checked cash" title="Add income" tone="teal" />
-                <FlowLane owner="Cash expenses" title="Subtract expenses" tone="gold" />
-                <FlowLane owner="Deposit record" title="Finish deposit" tone="navy" />
+                <FlowLane owner="Driver" title="Submit takings" tone="teal" />
+                <FlowLane owner="Admin" title="Record hand-in" tone="gold" />
+                <FlowLane owner="Manager" title="Verify checking" tone="navy" />
               </div>
               <div className="finance-ledger">
                 {depositHistory.map((deposit) => (
@@ -5720,7 +6469,7 @@ function FinancePanel({
           </div>
 
           <div ref={verificationQueueRef}>
-            <Panel eyebrow="Cash to check" title="Waiting records" icon={CheckSquare}>
+            <Panel eyebrow="Cash queue" title="Hand-in and verification queue" icon={CheckSquare}>
               <div className="queue-grid">
               {verificationRecords.map((record) => {
                 const entry = snapshot.verificationQueue.find((item) => item.id === record.id);
@@ -5729,9 +6478,24 @@ function FinancePanel({
                   counted: Number(record.actualCashReceived ?? 0),
                   shortage: 0,
                   gapKm: 0,
-                  status: "Checked",
+                  status: "Manager checked",
                   driver: "Driver",
                 };
+                const canRecordHandIn =
+                  record.status === "pending" && canRecordCashHandIn;
+                const canVerifyCheck =
+                  record.status === "counted" && canVerifyFinanceChecks;
+                const canEditCashInput =
+                  canRecordHandIn || (activeRole === "Owner" && record.status === "counted");
+                const actionLabel = canRecordHandIn
+                  ? "Record hand-in"
+                  : canVerifyCheck
+                    ? "Verify checking"
+                    : record.status === "pending"
+                      ? "Waiting for admin hand-in"
+                      : record.status === "counted"
+                        ? "Waiting for manager check"
+                        : "Manager checked";
 
                 return (
                   <article key={record.id} className="queue-card">
@@ -5783,22 +6547,22 @@ function FinancePanel({
                         min="0"
                         step="1"
                         value={verificationInputs[record.id] ?? record.actualCashReceived ?? ""}
-                        disabled={record.status !== "pending" || !canEditFinanceUpdates}
+                        disabled={!canEditCashInput}
                         onChange={(event) =>
                           setVerificationInputs((current) => ({
                             ...current,
                             [record.id]: event.target.value,
                           }))
                         }
-                        placeholder="Cash received"
+                        placeholder="Cash handed in"
                       />
                       <button
                         type="button"
                         className="action-button primary"
-                        disabled={record.status !== "pending" || !canEditFinanceUpdates}
+                        disabled={!(canRecordHandIn || canVerifyCheck)}
                         onClick={() => handleVerify(record.id)}
                       >
-                        Check income
+                        {actionLabel}
                       </button>
                       <button
                         type="button"
@@ -6675,9 +7439,9 @@ function FleetPanel({
                   <h3>Recent routes and income</h3>
                 </div>
                 <div className="compact-feed">
-                  {routeHistory.map((route) => (
+                  {routeHistory.map((route, index) => (
                     <CompactFeedItem
-                      key={route.title}
+                      key={`${route.title}-${index}`}
                       title={route.title}
                       subtitle={`${route.trips} recorded trips`}
                       tone={route.subtitle === "Special trip" ? "info" : "success"}
@@ -6701,18 +7465,18 @@ function FleetPanel({
                   <h3>Drivers and vehicle condition</h3>
                 </div>
                 <div className="compact-feed">
-                  {driverHistory.map((entry) => (
+                  {driverHistory.map((entry, index) => (
                     <CompactFeedItem
-                      key={entry.name}
+                      key={`${entry.name}-${index}`}
                       title={entry.name}
                       subtitle={entry.meta}
                       tone={entry.tone}
                       meta={selectedVehicle.registration}
                     />
                   ))}
-                  {healthHighlights.map((entry) => (
+                  {healthHighlights.map((entry, index) => (
                     <CompactFeedItem
-                      key={entry.title}
+                      key={`${entry.title}-${index}`}
                       title={entry.title}
                       subtitle={entry.subtitle}
                       tone={entry.tone}
@@ -6980,9 +7744,9 @@ function CompliancePanel({ snapshot }) {
           icon={ShieldAlert}
         >
           <div className="traffic-grid">
-            {snapshot.serviceSchedule.slice(0, 3).map((item) => (
+            {snapshot.serviceSchedule.slice(0, 3).map((item, index) => (
               <article
-                key={item.vehicle}
+                key={`${item.vehicle}-${item.serviceType}-${index}`}
                 className="traffic-card"
                 data-tone={item.tone}
               >
@@ -7008,6 +7772,344 @@ function CompliancePanel({ snapshot }) {
               />
             ))}
           </div>
+        </Panel>
+      </div>
+    </div>
+  );
+}
+
+function SettingsPanel({
+  snapshot,
+  backendMode,
+  backendModeLabel,
+  backendModeNote,
+  currentUserEmail,
+  factoryResetSubmitting,
+  isLocalAuth,
+  onChangeBackendMode,
+  onFactoryReset,
+  onSaveUserAccess,
+}) {
+  const users = useMemo(() => getAppUsers(snapshot), [snapshot]);
+  const normalizedCurrentUserEmail = String(currentUserEmail ?? "").trim().toLowerCase();
+  const [selectedUserEmail, setSelectedUserEmail] = useState(users[0]?.email ?? "");
+  const [draft, setDraft] = useState(() => createUserAccessDraft(users[0]));
+  const [feedback, setFeedback] = useState(null);
+  const [factoryResetPassword, setFactoryResetPassword] = useState("");
+  const [factoryResetFeedback, setFactoryResetFeedback] = useState(null);
+
+  useEffect(() => {
+    if (!users.some((user) => user.email === selectedUserEmail)) {
+      setSelectedUserEmail(users[0]?.email ?? "");
+    }
+  }, [selectedUserEmail, users]);
+
+  const selectedUser = users.find((user) => user.email === selectedUserEmail) ?? users[0] ?? null;
+  const isEditingSignedInOwner = selectedUser?.email === normalizedCurrentUserEmail;
+  const selectedUserEnabledModules = SETTINGS_ASSIGNABLE_MODULES.filter(
+    (moduleKey) => selectedUser?.moduleAccess?.[moduleKey],
+  );
+
+  useEffect(() => {
+    if (selectedUser) {
+      setDraft(createUserAccessDraft(selectedUser));
+    }
+  }, [selectedUser]);
+
+  const handleRoleChange = (nextRole) => {
+    setDraft((current) => {
+      const resolvedRole = normalizeRole(nextRole) ?? current.role;
+      return {
+        ...current,
+        role: resolvedRole,
+        moduleAccess: normalizeModuleViewAccess(current.moduleAccess, resolvedRole),
+      };
+    });
+  };
+
+  const toggleModuleAccess = (moduleKey) => {
+    setDraft((current) => ({
+      ...current,
+      moduleAccess: {
+        ...current.moduleAccess,
+        [moduleKey]: !current.moduleAccess[moduleKey],
+      },
+    }));
+  };
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    const response = onSaveUserAccess(draft);
+
+    setFeedback({
+      tone: response.ok ? "success" : "danger",
+      message: response.message ?? response.error,
+    });
+  };
+
+  const handleFactoryResetSubmit = async (event) => {
+    event.preventDefault();
+    const response = await onFactoryReset(factoryResetPassword);
+
+    setFactoryResetFeedback({
+      tone: response.ok ? "success" : "danger",
+      message: response.message ?? response.error,
+    });
+
+    if (response.ok) {
+      setFactoryResetPassword("");
+    }
+  };
+
+  return (
+    <div className="content-stack">
+      {feedback && (
+        <div className="finance-feedback" data-tone={feedback.tone}>
+          <span className="status-chip" data-tone={feedback.tone}>
+            {feedback.message}
+          </span>
+        </div>
+      )}
+
+      <div className="two-up">
+        <Panel eyebrow="User access" title="Roles and rights" icon={Settings2}>
+          <div className="finance-form-meta">
+            <span className="status-chip" data-tone="info">
+              {users.length} mapped users
+            </span>
+            {isLocalAuth && (
+              <span className="status-chip" data-tone="warning">
+                Local password: {LOCAL_AUTH_PASSWORD}
+              </span>
+            )}
+          </div>
+          <div className="list-stack">
+            {users.map((user) => {
+              const visibleRights = SETTINGS_ASSIGNABLE_MODULES.filter(
+                (moduleKey) => user.moduleAccess[moduleKey],
+              );
+
+              return (
+                <article key={user.email} className="person-row">
+                  <div>
+                    <h3>{user.name}</h3>
+                    <p>{user.email}</p>
+                  </div>
+                  <div className="ledger-meta">
+                    <span className="status-chip" data-tone={user.role === "Owner" ? "success" : "info"}>
+                      {user.role}
+                    </span>
+                    <span className="status-chip" data-tone="navy">
+                      {visibleRights.length > 0
+                        ? `${visibleRights.length + 1} modules`
+                        : "Overview only"}
+                    </span>
+                    <button
+                      type="button"
+                      className={
+                        user.email === selectedUserEmail
+                          ? "finance-sub-pill active"
+                          : "finance-sub-pill"
+                      }
+                      onClick={() => setSelectedUserEmail(user.email)}
+                    >
+                      Manage
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </Panel>
+
+        <Panel eyebrow="Owner control" title="Edit selected user" icon={Lock}>
+          {selectedUser ? (
+            <form className="finance-form" onSubmit={handleSubmit}>
+              <div className="queue-stats">
+                <InfoPair label="Name" value={selectedUser.name} />
+                <InfoPair label="Email" value={selectedUser.email} />
+                <InfoPair
+                  label="Driver link"
+                  value={selectedUser.staffId ? selectedUser.staffId : "Not linked"}
+                />
+                <InfoPair
+                  label="Current rights"
+                  value={
+                    selectedUserEnabledModules.length > 0
+                      ? selectedUserEnabledModules
+                          .map((moduleKey) => MODULE_VIEW_ACCESS[moduleKey].label)
+                          .join(", ")
+                      : "Overview only"
+                  }
+                />
+              </div>
+
+              <label className="finance-field">
+                <span>Role</span>
+                <select
+                  value={draft.role}
+                  disabled={isEditingSignedInOwner}
+                  onChange={(event) => handleRoleChange(event.target.value)}
+                >
+                  {ROLES.map((role) => (
+                    <option key={role} value={role} disabled={!canAssignRoleToUser(role, selectedUser)}>
+                      {role}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <div className="overview-board">
+                <div className="overview-board-head">
+                  <p className="eyebrow">Module rights</p>
+                  <h3>Access by role</h3>
+                </div>
+                <p className="panel-note">
+                  Overview stays on for every user. Settings stays owner-only.
+                </p>
+                <div className="finance-sub-switch">
+                  {SETTINGS_ASSIGNABLE_MODULES.map((moduleKey) => {
+                    const moduleConfig = MODULE_VIEW_ACCESS[moduleKey];
+                    const allowedByRole = canAssignModuleToRole(draft.role, moduleKey);
+                    const active = Boolean(draft.moduleAccess[moduleKey]);
+
+                    return (
+                      <button
+                        key={moduleKey}
+                        type="button"
+                        className={active ? "finance-sub-pill active" : "finance-sub-pill"}
+                        disabled={!allowedByRole || isEditingSignedInOwner || draft.role === "Owner"}
+                        onClick={() => toggleModuleAccess(moduleKey)}
+                      >
+                        {moduleConfig.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="finance-form-actions">
+                <button type="submit" className="action-button primary" disabled={isEditingSignedInOwner}>
+                  Save access
+                </button>
+                <button
+                  type="button"
+                  className="action-button"
+                  onClick={() => setDraft(createUserAccessDraft(selectedUser))}
+                >
+                  Reset
+                </button>
+              </div>
+
+              <p
+                className="finance-form-note"
+                data-tone={
+                  isEditingSignedInOwner || !canAssignRoleToUser(draft.role, selectedUser)
+                    ? "warning"
+                    : "info"
+                }
+              >
+                {isEditingSignedInOwner
+                  ? "The signed-in owner account stays locked while it is in use."
+                  : !canAssignRoleToUser(draft.role, selectedUser)
+                    ? "Link this account to a driver profile before assigning the Driver role."
+                    : "Changing a role resets module rights to that role's default access. You can then switch individual modules on or off."}
+              </p>
+            </form>
+          ) : (
+            <p className="panel-note">No user accounts are available in this workspace yet.</p>
+          )}
+        </Panel>
+      </div>
+
+      <div className="two-up">
+        <Panel eyebrow="Workspace control" title="Data mode" icon={Settings2}>
+          <div className="queue-stats">
+            <InfoPair label="Current mode" value={backendModeLabel} />
+            <InfoPair
+              label="Storage"
+              value={
+                backendMode === "live"
+                  ? repository.liveModeSourceLabel
+                  : "Local training workspace"
+              }
+            />
+          </div>
+          <div className="backend-mode-switch" role="group" aria-label="Data mode toggle">
+            <button
+              type="button"
+              className={backendMode === "mock" ? "role-pill compact active" : "role-pill compact"}
+              onClick={() => onChangeBackendMode("mock")}
+            >
+              Demo
+            </button>
+            <button
+              type="button"
+              className={backendMode === "live" ? "role-pill compact active" : "role-pill compact"}
+              onClick={() => onChangeBackendMode("live")}
+            >
+              Live
+            </button>
+          </div>
+          <p className="panel-note">{backendModeNote}</p>
+          <p className="finance-form-note" data-tone="info">
+            Switching mode reloads the workspace with the selected data source.
+          </p>
+        </Panel>
+
+        <Panel eyebrow="Owner control" title="Factory reset" icon={AlertTriangle}>
+          {factoryResetFeedback && (
+            <div className="finance-feedback" data-tone={factoryResetFeedback.tone}>
+              <span className="status-chip" data-tone={factoryResetFeedback.tone}>
+                {factoryResetFeedback.message}
+              </span>
+            </div>
+          )}
+          <form className="finance-form" onSubmit={handleFactoryResetSubmit}>
+            <div className="queue-stats">
+              <InfoPair
+                label="Reset target"
+                value={backendMode === "live" ? "Live workspace" : "Demo workspace"}
+              />
+              <InfoPair
+                label="Keeps after reset"
+                value="Owner sign-in and default factory setup"
+              />
+              <InfoPair
+                label="Clears"
+                value="Trips, expenses, fleet, users, documents, and history"
+              />
+              <InfoPair
+                label="Password check"
+                value={isLocalAuth ? "TaxiFlow local owner password" : "Signed-in owner password"}
+              />
+            </div>
+
+            <label className="finance-field">
+              <span>Owner password</span>
+              <input
+                autoComplete="current-password"
+                type="password"
+                value={factoryResetPassword}
+                onChange={(event) => setFactoryResetPassword(event.target.value)}
+              />
+            </label>
+
+            <div className="finance-form-actions">
+              <button
+                type="submit"
+                className="record-button danger"
+                disabled={factoryResetSubmitting || !factoryResetPassword.trim()}
+              >
+                {factoryResetSubmitting ? "Resetting..." : "Factory reset"}
+              </button>
+            </div>
+
+            <p className="finance-form-note" data-tone="danger">
+              This resets the active {backendMode === "live" ? "live" : "demo"} workspace to
+              factory defaults and removes all captured activity in that workspace.
+            </p>
+          </form>
         </Panel>
       </div>
     </div>
@@ -7573,9 +8675,9 @@ function DriversPanel({
             </div>
 
             <div className="shortcut-grid">
-              {snapshot.driverTerminal.shortcuts.map((shortcut) => (
+              {snapshot.driverTerminal.shortcuts.map((shortcut, index) => (
                 <button
-                  key={shortcut}
+                  key={`${shortcut}-${index}`}
                   type="button"
                   className="shortcut-button"
                   onClick={() => handleShortcut(shortcut)}
@@ -8301,8 +9403,11 @@ function DriversPanel({
 
       <Panel eyebrow="Maintenance handoff" title="Live defect feed" icon={AlertTriangle}>
         <div className="queue-grid">
-          {visibleDefects.map((defect) => (
-            <article key={`${defect.vehicle}-${defect.issue}`} className="queue-card">
+          {visibleDefects.map((defect, index) => (
+            <article
+              key={defect.id ?? `${defect.vehicle}-${defect.issue}-${index}`}
+              className="queue-card"
+            >
               <div className="queue-header">
                 <div>
                   <h3>{defect.vehicle}</h3>
@@ -8444,8 +9549,8 @@ function MiniBars({ items, tone = "info" }) {
 
   return (
     <div className="mini-bars">
-      {items.map((item) => (
-        <div key={item.label} className="mini-bar-group">
+      {items.map((item, index) => (
+        <div key={`${item.label}-${index}`} className="mini-bar-group">
           <div className="mini-bar-track vertical">
             <div
               className="mini-bar-fill"
@@ -8468,8 +9573,8 @@ function MiniCompareChart({ items }) {
 
   return (
     <div className="mini-bars compare">
-      {items.map((item) => (
-        <div key={item.label} className="mini-bar-group">
+      {items.map((item, index) => (
+        <div key={`${item.label}-${index}`} className="mini-bar-group">
           <div className="mini-bar-track vertical compare">
             <div
               className="mini-bar-fill secondary"
@@ -8498,9 +9603,9 @@ function SegmentMeter({ segments }) {
   return (
     <div className="segment-meter">
       <div className="segment-bar">
-        {segments.map((segment) => (
+        {segments.map((segment, index) => (
           <span
-            key={segment.label}
+            key={`${segment.label}-${index}`}
             className="segment-piece"
             data-tone={segment.tone}
             style={{ width: `${(segment.value / total) * 100}%` }}
@@ -8508,8 +9613,8 @@ function SegmentMeter({ segments }) {
         ))}
       </div>
       <div className="segment-legend">
-        {segments.map((segment) => (
-          <span key={segment.label} className="segment-label">
+        {segments.map((segment, index) => (
+          <span key={`${segment.label}-${index}`} className="segment-label">
             <i data-tone={segment.tone} />
             {segment.label}
           </span>

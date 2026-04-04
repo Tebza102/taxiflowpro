@@ -791,6 +791,11 @@ button {
   color: var(--white);
 }
 
+.finance-sub-pill:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
 .finance-sub-pill-action {
   border-color: rgba(11, 37, 69, 0.18);
   background: rgba(11, 37, 69, 0.98);

@@ -3086,6 +3086,8 @@ function App() {
     email: "",
     password: "",
   });
+  const latestSnapshotRef = useRef(null);
+  const latestBackendModeRef = useRef(repository.backendMode);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -3309,6 +3311,29 @@ function App() {
     syncLiveWarning(setLiveSaveWarning, null);
   }, [backendMode]);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const handlePageHide = () => {
+      if (!latestSnapshotRef.current) {
+        return;
+      }
+
+      void repository.persistSnapshot(
+        latestSnapshotRef.current,
+        latestBackendModeRef.current,
+      );
+    };
+
+    window.addEventListener("pagehide", handlePageHide);
+
+    return () => {
+      window.removeEventListener("pagehide", handlePageHide);
+    };
+  }, []);
+
   const currentSnapshot = useMemo(() => deriveSnapshot(snapshot), [snapshot]);
   const liveOperationalWarning = useMemo(
     () => (backendMode === "live" ? liveLoadWarning ?? liveSaveWarning : null),
@@ -3331,6 +3356,15 @@ function App() {
     () => getStoredAppUserByIdentity(currentSnapshot, authIdentity),
     [authIdentity, currentSnapshot],
   );
+
+  useEffect(() => {
+    latestSnapshotRef.current = snapshot;
+  }, [snapshot]);
+
+  useEffect(() => {
+    latestBackendModeRef.current = backendMode;
+  }, [backendMode]);
+
   const authDisplayName = useMemo(() => {
     if (!authIdentity || !currentSnapshot) {
       return authIdentity?.email ?? null;
@@ -3721,6 +3755,22 @@ function App() {
 
   const handleSignOut = async () => {
     setAuthSubmitting(true);
+
+    const latestSnapshot = latestSnapshotRef.current;
+    if (latestSnapshot) {
+      const persistResult = await repository.persistSnapshot(
+        latestSnapshot,
+        latestBackendModeRef.current,
+      );
+
+      syncLiveWarning(
+        setLiveSaveWarning,
+        latestBackendModeRef.current === "live" &&
+          (persistResult?.ok === false || persistResult?.warning)
+          ? LIVE_SAVE_WARNING_MESSAGE
+          : null,
+      );
+    }
 
     if (!authEnabled) {
       clearStoredLocalAuthSession();

@@ -105,6 +105,75 @@ test("manager and admin default to overview plus reset-only settings access", as
   assertNoRuntimeErrors();
 });
 
+test("owner-granted management module access persists after reload and re-login", async ({
+  page,
+}) => {
+  const assertNoRuntimeErrors = attachRuntimeCollectors(page);
+  const grants = [
+    {
+      email: "admin@taxiflow.local",
+      moduleLabel: "Drivers",
+      expectedHeading: "Terminal preview",
+    },
+    {
+      email: "manager@taxiflow.local",
+      moduleLabel: "Fleet & Operations",
+      expectedHeading: "Fleet & Operations overview",
+    },
+  ];
+
+  await signIn(page, ownerAccount.email);
+  await openModule(page, "Settings", "Roles and rights");
+
+  for (const grant of grants) {
+    const userRow = page.locator("article.person-row").filter({
+      hasText: grant.email,
+    });
+    await userRow.getByRole("button", { name: "Manage" }).click();
+
+    const accessForm = page.locator("form.finance-form").filter({
+      has: page.getByRole("button", { name: "Save access" }),
+    });
+    await accessForm.getByRole("button", { name: grant.moduleLabel }).click();
+    await accessForm.getByRole("button", { name: "Save access" }).click();
+    await expect(page.getByText(/updated as/i)).toBeVisible();
+  }
+
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+  await openModule(page, "Settings", "Roles and rights");
+
+  for (const grant of grants) {
+    const userRow = page.locator("article.person-row").filter({
+      hasText: grant.email,
+    });
+    await userRow.getByRole("button", { name: "Manage" }).click();
+
+    const accessForm = page.locator("form.finance-form").filter({
+      has: page.getByRole("button", { name: "Save access" }),
+    });
+    await expect(
+      accessForm.locator("button.finance-sub-pill.active").filter({
+        hasText: grant.moduleLabel,
+      }),
+    ).toBeVisible();
+  }
+
+  await signOut(page);
+
+  for (const grant of grants) {
+    await signIn(page, grant.email);
+    await expect(moduleButton(page, grant.moduleLabel)).toBeVisible();
+    await openModule(page, grant.moduleLabel, grant.expectedHeading);
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+    await expect(moduleButton(page, grant.moduleLabel)).toBeVisible();
+    await signOut(page);
+  }
+
+  assertNoRuntimeErrors();
+});
+
 test("sign-in screen routes forgotten passwords to management", async ({ page }) => {
   const assertNoRuntimeErrors = attachRuntimeCollectors(page);
 

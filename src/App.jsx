@@ -3327,10 +3327,23 @@ function App() {
       );
     };
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "hidden" || !latestSnapshotRef.current) {
+        return;
+      }
+
+      void repository.persistSnapshot(
+        latestSnapshotRef.current,
+        latestBackendModeRef.current,
+      );
+    };
+
     window.addEventListener("pagehide", handlePageHide);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       window.removeEventListener("pagehide", handlePageHide);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
 
@@ -4215,7 +4228,7 @@ function App() {
     return result;
   };
 
-  const resetUserPassword = ({ email, nextAccessPassword }) => {
+  const resetUserPassword = ({ email, name, nextAccessPassword }) => {
     let result = { ok: false, error: "Unable to reset this TaxiFlow password." };
 
     setSnapshot((current) => {
@@ -4244,12 +4257,21 @@ function App() {
         return current;
       }
 
-      if (!password) {
-        result = { ok: false, error: "Enter the new password before saving the reset." };
+      const nextName = String(name ?? existingUser.name ?? "").trim();
+      const shouldUpdateName = nextName !== String(existingUser.name ?? "").trim();
+      const shouldUpdatePassword = Boolean(password);
+
+      if (!nextName) {
+        result = { ok: false, error: "Enter the full name before saving these details." };
         return current;
       }
 
-      if (password.length < 6) {
+      if (!shouldUpdateName && !shouldUpdatePassword) {
+        result = { ok: false, error: "Update the full name or enter a new password before saving." };
+        return current;
+      }
+
+      if (shouldUpdatePassword && password.length < 6) {
         result = { ok: false, error: "Reset password must be at least 6 characters long." };
         return current;
       }
@@ -4258,7 +4280,8 @@ function App() {
       const actorId = resolveCurrentActorId(current);
       const nextUser = normalizeAppUser({
         ...existingUser,
-        accessPassword: password,
+        name: nextName,
+        accessPassword: shouldUpdatePassword ? password : existingUser.accessPassword,
         updatedAt: timestamp,
         updatedBy: actorId,
         updatedByRole: activeRole,
@@ -4273,7 +4296,8 @@ function App() {
             driver.staffId === existingUser.staffId
               ? {
                   ...driver,
-                  accessPassword: password,
+                  name: nextName,
+                  accessPassword: shouldUpdatePassword ? password : driver.accessPassword,
                   updatedAt: timestamp,
                   updatedBy: actorId,
                   updatedByRole: activeRole,
@@ -4281,13 +4305,15 @@ function App() {
               : driver,
           )
         : current.drivers ?? [];
-      const resolvedRequestIds = (current.passwordResetRequests ?? [])
-        .filter(
-          (request) =>
-            normalizeEmailAddress(request.email) === normalizedEmail &&
-            String(request.status ?? "pending").trim().toLowerCase() === "pending",
-        )
-        .map((request) => request.id);
+      const resolvedRequestIds = shouldUpdatePassword
+        ? (current.passwordResetRequests ?? [])
+            .filter(
+              (request) =>
+                normalizeEmailAddress(request.email) === normalizedEmail &&
+                String(request.status ?? "pending").trim().toLowerCase() === "pending",
+            )
+            .map((request) => request.id)
+        : [];
       const nextPasswordResetRequests = resolvedRequestIds.length
         ? (current.passwordResetRequests ?? []).map((request) =>
             resolvedRequestIds.includes(request.id)
@@ -4320,7 +4346,11 @@ function App() {
 
       result = {
         ok: true,
-        message: `${nextUser.name} password reset saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}`,
+        message: shouldUpdateName && shouldUpdatePassword
+          ? `${nextUser.name} details and password saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}`
+          : shouldUpdatePassword
+            ? `${nextUser.name} password reset saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}`
+            : `${nextUser.name} details saved.`,
       };
 
       return {
@@ -4334,12 +4364,19 @@ function App() {
             timestamp,
             scope: "system",
             action: "update",
-            entityType: "password-reset",
+            entityType: shouldUpdatePassword ? "password-reset" : "user-profile",
             entityId: nextUser.id,
-            title: `Password reset saved / ${nextUser.name}`,
+            title: shouldUpdatePassword
+              ? `Password reset saved / ${nextUser.name}`
+              : `User details saved / ${nextUser.name}`,
             detail: [
               nextUser.email,
-              activeRole === "Owner" ? "Owner reset saved" : "Management reset saved",
+              shouldUpdateName ? "Name updated" : null,
+              shouldUpdatePassword
+                ? activeRole === "Owner"
+                  ? "Owner reset saved"
+                  : "Management reset saved"
+                : null,
               resolvedRequestIds.length > 0
                 ? `${resolvedRequestIds.length} password reset request${resolvedRequestIds.length === 1 ? "" : "s"} handled`
                 : null,
@@ -10598,10 +10635,12 @@ function SettingsPanel({
   const queuedEmailCount = emailOutbox.filter((entry) => entry.status === "queued").length;
   const canManageUserAccess = activeRole === "Owner";
   const canResetPasswords = PASSWORD_RESET_ROLES.has(activeRole);
-  const canResetSelectedUserPassword =
+  const canManageSelectedUserDetails =
+    Boolean(selectedUser) && (canManageUserAccess || selectedUser?.role !== "Owner");
+  const hasManagedUserDraftChanges =
     Boolean(selectedUser) &&
-    String(draft.nextAccessPassword ?? "").trim() &&
-    (canManageUserAccess ? !isEditingSignedInOwner : selectedUser?.role !== "Owner");
+    (String(draft.name ?? "").trim() !== String(selectedUser?.name ?? "").trim() ||
+      Boolean(String(draft.nextAccessPassword ?? "").trim()));
 
   useEffect(() => {
     if (selectedUser) {
@@ -10642,11 +10681,12 @@ function SettingsPanel({
     pushFeedback(onSaveUserAccess(draft));
   };
 
-  const handlePasswordResetSubmit = (event) => {
+  const handleManagedUserSubmit = (event) => {
     event.preventDefault();
     pushFeedback(
       onResetUserPassword({
         email: selectedUser?.email,
+        name: draft.name,
         nextAccessPassword: draft.nextAccessPassword,
       }),
     );
@@ -10731,7 +10771,7 @@ function SettingsPanel({
 
         <Panel
           eyebrow={canManageUserAccess ? "Owner control" : "Management control"}
-          title={canManageUserAccess ? "Edit selected user" : "Reset selected password"}
+          title={canManageUserAccess ? "Edit selected user" : "Update selected user"}
           icon={Lock}
         >
           {selectedUser ? (
@@ -10851,7 +10891,7 @@ function SettingsPanel({
                 </p>
               </form>
             ) : (
-              <form className="finance-form" onSubmit={handlePasswordResetSubmit}>
+              <form className="finance-form" onSubmit={handleManagedUserSubmit}>
                 <div className="queue-stats">
                   <InfoPair label="Name" value={selectedUser.name} />
                   <InfoPair label="Email" value={selectedUser.email} />
@@ -10869,13 +10909,29 @@ function SettingsPanel({
                 </div>
 
                 <label className="finance-field">
+                  <span>Full name</span>
+                  <input
+                    type="text"
+                    placeholder="Name and surname"
+                    value={draft.name}
+                    disabled={!canManageSelectedUserDetails}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        name: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+
+                <label className="finance-field">
                   <span>New password</span>
                   <input
                     autoComplete="new-password"
                     type="password"
                     placeholder="Enter the replacement password"
                     value={draft.nextAccessPassword}
-                    disabled={!canResetPasswords || selectedUser.role === "Owner"}
+                    disabled={!canManageSelectedUserDetails}
                     onChange={(event) =>
                       setDraft((current) => ({
                         ...current,
@@ -10889,9 +10945,9 @@ function SettingsPanel({
                   <button
                     type="submit"
                     className="action-button primary"
-                    disabled={!canResetSelectedUserPassword}
+                    disabled={!canManageSelectedUserDetails || !hasManagedUserDraftChanges}
                   >
-                    Reset password
+                    Save changes
                   </button>
                   <button
                     type="button"
@@ -10904,13 +10960,13 @@ function SettingsPanel({
 
                 <p
                   className="finance-form-note"
-                  data-tone={selectedUser.role === "Owner" ? "warning" : "info"}
+                  data-tone={!canManageSelectedUserDetails ? "warning" : "info"}
                 >
-                  {selectedUser.role === "Owner"
-                    ? "Only the owner can reset another owner password."
+                  {!canManageSelectedUserDetails
+                    ? "Only the owner can update another owner profile."
                     : isLocalAuth
-                      ? "Management can reset passwords here. The owner controls every other feature in Settings."
-                      : "Management can log the reset here. The owner controls every other feature in Settings, and the matching Supabase password must still be updated separately in live mode."}
+                      ? "Management can update a user name here and optionally reset the local password. The owner still controls roles and feature access."
+                      : "Management can update a user name here and log a password reset. The owner still controls roles and feature access, and the matching Supabase password must still be updated separately in live mode."}
                 </p>
               </form>
             )

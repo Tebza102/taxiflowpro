@@ -92,7 +92,7 @@ test("manager and admin default to overview plus reset-only settings access", as
     await expect(moduleButton(page, "Settings")).toBeVisible();
 
     await openModule(page, "Settings", "User accounts");
-    await expect(page.getByRole("heading", { name: "Reset selected password" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Update selected user" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Password reset requests" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Email outbox" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Roles and rights" })).toHaveCount(0);
@@ -101,6 +101,51 @@ test("manager and admin default to overview plus reset-only settings access", as
 
     await signOut(page);
   }
+
+  assertNoRuntimeErrors();
+});
+
+test("management can update user details without changing access settings", async ({ page }) => {
+  const assertNoRuntimeErrors = attachRuntimeCollectors(page);
+  const updatedByAdmin = "Sizwe Admin Update";
+  const updatedByManager = "Sizwe Manager Update";
+
+  await signIn(page, "admin@taxiflow.local");
+  await openModule(page, "Settings", "User accounts");
+
+  let userRow = page.locator("article.person-row").filter({
+    hasText: driverAccount.email,
+  });
+  await userRow.getByRole("button", { name: "Manage" }).click();
+
+  let detailsForm = page.locator("form.finance-form").filter({
+    has: page.getByRole("button", { name: "Save changes" }),
+  });
+  await detailsForm.getByLabel("Full name").fill(updatedByAdmin);
+  await detailsForm.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText(`${updatedByAdmin} details saved.`)).toBeVisible();
+  await signOut(page);
+
+  await signIn(page, "manager@taxiflow.local");
+  await openModule(page, "Settings", "User accounts");
+
+  userRow = page.locator("article.person-row").filter({
+    hasText: driverAccount.email,
+  });
+  await expect(userRow).toContainText(updatedByAdmin);
+  await userRow.getByRole("button", { name: "Manage" }).click();
+
+  detailsForm = page.locator("form.finance-form").filter({
+    has: page.getByRole("button", { name: "Save changes" }),
+  });
+  await detailsForm.getByLabel("Full name").fill(updatedByManager);
+  await detailsForm.getByRole("button", { name: "Save changes" }).click();
+  await expect(page.getByText(`${updatedByManager} details saved.`)).toBeVisible();
+  await signOut(page);
+
+  await signIn(page, driverAccount.email);
+  await expect(page.getByText(updatedByManager).first()).toBeVisible();
+  await signOut(page);
 
   assertNoRuntimeErrors();
 });

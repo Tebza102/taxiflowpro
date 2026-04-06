@@ -118,8 +118,9 @@ button {
 }
 
 .auth-logo {
-  width: 8.25rem;
-  height: 8.25rem;
+  width: auto;
+  height: 11rem;
+  max-width: min(18rem, 72vw);
   filter: drop-shadow(0 12px 24px rgba(11, 37, 69, 0.12));
 }
 
@@ -187,21 +188,22 @@ button {
 
 .brand-logo {
   display: block;
-  width: 9.6rem;
+  width: auto;
   height: 9.6rem;
+  max-width: 100%;
   object-fit: contain;
   filter: drop-shadow(0 10px 24px rgba(11, 37, 69, 0.16));
 }
 
 .brand-logo.compact {
-  width: 7.8rem;
+  width: auto;
   height: 7.8rem;
   filter: drop-shadow(0 14px 28px rgba(11, 37, 69, 0.16));
 }
 
 .toolbar-logo {
-  width: 5.1rem;
-  height: 5.1rem;
+  width: auto;
+  height: 6rem;
   filter: drop-shadow(0 10px 20px rgba(11, 37, 69, 0.14));
 }
 
@@ -916,6 +918,14 @@ button {
 
 .finance-form-note[data-tone="info"] {
   color: var(--subtext);
+}
+
+.finance-form-note[data-tone="success"] {
+  color: var(--success);
+}
+
+.finance-form-note[data-tone="warning"] {
+  color: var(--warning);
 }
 
 .finance-form-note[data-tone="danger"] {

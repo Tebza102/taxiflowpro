@@ -16,6 +16,17 @@ npm install
 npm run dev
 ```
 
+## Dev Daily Log Regression Check
+
+```bash
+npm run dev:daily-log-check
+```
+
+- Generates an in-memory sample route with a fare, a daily log with four trips, two expenses, and an admin check-in.
+- Prints `collectedExpected`, `spentTotal`, `netExpected`, `submitted`, `variance`, plus the analytics summary.
+- Add `-- --json` to print the full `DailyLogReportView` payload.
+- Dev only: the script exits if `NODE_ENV=production` and does not write to Supabase or local storage.
+
 ## Backend notes
 
 - Demo mode stays local and uses the seeded dataset.

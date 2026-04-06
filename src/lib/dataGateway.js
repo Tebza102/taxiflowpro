@@ -12,6 +12,303 @@ const normalizeBackendMode = (value) =>
 
 const cloneSnapshot = (snapshot) => JSON.parse(JSON.stringify(snapshot));
 const IS_DEV = Boolean(import.meta.env?.DEV);
+const normalizeRouteReference = (route) => {
+  const normalizedRoute = String(route ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^\x00-\x7F]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+  return normalizedRoute ? `route-${normalizedRoute}` : null;
+};
+
+const normalizeVehicleCapabilityFields = (vehicle = {}) => {
+  const seatCapacity = Number(vehicle.seatCapacity ?? vehicle.seat_capacity ?? 15);
+
+  return {
+    ...vehicle,
+    canDoRouteService: Boolean(
+      vehicle.canDoRouteService ?? vehicle.can_do_route_service ?? true,
+    ),
+    canDoSpecialTrips: Boolean(
+      vehicle.canDoSpecialTrips ?? vehicle.can_do_special_trips ?? false,
+    ),
+    canDoContracts: Boolean(vehicle.canDoContracts ?? vehicle.can_do_contracts ?? false),
+    seatCapacity: Number.isFinite(seatCapacity) && seatCapacity > 0 ? seatCapacity : 15,
+    currentRouteId:
+      vehicle.currentRouteId ??
+      vehicle.current_route_id ??
+      normalizeRouteReference(vehicle.route),
+  };
+};
+
+const getRouteStops = (routeValue) => {
+  const route = String(routeValue ?? "").trim();
+
+  if (!route) {
+    return {
+      fromLocation: "",
+      toLocation: "",
+    };
+  }
+
+  const toMatch = /^(.+?)\s+to\s+(.+)$/i.exec(route);
+  if (toMatch) {
+    return {
+      fromLocation: toMatch[1].trim(),
+      toLocation: toMatch[2].trim(),
+    };
+  }
+
+  const slashParts = route.split("/").map((part) => part.trim()).filter(Boolean);
+  if (slashParts.length === 2) {
+    return {
+      fromLocation: slashParts[0],
+      toLocation: slashParts[1],
+    };
+  }
+
+  return {
+    fromLocation: route,
+    toLocation: "",
+  };
+};
+
+const getRoutePointLabels = (routeValue) => {
+  const route = String(routeValue ?? "").trim();
+
+  if (!route) {
+    return [];
+  }
+
+  const arrowParts = route
+    .split(/\s*(?:->|→|>|›)\s*/i)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (arrowParts.length > 1) {
+    return arrowParts;
+  }
+
+  const toParts = route
+    .split(/\s+to\s+/i)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (toParts.length > 1) {
+    return toParts;
+  }
+
+  const slashParts = route.split("/").map((part) => part.trim()).filter(Boolean);
+  if (slashParts.length > 1) {
+    return slashParts;
+  }
+
+  return [route];
+};
+
+const buildRoutePointReference = (routeId, pointLabel, sequence) =>
+  `${routeId ?? "route"}-point-${normalizeRouteReference(pointLabel)?.replace(/^route-/, "") ?? sequence}`;
+
+const getDefaultRouteStopType = (index, total) => {
+  if (total <= 1) {
+    return "both";
+  }
+
+  if (index === 0) {
+    return "pickup";
+  }
+
+  if (index === total - 1) {
+    return "dropoff";
+  }
+
+  return "both";
+};
+
+const normalizeRoutePointRecord = (point, routeId, index, total) => {
+  const label = String(
+    point?.label ??
+      point?.name ??
+      point?.locationLabel ??
+      point?.location_label ??
+      point ??
+      "",
+  ).trim();
+
+  if (!label) {
+    return null;
+  }
+
+  const stopType = String(
+    point?.stopType ?? point?.stop_type ?? getDefaultRouteStopType(index, total),
+  )
+    .trim()
+    .toLowerCase();
+  const safeStopType = ["pickup", "dropoff", "both", "checkpoint"].includes(stopType)
+    ? stopType
+    : getDefaultRouteStopType(index, total);
+
+  return {
+    id:
+      String(point?.id ?? point?.pointId ?? point?.point_id ?? "").trim() ||
+      buildRoutePointReference(routeId, label, index + 1),
+    sequence:
+      Number.isFinite(Number(point?.sequence ?? point?.order)) &&
+      Number(point?.sequence ?? point?.order) > 0
+        ? Number(point.sequence ?? point.order)
+        : index + 1,
+    label,
+    stopType: safeStopType,
+  };
+};
+
+const normalizeRoutePointRecords = (points, routeId, fallbackLabels = []) => {
+  const sourcePoints =
+    Array.isArray(points) && points.length > 0 ? points : fallbackLabels;
+  const normalizedPoints = sourcePoints
+    .map((point, index) =>
+      normalizeRoutePointRecord(point, routeId, index, sourcePoints.length),
+    )
+    .filter(Boolean)
+    .sort((left, right) => left.sequence - right.sequence)
+    .map((point, index, items) => ({
+      ...point,
+      sequence: index + 1,
+      stopType:
+        ["pickup", "dropoff", "both", "checkpoint"].includes(point.stopType)
+          ? point.stopType
+          : getDefaultRouteStopType(index, items.length),
+    }));
+
+  return normalizedPoints;
+};
+
+const buildRouteCode = (value) => {
+  const parts = String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .normalize("NFKD")
+    .replace(/[^\x00-\x7F]/g, "")
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((part) => part && part !== "TO" && part !== "AND");
+
+  if (parts.length === 0) {
+    return "";
+  }
+
+  const initials = parts.map((part) => part[0]).join("").slice(0, 8);
+  return initials || parts.join("").slice(0, 8);
+};
+
+const normalizeRouteMasterRecord = (route = {}) => {
+  const rawName = String(
+    route.name ??
+      route.routeName ??
+      route.route_name ??
+      route.route ??
+      "",
+  ).trim();
+  const inferredStops = getRouteStops(rawName);
+  const primaryOrigin = String(
+    route.primaryOrigin ??
+      route.primary_origin ??
+      inferredStops.fromLocation ??
+      "",
+  ).trim();
+  const primaryDestination = String(
+    route.primaryDestination ??
+      route.primary_destination ??
+      inferredStops.toLocation ??
+      "",
+  ).trim();
+  const name = rawName || [primaryOrigin, primaryDestination].filter(Boolean).join(" to ");
+
+  if (!name) {
+    return null;
+  }
+
+  const routeId =
+    String(route.id ?? route.currentRouteId ?? route.current_route_id ?? "").trim() ||
+    normalizeRouteReference(name);
+  const routePoints = normalizeRoutePointRecords(
+    route.routePoints ?? route.route_points ?? route.points,
+    routeId,
+    getRoutePointLabels(name),
+  );
+
+  return {
+    ...route,
+    id: routeId,
+    name,
+    code:
+      String(route.code ?? route.routeCode ?? route.route_code ?? buildRouteCode(name)).trim() ||
+      buildRouteCode(name),
+    type:
+      String(route.type ?? route.routeType ?? route.route_type ?? "route_service").trim() ||
+      "route_service",
+    primaryOrigin,
+    primaryDestination,
+    routePoints,
+    isActive: Boolean(route.isActive ?? route.is_active ?? true),
+  };
+};
+
+const mergeRouteMasterRecord = (existing, incoming) => ({
+  ...existing,
+  name: existing.name || incoming.name,
+  code: existing.code || incoming.code,
+  type: existing.type || incoming.type,
+  primaryOrigin: existing.primaryOrigin || incoming.primaryOrigin,
+  primaryDestination: existing.primaryDestination || incoming.primaryDestination,
+  routePoints:
+    Array.isArray(existing.routePoints) && existing.routePoints.length > 0
+      ? existing.routePoints
+      : incoming.routePoints,
+  isActive: existing.isActive ?? incoming.isActive ?? true,
+});
+
+const collectRouteMasterRecords = (source = {}, defaultRoutes = []) => {
+  const routesById = new Map();
+  const addRoute = (route) => {
+    const normalizedRoute = normalizeRouteMasterRecord(route);
+
+    if (!normalizedRoute?.id) {
+      return;
+    }
+
+    const existingRoute = routesById.get(normalizedRoute.id);
+    routesById.set(
+      normalizedRoute.id,
+      existingRoute
+        ? mergeRouteMasterRecord(existingRoute, normalizedRoute)
+        : normalizedRoute,
+    );
+  };
+
+  (Array.isArray(defaultRoutes) ? defaultRoutes : []).forEach(addRoute);
+  (Array.isArray(source.routes) ? source.routes : []).forEach(addRoute);
+  (Array.isArray(source.vehicles) ? source.vehicles : []).forEach((vehicle) =>
+    addRoute({
+      id:
+        String(vehicle.currentRouteId ?? vehicle.current_route_id ?? "").trim() ||
+        normalizeRouteReference(vehicle.route),
+      route: vehicle.route,
+      isActive: vehicle.status !== "archived",
+    }),
+  );
+  (Array.isArray(source.drivers) ? source.drivers : []).forEach((driver) =>
+    addRoute({
+      route: driver.route,
+    }),
+  );
+
+  return Array.from(routesById.values()).sort((left, right) =>
+    String(left.name ?? "").localeCompare(String(right.name ?? "")),
+  );
+};
 
 const toDevErrorDetail = (error) => {
   if (!error) {
@@ -119,6 +416,10 @@ const createSnapshotShape = ({
       vehicleSpecific: [],
       operational: [],
     },
+    expenseCatalog: {
+      asset: [],
+      operational: [],
+    },
     bankingBatch: {
       ...cloneSnapshot(mockSnapshot.finance.bankingBatch),
       reference: "Awaiting first deposit",
@@ -136,6 +437,7 @@ const createSnapshotShape = ({
   financeTransactions: [],
   deposits: [],
   appUsers: [],
+  routes: [],
   vehicles: [],
   serviceSchedule: [],
   documents: [],
@@ -160,6 +462,8 @@ const createSnapshotShape = ({
   },
   defects: [],
   auditTrail: [],
+  passwordResetRequests: [],
+  emailOutbox: [],
 });
 
 const normalizeSnapshotShape = (snapshot, defaults = createSnapshotShape()) => {
@@ -209,6 +513,16 @@ const normalizeSnapshotShape = (snapshot, defaults = createSnapshotShape()) => {
           ? snapshot.finance.expenseManagement.operational
           : cloneSnapshot(defaults.finance.expenseManagement.operational),
       },
+      expenseCatalog: {
+        ...cloneSnapshot(defaults.finance.expenseCatalog),
+        ...(snapshot.finance?.expenseCatalog ?? {}),
+        asset: Array.isArray(snapshot.finance?.expenseCatalog?.asset)
+          ? snapshot.finance.expenseCatalog.asset
+          : cloneSnapshot(defaults.finance.expenseCatalog.asset),
+        operational: Array.isArray(snapshot.finance?.expenseCatalog?.operational)
+          ? snapshot.finance.expenseCatalog.operational
+          : cloneSnapshot(defaults.finance.expenseCatalog.operational),
+      },
       bankingBatch: {
         ...cloneSnapshot(defaults.finance.bankingBatch),
         ...(snapshot.finance?.bankingBatch ?? {}),
@@ -223,7 +537,10 @@ const normalizeSnapshotShape = (snapshot, defaults = createSnapshotShape()) => {
       : cloneSnapshot(defaults.financeTransactions),
     deposits: Array.isArray(snapshot.deposits) ? snapshot.deposits : cloneSnapshot(defaults.deposits),
     appUsers: Array.isArray(snapshot.appUsers) ? snapshot.appUsers : cloneSnapshot(defaults.appUsers),
-    vehicles: Array.isArray(snapshot.vehicles) ? snapshot.vehicles : cloneSnapshot(defaults.vehicles),
+    routes: collectRouteMasterRecords(snapshot, cloneSnapshot(defaults.routes ?? [])),
+    vehicles: Array.isArray(snapshot.vehicles)
+      ? snapshot.vehicles.map((vehicle) => normalizeVehicleCapabilityFields(vehicle))
+      : cloneSnapshot(defaults.vehicles),
     serviceSchedule: Array.isArray(snapshot.serviceSchedule)
       ? snapshot.serviceSchedule
       : cloneSnapshot(defaults.serviceSchedule),
@@ -252,6 +569,12 @@ const normalizeSnapshotShape = (snapshot, defaults = createSnapshotShape()) => {
     auditTrail: Array.isArray(snapshot.auditTrail)
       ? snapshot.auditTrail
       : cloneSnapshot(defaults.auditTrail),
+    passwordResetRequests: Array.isArray(snapshot.passwordResetRequests)
+      ? snapshot.passwordResetRequests
+      : cloneSnapshot(defaults.passwordResetRequests),
+    emailOutbox: Array.isArray(snapshot.emailOutbox)
+      ? snapshot.emailOutbox
+      : cloneSnapshot(defaults.emailOutbox),
   };
 };
 

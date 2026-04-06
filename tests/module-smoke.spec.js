@@ -37,7 +37,8 @@ const attachRuntimeCollectors = (page) => {
   };
 };
 
-const primaryNav = (page) => page.getByRole("navigation", { name: "Primary views" });
+const moduleButton = (page, label) =>
+  page.locator("button.module-button").filter({ hasText: label }).first();
 
 const signIn = async (page, email) => {
   await page.goto("/");
@@ -54,7 +55,7 @@ const signOut = async (page) => {
 };
 
 const openModule = async (page, moduleLabel, expectedHeading) => {
-  await primaryNav(page).getByRole("button", { name: new RegExp(moduleLabel, "i") }).click();
+  await moduleButton(page, moduleLabel).click();
   await expect(page.getByRole("heading", { name: expectedHeading })).toBeVisible();
 };
 
@@ -68,7 +69,7 @@ test("owner can reach every main module and see embedded compliance", async ({ p
   await expect(page.getByRole("heading", { name: "Expiring documents" })).toBeVisible();
 
   await openModule(page, "Money", "Daily trip entry");
-  await openModule(page, "Fleet", "Fleet overview");
+  await openModule(page, "Fleet & Operations", "Fleet & Operations overview");
   await openModule(page, "Drivers", "Terminal preview");
   await openModule(page, "Settings", "Roles and rights");
 
@@ -76,7 +77,7 @@ test("owner can reach every main module and see embedded compliance", async ({ p
   assertNoRuntimeErrors();
 });
 
-test("manager and admin land on overview and keep access to operational modules only", async ({
+test("manager and admin default to overview plus reset-only settings access", async ({
   page,
 }) => {
   const assertNoRuntimeErrors = attachRuntimeCollectors(page);
@@ -85,17 +86,194 @@ test("manager and admin land on overview and keep access to operational modules 
     await signIn(page, account.email);
     await expect(page.getByText(account.role).first()).toBeVisible();
     await expect(page.getByRole("heading", { name: "Daily flow" })).toBeVisible();
-    await expect(
-      primaryNav(page).getByRole("button", { name: /^Settings/i }),
-    ).toHaveCount(0);
+    await expect(page.locator("button.module-button").filter({ hasText: "Money" })).toHaveCount(0);
+    await expect(page.locator("button.module-button").filter({ hasText: "Fleet & Operations" })).toHaveCount(0);
+    await expect(page.locator("button.module-button").filter({ hasText: "Drivers" })).toHaveCount(0);
+    await expect(moduleButton(page, "Settings")).toBeVisible();
 
-    await openModule(page, "Money", "Daily trip entry");
-    await openModule(page, "Fleet", "Fleet overview");
-    await openModule(page, "Drivers", "Terminal preview");
+    await openModule(page, "Settings", "User accounts");
+    await expect(page.getByRole("heading", { name: "Reset selected password" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Password reset requests" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Email outbox" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Roles and rights" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Data mode" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Factory reset" })).toHaveCount(0);
 
     await signOut(page);
   }
 
+  assertNoRuntimeErrors();
+});
+
+test("sign-in screen routes forgotten passwords to management", async ({ page }) => {
+  const assertNoRuntimeErrors = attachRuntimeCollectors(page);
+
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
+  await page.getByLabel("Email").fill(driverAccount.email);
+  await expect(page.getByRole("button", { name: "Forgot password?" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Forgot password?" }).click();
+  await expect(
+    page.getByText(/Management will reset the password for this account\./i),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Send reset request" }).click();
+
+  await expect(
+    page.getByText(/Management has been notified in-app and the email queue has been created\./i),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Send reset request" }).click();
+  await expect(
+    page.getByText(/Management has already been notified in-app and by email\./i),
+  ).toBeVisible();
+
+  await signIn(page, ownerAccount.email);
+  await openModule(page, "Settings", "Roles and rights");
+
+  const resetPanel = page.locator("section.panel-card").filter({
+    has: page.getByRole("heading", { name: "Password reset requests" }),
+  });
+  const requestRow = resetPanel.locator("article.person-row").filter({
+    hasText: driverAccount.email,
+  });
+  await expect(requestRow).toContainText("Pending");
+  await expect(requestRow).toContainText("Requested");
+  await expect(requestRow).toContainText("In-app sent");
+  await expect(requestRow).toContainText("Email queued");
+
+  const emailPanel = page.locator("section.panel-card").filter({
+    has: page.getByRole("heading", { name: "Email outbox" }),
+  });
+  const emailRow = emailPanel.locator("article.ledger-row").filter({
+    hasText: `TaxiFlow password reset request / ${driverAccount.email}`,
+  });
+  await expect(emailRow).toContainText("Queued");
+  await expect(emailRow).toContainText("owner@taxiflow.local");
+  await expect(emailRow).toContainText("admin@taxiflow.local");
+  await expect(emailRow).toContainText("manager@taxiflow.local");
+
+  await signOut(page);
+  assertNoRuntimeErrors();
+});
+
+test("owner settings rights allow admin to add a driver", async ({ page }) => {
+  const assertNoRuntimeErrors = attachRuntimeCollectors(page);
+
+  await signIn(page, ownerAccount.email);
+  await openModule(page, "Settings", "Roles and rights");
+
+  const adminRow = page.locator("article.person-row").filter({
+    hasText: "admin@taxiflow.local",
+  });
+  await adminRow.getByRole("button", { name: "Manage" }).click();
+  const accessForm = page.locator("form.finance-form").filter({
+    has: page.getByRole("button", { name: "Save access" }),
+  });
+  await accessForm.getByRole("button", { name: "Drivers" }).click();
+  await accessForm.getByRole("button", { name: "Save access" }).click();
+  await expect(page.getByText(/updated as Admin\./i)).toBeVisible();
+  await signOut(page);
+
+  await signIn(page, "admin@taxiflow.local");
+  await openModule(page, "Drivers", "Terminal preview");
+
+  const addDriverButton = page.getByRole("button", { name: "Add driver" }).first();
+  await expect(addDriverButton).toBeEnabled();
+  await addDriverButton.click();
+
+  const addDriverForm = page.locator("form.finance-form").filter({
+    has: page.getByRole("button", { name: "Save driver" }),
+  });
+  await addDriverForm.getByLabel("Full name").fill("Access Test Driver");
+  await addDriverForm.getByLabel("Email address").fill("access.test.driver@taxiflow.local");
+  await addDriverForm.getByLabel("Assigned routes").selectOption({ index: 0 });
+  await addDriverForm.getByLabel("Password").fill("Driver123");
+  await addDriverForm.getByRole("button", { name: "Save driver" }).click();
+
+  await expect(page.getByText("Access Test Driver added to the driver roster.")).toBeVisible();
+  await signOut(page);
+  assertNoRuntimeErrors();
+});
+
+test("owner settings rights allow manager to work in Fleet & Operations", async ({ page }) => {
+  const assertNoRuntimeErrors = attachRuntimeCollectors(page);
+
+  await signIn(page, ownerAccount.email);
+  await openModule(page, "Settings", "Roles and rights");
+
+  const managerRow = page.locator("article.person-row").filter({
+    hasText: "manager@taxiflow.local",
+  });
+  await managerRow.getByRole("button", { name: "Manage" }).click();
+  const accessForm = page.locator("form.finance-form").filter({
+    has: page.getByRole("button", { name: "Save access" }),
+  });
+  await accessForm.getByRole("button", { name: "Fleet & Operations" }).click();
+  await accessForm.getByRole("button", { name: "Save access" }).click();
+  await expect(page.getByText(/updated as Manager\./i)).toBeVisible();
+  await signOut(page);
+
+  await signIn(page, "manager@taxiflow.local");
+  await openModule(page, "Fleet & Operations", "Fleet & Operations overview");
+  await expect(page.getByRole("button", { name: "Add vehicle" }).first()).toBeEnabled();
+
+  await signOut(page);
+  assertNoRuntimeErrors();
+});
+
+test("owner can add a vehicle from Fleet & Operations", async ({ page }) => {
+  const assertNoRuntimeErrors = attachRuntimeCollectors(page);
+
+  await signIn(page, ownerAccount.email);
+  await openModule(page, "Fleet & Operations", "Fleet & Operations overview");
+
+  await page.getByRole("button", { name: "Add vehicle" }).first().click();
+
+  const vehicleForm = page.locator("form.finance-form").filter({
+    has: page.getByRole("button", { name: "Create vehicle" }),
+  });
+  await vehicleForm.getByLabel("Registration").fill("TEST123GP");
+  await vehicleForm.getByLabel("Model").fill("Toyota Quantum");
+  await vehicleForm.getByLabel("Route").selectOption({ index: 1 });
+  await vehicleForm.getByRole("button", { name: "Create vehicle" }).click();
+
+  await expect(page.getByText("Vehicle profile created.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: /TEST123GP/i })).toBeVisible();
+
+  await signOut(page);
+  assertNoRuntimeErrors();
+});
+
+test("management can save expense setup and use preset dropdowns", async ({ page }) => {
+  const assertNoRuntimeErrors = attachRuntimeCollectors(page);
+
+  await signIn(page, ownerAccount.email);
+  await openModule(page, "Money", "Daily trip entry");
+  await page.getByRole("button", { name: "Expenses" }).click();
+  await expect(page.getByRole("heading", { name: "Vehicle cost presets" })).toBeVisible();
+
+  const setupForm = page.locator("form.finance-form").filter({
+    has: page.getByRole("button", { name: "Save setup" }),
+  });
+  await setupForm.getByLabel("Category name").fill("Test setup");
+  await setupForm.getByLabel("Description option").fill("Test description");
+  await setupForm.getByRole("button", { name: "Save setup" }).click();
+
+  await expect(page.getByText("Test setup saved with Test description.")).toBeVisible();
+
+  const expenseForm = page.locator("form.finance-form").filter({
+    has: page.getByRole("button", { name: "Save expense" }),
+  });
+  await expenseForm.getByLabel("Category").selectOption("Test setup");
+  await expect(expenseForm.getByLabel("Description")).toHaveValue("Test description");
+
+  await expenseForm.getByLabel("Category").selectOption("Other");
+  await expect(expenseForm.getByLabel("Description")).toHaveAttribute(
+    "placeholder",
+    "Provide the expense details",
+  );
+
+  await signOut(page);
   assertNoRuntimeErrors();
 });
 
@@ -105,12 +283,12 @@ test("driver lands in the driver terminal and only sees allowed modules", async 
   await signIn(page, driverAccount.email);
   await expect(page.getByText(driverAccount.role).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "Terminal preview" })).toBeVisible();
-  await expect(primaryNav(page).getByRole("button", { name: /Money/i })).toHaveCount(0);
-  await expect(primaryNav(page).getByRole("button", { name: /^Settings/i })).toHaveCount(0);
+  await expect(page.locator("button.module-button").filter({ hasText: "Money" })).toHaveCount(0);
+  await expect(page.locator("button.module-button").filter({ hasText: "Settings" })).toHaveCount(0);
 
   await openModule(page, "Overview", "Quick actions");
   await expect(page.getByRole("heading", { name: "My alerts" })).toBeVisible();
-  await openModule(page, "Fleet", "Fleet overview");
+  await openModule(page, "Fleet & Operations", "Fleet & Operations overview");
   await openModule(page, "Drivers", "Terminal preview");
 
   await signOut(page);

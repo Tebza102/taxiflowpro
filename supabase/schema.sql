@@ -77,6 +77,14 @@ create table if not exists shift_reconciliations (
   route text,
   opening_odometer integer not null,
   closing_odometer integer not null,
+  time_in time,
+  time_out time,
+  odometer_start integer,
+  odometer_end integer,
+  km_computed numeric(12, 2),
+  trip_duration_min integer,
+  day_start_odometer integer,
+  day_end_odometer integer,
   claimed_amount numeric(12, 2) not null,
   counted_amount numeric(12, 2),
   shortage_amount numeric(12, 2) generated always as
@@ -84,6 +92,7 @@ create table if not exists shift_reconciliations (
   gap_km integer generated always as
     (greatest(coalesce(closing_odometer, 0) - coalesce(opening_odometer, 0), 0)) stored,
   status text not null default 'Submitted',
+  notes text,
   submitted_at timestamptz default now(),
   verified_at timestamptz,
   verified_by uuid references personnel_profiles(id),

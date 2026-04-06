@@ -26,6 +26,13 @@ import {
   Users,
   Wrench,
 } from "lucide-react";
+import {
+  calculateDailyAnalytics,
+  calculateKmComputed,
+  calculateTripAnalytics,
+  calculateTripDurationMin,
+} from "./lib/analytics";
+import { TripLegOptionalFields } from "./components/TripLegOptionalFields";
 import { repository } from "./lib/dataGateway";
 import { hasSupabaseConfig, supabase } from "./lib/supabaseClient";
 
@@ -77,7 +84,7 @@ const MODULE_EDIT_ACCESS = {
     detail: "Daily takings, extra trips, expenses, and bank checks.",
   },
   fleet: {
-    label: "Fleet",
+    label: "Fleet & Operations",
     detail: "Vehicle profiles, defects, repairs, and archive actions.",
   },
   drivers: {
@@ -98,7 +105,7 @@ const MODULE_VIEW_ACCESS = {
     roles: ["Owner", "Admin", "Manager"],
   },
   fleet: {
-    label: "Fleet",
+    label: "Fleet & Operations",
     detail: "Vehicles, defects, and service status.",
     roles: ROLES,
   },
@@ -110,7 +117,7 @@ const MODULE_VIEW_ACCESS = {
   settings: {
     label: "Settings",
     detail: "User roles and access rights.",
-    roles: ["Owner"],
+    roles: ["Owner", "Admin", "Manager"],
   },
 };
 
@@ -126,17 +133,60 @@ const NAV_ITEMS = [
   },
   {
     id: "fleet",
-    label: "Fleet",
+    label: "Fleet & Operations",
     icon: Activity,
     roles: ROLES,
   },
   { id: "drivers", label: "Drivers", icon: Users, roles: ROLES },
-  { id: "settings", label: "Settings", icon: Settings2, roles: ["Owner"] },
+  { id: "settings", label: "Settings", icon: Settings2, roles: ["Owner", "Admin", "Manager"] },
 ];
 
 const formatMoney = (value) => ZAR.format(value ?? 0);
 
 const DEFECT_CATEGORIES = ["Windscreen", "Tires", "Seats", "Engine", "Other"];
+const ROUTE_TYPE_OPTIONS = [
+  { value: "route_service", label: "Route service" },
+  { value: "special_trip", label: "Special trip" },
+  { value: "contract", label: "Contract" },
+];
+const EXPENSE_OTHER_CATEGORY = "Other";
+const EXPENSE_CUSTOM_DESCRIPTION_VALUE = "__custom__";
+const DEFAULT_EXPENSE_PRESET_CATALOG = {
+  asset: [
+    {
+      id: "preset-asset-fuel",
+      name: "Fuel",
+      descriptions: ["Fuel top-up", "Fuel refill"],
+    },
+    {
+      id: "preset-asset-repairs",
+      name: "Repairs",
+      descriptions: ["Workshop repair", "Parts replacement"],
+    },
+    {
+      id: "preset-asset-subscription",
+      name: "Subscription",
+      descriptions: ["Weekly subscription", "Rank subscription"],
+    },
+  ],
+  operational: [
+    {
+      id: "preset-operational-salary",
+      name: "Salary",
+      descriptions: ["Driver salary", "Office wages"],
+    },
+    {
+      id: "preset-operational-admin",
+      name: "Admin",
+      descriptions: ["Stationery", "Data and airtime"],
+    },
+    {
+      id: "preset-operational-subscription",
+      name: "Subscription",
+      descriptions: ["System subscription", "Software licence"],
+    },
+  ],
+};
 
 const createRecordId = (prefix) =>
   `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -202,6 +252,24 @@ const getQueueTone = (entry) => {
 
 const canRecordCashHandoverForRole = (role) => ["Owner", "Admin"].includes(role);
 const canVerifyCashCheckForRole = (role) => ["Owner", "Manager"].includes(role);
+const getVehicleReadinessOptions = (counts = {}) => [
+  ["all", "All readiness"],
+  ["route-service", `Route service ${counts.routeService ?? 0}`],
+  ["special-trips", `Special trips ${counts.specialTrips ?? 0}`],
+  ["contracts", `Contracts ${counts.contracts ?? 0}`],
+];
+const matchesVehicleReadiness = (vehicle, readinessFilter) => {
+  if (readinessFilter === "route-service") {
+    return Boolean(vehicle?.canDoRouteService);
+  }
+  if (readinessFilter === "special-trips") {
+    return Boolean(vehicle?.canDoSpecialTrips);
+  }
+  if (readinessFilter === "contracts") {
+    return Boolean(vehicle?.canDoContracts);
+  }
+  return true;
+};
 
 const getVehicleTone = (vehicle) => {
   if (vehicle.status === "archived") {
@@ -248,6 +316,7 @@ const toneLabel = {
 };
 
 const PRIVILEGED_ROLES = new Set(["Owner", "Admin", "Manager"]);
+const PASSWORD_RESET_ROLES = new Set(["Owner", "Admin", "Manager"]);
 const DRIVER_SHORTCUTS = [
   "Log shift takings",
   "Log daily expense",
@@ -286,6 +355,33 @@ const normalizePermissionControls = (value = {}) =>
 const getPermissionControls = (snapshot) =>
   normalizePermissionControls(snapshot?.permissionControls);
 
+const getStoredAppUserByIdentity = (snapshot, identity) => {
+  if (!identity) {
+    return null;
+  }
+
+  const normalizedEmail = String(identity.email ?? "")
+    .trim()
+    .toLowerCase();
+  const normalizedActorId = String(identity.actorId ?? "")
+    .trim();
+
+  return (
+    (snapshot?.appUsers ?? []).find((user) => {
+      const userEmail = String(user.email ?? "")
+        .trim()
+        .toLowerCase();
+      const userActorId = String(user.actorId ?? user.staffId ?? "")
+        .trim();
+
+      return (
+        (normalizedEmail && userEmail === normalizedEmail) ||
+        (normalizedActorId && userActorId === normalizedActorId)
+      );
+    }) ?? null
+  );
+};
+
 const getModuleAccessStatus = (control) => {
   if (control?.active) {
     return {
@@ -321,20 +417,25 @@ const getModuleAccessStatus = (control) => {
   };
 };
 
-const canEditModuleUpdates = (role, moduleKey, permissionControls) => {
-  if (role === "Owner" || role === "Manager") {
+const canEditModuleUpdates = (role, moduleKey, permissionControls, currentUserRecord = null) => {
+  if (role === "Owner") {
     return true;
   }
 
-  if (role === "Admin") {
-    return Boolean(permissionControls?.[moduleKey]?.active);
+  if (["Admin", "Manager"].includes(role)) {
+    return Boolean(
+      normalizeModuleViewAccess(
+        currentUserRecord?.moduleAccess,
+        currentUserRecord?.role ?? role,
+      )?.[moduleKey],
+    );
   }
 
   return false;
 };
 
 const getModuleAccessErrorMessage = (moduleKey) =>
-  `Admin cannot change ${MODULE_EDIT_ACCESS[moduleKey]?.label?.toLowerCase() ?? moduleKey} records until a manager receives owner approval and grants access.`;
+  `This change is locked until the owner enables ${MODULE_EDIT_ACCESS[moduleKey]?.label?.toLowerCase() ?? moduleKey} access in Settings.`;
 
 const normalizeRole = (value) =>
   ROLES.find((role) => role.toLowerCase() === String(value ?? "").trim().toLowerCase()) ?? null;
@@ -344,6 +445,15 @@ const createDefaultModuleViewAccess = (role) => {
 
   if (normalizedRole === "Owner") {
     return Object.fromEntries(Object.keys(MODULE_VIEW_ACCESS).map((moduleKey) => [moduleKey, true]));
+  }
+
+  if (["Admin", "Manager"].includes(normalizedRole)) {
+    return Object.fromEntries(
+      Object.keys(MODULE_VIEW_ACCESS).map((moduleKey) => [
+        moduleKey,
+        moduleKey === "overview" || moduleKey === "settings",
+      ]),
+    );
   }
 
   return Object.fromEntries(
@@ -369,7 +479,7 @@ const normalizeModuleViewAccess = (value = {}, role) => {
       }
 
       if (moduleKey === "settings") {
-        return [moduleKey, normalizedRole === "Owner"];
+        return [moduleKey, MODULE_VIEW_ACCESS[moduleKey].roles.includes(normalizedRole)];
       }
 
       const allowedByRole = MODULE_VIEW_ACCESS[moduleKey].roles.includes(normalizedRole);
@@ -386,6 +496,32 @@ const sanitizeEmailLocalPart = (value) =>
     .replace(/[^\x00-\x7F]/g, "")
     .replace(/[^a-z0-9]+/g, ".")
     .replace(/^\.+|\.+$/g, "");
+
+const normalizeEmailAddress = (value) => String(value ?? "").trim().toLowerCase();
+const isValidEmailAddress = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizeEmailAddress(value));
+const buildRouteReferenceId = (route) => {
+  const normalizedRoute = sanitizeEmailLocalPart(route)?.replace(/\.+/g, "-");
+  return normalizedRoute ? `route-${normalizedRoute}` : null;
+};
+const normalizeVehicleCapabilityHooks = (vehicle = {}) => {
+  const seatCapacity = Number(vehicle.seatCapacity ?? vehicle.seat_capacity ?? 15);
+
+  return {
+    ...vehicle,
+    canDoRouteService: Boolean(
+      vehicle.canDoRouteService ?? vehicle.can_do_route_service ?? true,
+    ),
+    canDoSpecialTrips: Boolean(
+      vehicle.canDoSpecialTrips ?? vehicle.can_do_special_trips ?? false,
+    ),
+    canDoContracts: Boolean(vehicle.canDoContracts ?? vehicle.can_do_contracts ?? false),
+    seatCapacity: Number.isFinite(seatCapacity) && seatCapacity > 0 ? seatCapacity : 15,
+    currentRouteId:
+      vehicle.currentRouteId ??
+      vehicle.current_route_id ??
+      buildRouteReferenceId(vehicle.route),
+  };
+};
 
 const createGeneratedLocalEmail = (name, usedEmails) => {
   const base = sanitizeEmailLocalPart(name) || "user";
@@ -435,6 +571,7 @@ const normalizeAppUser = (user = {}) => {
     role,
     actorId,
     staffId,
+    accessPassword: String(user.accessPassword ?? user.localPassword ?? user.password ?? "").trim() || null,
     moduleAccess: normalizeModuleViewAccess(user.moduleAccess, role),
     createdAt: user.createdAt ?? null,
     createdBy: user.createdBy ?? null,
@@ -478,7 +615,10 @@ const buildDefaultAppUsers = (snapshot) => {
 
   (snapshot?.drivers ?? []).forEach((driver) => {
     const mappedAccount = accountByActorId.get(driver.staffId);
-    const email = mappedAccount?.email ?? createGeneratedLocalEmail(driver.name, usedEmails);
+    const email =
+      normalizeEmailAddress(driver.email) ||
+      mappedAccount?.email ||
+      createGeneratedLocalEmail(driver.name, usedEmails);
 
     pushUser({
       email,
@@ -486,6 +626,7 @@ const buildDefaultAppUsers = (snapshot) => {
       role: normalizeRole(driver.role) ?? "Driver",
       actorId: mappedAccount?.actorId ?? driver.staffId,
       staffId: driver.staffId,
+      accessPassword: driver.accessPassword ?? null,
       createdAt: driver.createdAt ?? null,
       createdBy: driver.createdBy ?? null,
       createdByRole: driver.createdByRole ?? null,
@@ -562,6 +703,7 @@ const createUserAccessDraft = (user) => {
     actorId: user?.actorId ?? "",
     staffId: user?.staffId ?? null,
     moduleAccess: normalizeModuleViewAccess(user?.moduleAccess, role),
+    nextAccessPassword: "",
   };
 };
 
@@ -790,6 +932,76 @@ const getTimeInputMinutes = (value) => {
   return parsedTime ? parsedTime.hour * 60 + parsedTime.minute : null;
 };
 
+const normalizeOptionalText = (value) => {
+  const normalized = String(value ?? "").trim();
+
+  return normalized || null;
+};
+
+const normalizeOptionalNumber = (value) => {
+  if (value == null || value === "") {
+    return null;
+  }
+
+  const numeric = Number(value);
+
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const getComputedKmValue = (startValue, endValue) => {
+  return calculateKmComputed({
+    odometerStart: startValue,
+    odometerEnd: endValue,
+  });
+};
+
+const getTripDurationMinutes = (timeInValue, timeOutValue) => {
+  return calculateTripDurationMin({
+    timeIn: timeInValue,
+    timeOut: timeOutValue,
+  });
+};
+
+const buildTripAnalyticsFields = (value = {}) => {
+  const timeIn = normalizeOptionalText(value.timeIn ?? value.time_in);
+  const timeOut = normalizeOptionalText(value.timeOut ?? value.time_out);
+  const odometerStart = normalizeOptionalNumber(
+    value.odometerStart ?? value.odometer_start ?? value.openingOdo ?? value.opening_odo,
+  );
+  const odometerEnd = normalizeOptionalNumber(
+    value.odometerEnd ?? value.odometer_end ?? value.closingOdo ?? value.closing_odo,
+  );
+
+  return {
+    timeIn,
+    timeOut,
+    odometerStart,
+    odometerEnd,
+    kmComputed:
+      normalizeOptionalNumber(value.kmComputed ?? value.km_computed) ??
+      getComputedKmValue(odometerStart, odometerEnd),
+    tripDurationMin:
+      normalizeOptionalNumber(value.tripDurationMin ?? value.trip_duration_min) ??
+      getTripDurationMinutes(timeIn, timeOut),
+  };
+};
+
+const buildDailyAnalyticsFields = (value = {}) => ({
+  dayStartOdometer: normalizeOptionalNumber(
+    value.dayStartOdometer ??
+      value.day_start_odometer ??
+      value.openingOdo ??
+      value.opening_odo,
+  ),
+  dayEndOdometer: normalizeOptionalNumber(
+    value.dayEndOdometer ??
+      value.day_end_odometer ??
+      value.closingOdo ??
+      value.closing_odo,
+  ),
+  notes: normalizeOptionalText(value.notes),
+});
+
 const createTimestampFromDateInput = (dateValue, fallback = new Date().toISOString()) => {
   const parsedDate = parseDateInputValue(dateValue);
 
@@ -889,6 +1101,543 @@ const getRouteStops = (routeValue) => {
   };
 };
 
+const getRoutePointLabels = (routeValue) => {
+  const route = String(routeValue ?? "").trim();
+
+  if (!route) {
+    return [];
+  }
+
+  const arrowParts = route
+    .split(/\s*(?:->|→|>|›)\s*/i)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (arrowParts.length > 1) {
+    return arrowParts;
+  }
+
+  const toParts = route
+    .split(/\s+to\s+/i)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (toParts.length > 1) {
+    return toParts;
+  }
+
+  const slashParts = route.split("/").map((part) => part.trim()).filter(Boolean);
+  if (slashParts.length > 1) {
+    return slashParts;
+  }
+
+  return [route];
+};
+
+const buildRoutePointReference = (routeId, pointLabel, sequence) =>
+  `${routeId ?? "route"}-point-${buildRouteReferenceId(pointLabel)?.replace(/^route-/, "") ?? sequence}`;
+
+const getDefaultRouteStopType = (index, total) => {
+  if (total <= 1) {
+    return "both";
+  }
+
+  if (index === 0) {
+    return "pickup";
+  }
+
+  if (index === total - 1) {
+    return "dropoff";
+  }
+
+  return "both";
+};
+
+const normalizeRoutePointRecord = (point, routeId, index, total) => {
+  const label = String(
+    point?.label ??
+      point?.name ??
+      point?.locationLabel ??
+      point?.location_label ??
+      point ??
+      "",
+  ).trim();
+
+  if (!label) {
+    return null;
+  }
+
+  const stopType = String(
+    point?.stopType ?? point?.stop_type ?? getDefaultRouteStopType(index, total),
+  )
+    .trim()
+    .toLowerCase();
+  const safeStopType = ["pickup", "dropoff", "both", "checkpoint"].includes(stopType)
+    ? stopType
+    : getDefaultRouteStopType(index, total);
+
+  return {
+    id:
+      String(point?.id ?? point?.pointId ?? point?.point_id ?? "").trim() ||
+      buildRoutePointReference(routeId, label, index + 1),
+    sequence:
+      Number.isFinite(Number(point?.sequence ?? point?.order)) &&
+      Number(point?.sequence ?? point?.order) > 0
+        ? Number(point.sequence ?? point.order)
+        : index + 1,
+    label,
+    stopType: safeStopType,
+  };
+};
+
+const normalizeRoutePointRecords = (points, routeId, fallbackLabels = []) => {
+  const sourcePoints =
+    Array.isArray(points) && points.length > 0 ? points : fallbackLabels;
+  const normalizedPoints = sourcePoints
+    .map((point, index) =>
+      normalizeRoutePointRecord(point, routeId, index, sourcePoints.length),
+    )
+    .filter(Boolean)
+    .sort((left, right) => left.sequence - right.sequence)
+    .map((point, index, items) => ({
+      ...point,
+      sequence: index + 1,
+      stopType:
+        ["pickup", "dropoff", "both", "checkpoint"].includes(point.stopType)
+          ? point.stopType
+          : getDefaultRouteStopType(index, items.length),
+    }));
+
+  return normalizedPoints;
+};
+
+const buildRouteCode = (value) => {
+  const parts = String(value ?? "")
+    .trim()
+    .toUpperCase()
+    .normalize("NFKD")
+    .replace(/[^\x00-\x7F]/g, "")
+    .replace(/[^A-Z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((part) => part && part !== "TO" && part !== "AND");
+
+  if (parts.length === 0) {
+    return "";
+  }
+
+  const initials = parts.map((part) => part[0]).join("").slice(0, 8);
+  return initials || parts.join("").slice(0, 8);
+};
+
+const normalizeRouteMasterRecord = (route = {}) => {
+  const rawName = String(
+    route.name ??
+      route.routeName ??
+      route.route_name ??
+      route.route ??
+      "",
+  ).trim();
+  const inferredStops = getRouteStops(rawName);
+  const primaryOrigin = String(
+    route.primaryOrigin ??
+      route.primary_origin ??
+      inferredStops.fromLocation ??
+      "",
+  ).trim();
+  const primaryDestination = String(
+    route.primaryDestination ??
+      route.primary_destination ??
+      inferredStops.toLocation ??
+      "",
+  ).trim();
+  const name = rawName || [primaryOrigin, primaryDestination].filter(Boolean).join(" to ");
+
+  if (!name) {
+    return null;
+  }
+
+  const routeId =
+    String(route.id ?? route.currentRouteId ?? route.current_route_id ?? "").trim() ||
+    buildRouteReferenceId(name);
+  const routePoints = normalizeRoutePointRecords(
+    route.routePoints ?? route.route_points ?? route.points,
+    routeId,
+    getRoutePointLabels(name),
+  );
+
+  return {
+    ...route,
+    id: routeId,
+    name,
+    code:
+      String(route.code ?? route.routeCode ?? route.route_code ?? buildRouteCode(name)).trim() ||
+      buildRouteCode(name),
+    type:
+      String(route.type ?? route.routeType ?? route.route_type ?? "route_service").trim() ||
+      "route_service",
+    primaryOrigin,
+    primaryDestination,
+    routePoints,
+    isActive: Boolean(route.isActive ?? route.is_active ?? true),
+  };
+};
+
+const mergeRouteMasterRecord = (existing, incoming) => ({
+  ...existing,
+  name: existing.name || incoming.name,
+  code: existing.code || incoming.code,
+  type: existing.type || incoming.type,
+  primaryOrigin: existing.primaryOrigin || incoming.primaryOrigin,
+  primaryDestination: existing.primaryDestination || incoming.primaryDestination,
+  routePoints:
+    Array.isArray(existing.routePoints) && existing.routePoints.length > 0
+      ? existing.routePoints
+      : incoming.routePoints,
+  isActive: existing.isActive ?? incoming.isActive ?? true,
+});
+
+const collectRouteMasterRecords = (source = {}) => {
+  const routesById = new Map();
+  const addRoute = (route) => {
+    const normalizedRoute = normalizeRouteMasterRecord(route);
+
+    if (!normalizedRoute?.id) {
+      return;
+    }
+
+    const existingRoute = routesById.get(normalizedRoute.id);
+    routesById.set(
+      normalizedRoute.id,
+      existingRoute
+        ? mergeRouteMasterRecord(existingRoute, normalizedRoute)
+        : normalizedRoute,
+    );
+  };
+
+  (Array.isArray(source.routes) ? source.routes : []).forEach(addRoute);
+  (Array.isArray(source.vehicles) ? source.vehicles : []).forEach((vehicle) =>
+    addRoute({
+      id:
+        String(vehicle.currentRouteId ?? vehicle.current_route_id ?? "").trim() ||
+        buildRouteReferenceId(vehicle.route),
+      route: vehicle.route,
+      isActive: vehicle.status !== "archived",
+    }),
+  );
+  (Array.isArray(source.drivers) ? source.drivers : []).forEach((driver) =>
+    addRoute({
+      route: driver.route,
+    }),
+  );
+
+  return Array.from(routesById.values()).sort((left, right) =>
+    String(left.name ?? "").localeCompare(String(right.name ?? "")),
+  );
+};
+
+const normalizeDriverRouteAssignments = (driver = {}, routes = []) => {
+  const routeById = new Map(
+    routes.map((route) => [String(route.id ?? "").trim(), route]),
+  );
+  const routeByName = new Map(
+    routes.map((route) => [String(route.name ?? "").trim().toLowerCase(), route]),
+  );
+  const routeIds = [];
+  const routeNames = [];
+
+  const pushRoute = (route) => {
+    const routeId = String(route?.id ?? buildRouteReferenceId(route?.name ?? "") ?? "").trim();
+    const routeName = String(route?.name ?? route?.route ?? "").trim();
+
+    if (!routeName) {
+      return;
+    }
+
+    const dedupeKey = routeId || routeName.toLowerCase();
+    if (routeIds.includes(dedupeKey) || routeNames.some((name) => name.toLowerCase() === routeName.toLowerCase())) {
+      return;
+    }
+
+    routeIds.push(routeId || dedupeKey);
+    routeNames.push(routeName);
+  };
+
+  [
+    ...(Array.isArray(driver.routeIds) ? driver.routeIds : []),
+    ...(Array.isArray(driver.route_ids) ? driver.route_ids : []),
+  ]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean)
+    .forEach((routeId) => {
+      const matchedRoute = routeById.get(routeId);
+      if (matchedRoute) {
+        pushRoute(matchedRoute);
+      }
+    });
+
+  const rawRouteNames = [
+    ...(Array.isArray(driver.routeNames) ? driver.routeNames : []),
+    ...(Array.isArray(driver.route_names) ? driver.route_names : []),
+    ...(Array.isArray(driver.routes) ? driver.routes : []),
+    driver.route,
+  ]
+    .map((value) =>
+      typeof value === "string"
+        ? value
+        : value?.name ?? value?.route ?? value?.primaryRoute ?? "",
+    )
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+
+  rawRouteNames.forEach((routeName) => {
+    pushRoute(
+      routeByName.get(routeName.toLowerCase()) ?? {
+        id: buildRouteReferenceId(routeName),
+        name: routeName,
+      },
+    );
+  });
+
+  const primaryRoute = routeNames[0] ?? String(driver.primaryRoute ?? driver.route ?? "").trim();
+
+  return {
+    routeIds,
+    routeNames,
+    primaryRouteId: routeIds[0] ?? (String(driver.primaryRouteId ?? "").trim() || null),
+    primaryRoute,
+    routeSummary:
+      routeNames.length > 0
+        ? routeNames.join(" / ")
+        : primaryRoute || "No route assigned",
+  };
+};
+
+const getDriverRouteSummary = (driver) =>
+  String(driver?.routeSummary ?? driver?.routeNames?.join(" / ") ?? driver?.route ?? "")
+    .trim() || "No route assigned";
+
+const resolveVehicleRouteSelection = (draft = {}, routes = []) => {
+  const selectedRouteId = String(draft.currentRouteId ?? "").trim();
+  const enteredRoute = String(draft.route ?? "").trim();
+  const selectedRoute =
+    routes.find((route) => String(route.id ?? "").trim() === selectedRouteId) ?? null;
+  const matchingRoute =
+    routes.find(
+      (route) => String(route.name ?? "").trim().toLowerCase() === enteredRoute.toLowerCase(),
+    ) ?? null;
+  const resolvedRoute = enteredRoute || selectedRoute?.name || matchingRoute?.name || "";
+  const resolvedRouteId =
+    selectedRoute?.id ??
+    matchingRoute?.id ??
+    (resolvedRoute ? buildRouteReferenceId(resolvedRoute) : null);
+
+  return {
+    route: resolvedRoute,
+    currentRouteId: resolvedRouteId,
+  };
+};
+
+const normalizeExpensePresetName = (value) => String(value ?? "").trim();
+
+const buildExpensePresetId = (expenseKind, category) =>
+  `expense-preset-${expenseKind}-${sanitizeEmailLocalPart(category)?.replace(/\.+/g, "-") || "item"}`;
+
+const normalizeExpensePresetRecord = (entry = {}, expenseKind = "asset") => {
+  const name = normalizeExpensePresetName(entry.name ?? entry.category);
+
+  if (!name) {
+    return null;
+  }
+
+  const descriptions = Array.from(
+    new Set(
+      [
+        ...(Array.isArray(entry.descriptions) ? entry.descriptions : []),
+        ...(Array.isArray(entry.descriptionOptions) ? entry.descriptionOptions : []),
+        entry.description,
+      ]
+        .map((value) => normalizeExpensePresetName(value))
+        .filter(Boolean),
+    ),
+  );
+
+  return {
+    id:
+      String(entry.id ?? entry.presetId ?? "").trim() ||
+      buildExpensePresetId(expenseKind, name),
+    name,
+    descriptions,
+  };
+};
+
+const mergeExpensePresetRecord = (existing, incoming) => ({
+  ...existing,
+  ...incoming,
+  descriptions: Array.from(
+    new Set([...(existing?.descriptions ?? []), ...(incoming?.descriptions ?? [])]),
+  ),
+});
+
+const normalizeExpensePresetCatalog = (catalog = {}) => {
+  const normalizeKind = (expenseKind) => {
+    const presetsByName = new Map();
+    const sourceItems = [
+      ...(DEFAULT_EXPENSE_PRESET_CATALOG[expenseKind] ?? []),
+      ...(Array.isArray(catalog?.[expenseKind]) ? catalog[expenseKind] : []),
+    ];
+
+    sourceItems.forEach((entry) => {
+      const normalized = normalizeExpensePresetRecord(entry, expenseKind);
+
+      if (!normalized || normalized.name.toLowerCase() === EXPENSE_OTHER_CATEGORY.toLowerCase()) {
+        return;
+      }
+
+      const key = normalized.name.toLowerCase();
+      presetsByName.set(
+        key,
+        presetsByName.has(key)
+          ? mergeExpensePresetRecord(presetsByName.get(key), normalized)
+          : normalized,
+      );
+    });
+
+    return Array.from(presetsByName.values()).sort((left, right) =>
+      left.name.localeCompare(right.name),
+    );
+  };
+
+  return {
+    asset: normalizeKind("asset"),
+    operational: normalizeKind("operational"),
+  };
+};
+
+const collectExpensePresetCatalog = (finance = {}, transactions = []) => {
+  const catalog = normalizeExpensePresetCatalog(finance.expenseCatalog);
+
+  transactions
+    .filter((record) => record.type === "expense")
+    .forEach((record) => {
+      const expenseKind = record.expenseKind === "operational" ? "operational" : "asset";
+      const category = normalizeExpensePresetName(record.category);
+      const description = normalizeExpensePresetName(record.description);
+
+      if (!category || category.toLowerCase() === EXPENSE_OTHER_CATEGORY.toLowerCase()) {
+        return;
+      }
+
+      const currentItems = catalog[expenseKind] ?? [];
+      const existing = currentItems.find(
+        (entry) => entry.name.toLowerCase() === category.toLowerCase(),
+      );
+      const nextEntry = normalizeExpensePresetRecord(
+        {
+          ...existing,
+          name: category,
+          descriptions: [...(existing?.descriptions ?? []), description],
+        },
+        expenseKind,
+      );
+
+      catalog[expenseKind] = normalizeExpensePresetCatalog({
+        ...catalog,
+        [expenseKind]: existing
+          ? currentItems.map((entry) =>
+              entry.name.toLowerCase() === category.toLowerCase() ? nextEntry : entry,
+            )
+          : [...currentItems, nextEntry],
+      })[expenseKind];
+    });
+
+  return catalog;
+};
+
+const getExpenseCatalogEntries = (expenseCatalog, expenseKind) =>
+  Array.isArray(expenseCatalog?.[expenseKind]) ? expenseCatalog[expenseKind] : [];
+
+const getExpenseCategoryOptions = (expenseCatalog, expenseKind, currentValue = "") =>
+  Array.from(
+    new Set(
+      [
+        ...getExpenseCatalogEntries(expenseCatalog, expenseKind).map((entry) => entry.name),
+        normalizeExpensePresetName(currentValue),
+        EXPENSE_OTHER_CATEGORY,
+      ].filter(Boolean),
+    ),
+  );
+
+const getExpenseDescriptionOptions = (expenseCatalog, expenseKind, category) =>
+  getExpenseCatalogEntries(expenseCatalog, expenseKind).find(
+    (entry) => entry.name.toLowerCase() === normalizeExpensePresetName(category).toLowerCase(),
+  )?.descriptions ?? [];
+
+const getExpenseDescriptionPresetValue = (
+  expenseCatalog,
+  expenseKind,
+  category,
+  description,
+) => {
+  if (normalizeExpensePresetName(category) === EXPENSE_OTHER_CATEGORY) {
+    return EXPENSE_CUSTOM_DESCRIPTION_VALUE;
+  }
+
+  const descriptionOptions = getExpenseDescriptionOptions(expenseCatalog, expenseKind, category);
+  const normalizedDescription = normalizeExpensePresetName(description);
+
+  return descriptionOptions.includes(normalizedDescription)
+    ? normalizedDescription
+    : EXPENSE_CUSTOM_DESCRIPTION_VALUE;
+};
+
+const syncExpenseDraftCategory = (draft, expenseCatalog, nextCategory) => {
+  const category = normalizeExpensePresetName(nextCategory);
+
+  if (category === EXPENSE_OTHER_CATEGORY) {
+    return {
+      ...draft,
+      category,
+      description: "",
+      descriptionPreset: EXPENSE_CUSTOM_DESCRIPTION_VALUE,
+    };
+  }
+
+  const descriptionOptions = getExpenseDescriptionOptions(
+    expenseCatalog,
+    draft.expenseKind,
+    category,
+  );
+  const matchingDescription = descriptionOptions.find(
+    (item) => item === normalizeExpensePresetName(draft.description),
+  );
+  const nextDescription = matchingDescription ?? descriptionOptions[0] ?? "";
+
+  return {
+    ...draft,
+    category,
+    description: nextDescription,
+    descriptionPreset: nextDescription || EXPENSE_CUSTOM_DESCRIPTION_VALUE,
+  };
+};
+
+const syncExpenseDraftDescriptionPreset = (draft, nextPreset) =>
+  nextPreset === EXPENSE_CUSTOM_DESCRIPTION_VALUE
+    ? {
+        ...draft,
+        descriptionPreset: EXPENSE_CUSTOM_DESCRIPTION_VALUE,
+        description: "",
+      }
+    : {
+        ...draft,
+        descriptionPreset: nextPreset,
+        description: nextPreset,
+      };
+
+const createExpensePresetDraft = (expenseKind = "asset") => ({
+  expenseKind,
+  category: "",
+  description: "",
+});
+
 const createDailyTripLogEntry = (routeValue, entry = {}) => {
   const routeStops = getRouteStops(routeValue);
 
@@ -896,6 +1645,16 @@ const createDailyTripLogEntry = (routeValue, entry = {}) => {
     id: entry.id ?? createRecordId("trip-leg"),
     fromLocation: entry.fromLocation ?? routeStops.fromLocation,
     toLocation: entry.toLocation ?? routeStops.toLocation,
+    departingFromPoint:
+      entry.departingFromPoint ??
+      entry.departing_from_point ??
+      entry.fromLocation ??
+      routeStops.fromLocation,
+    goingToPoint:
+      entry.goingToPoint ??
+      entry.going_to_point ??
+      entry.toLocation ??
+      routeStops.toLocation,
     passengerCount:
       entry.passengerCount != null && entry.passengerCount !== ""
         ? String(entry.passengerCount)
@@ -904,6 +1663,7 @@ const createDailyTripLogEntry = (routeValue, entry = {}) => {
       entry.amountCollected != null && entry.amountCollected !== ""
         ? String(entry.amountCollected)
         : "",
+    ...buildTripAnalyticsFields(entry),
   };
 };
 
@@ -913,29 +1673,15 @@ const createDailyTripLogbook = (routeValue, entries = []) =>
     : [createDailyTripLogEntry(routeValue)];
 
 const getDailyTripLogbookTotals = (entries = []) => {
-  const safeEntries = Array.isArray(entries) ? entries : [];
+  const analytics = calculateDailyAnalytics({
+    trips: Array.isArray(entries) ? entries : [],
+  });
 
-  return safeEntries.reduce(
-    (totals, entry) => {
-      const passengerCount = Number(entry?.passengerCount ?? 0);
-      const amountCollected = Number(entry?.amountCollected ?? 0);
-
-      return {
-        tripCount: totals.tripCount + 1,
-        totalPassengers:
-          totals.totalPassengers +
-          (Number.isFinite(passengerCount) && passengerCount > 0 ? passengerCount : 0),
-        totalAmount:
-          totals.totalAmount +
-          (Number.isFinite(amountCollected) && amountCollected > 0 ? amountCollected : 0),
-      };
-    },
-    {
-      tripCount: 0,
-      totalPassengers: 0,
-      totalAmount: 0,
-    },
-  );
+  return {
+    tripCount: analytics.totalTrips,
+    totalPassengers: analytics.totalPassengers,
+    totalAmount: analytics.totalTakingsExpected,
+  };
 };
 
 const getDailyTripTripCount = (record) => {
@@ -986,9 +1732,7 @@ const buildStandardTripLogbookDraft = (
 };
 
 const getBusinessKmValue = (record) => {
-  const openingOdo = Number(record?.openingOdo ?? 0);
-  const closingOdo = Number(record?.closingOdo ?? 0);
-  const businessKm = closingOdo - openingOdo;
+  const businessKm = Number(record?.businessKm ?? calculateKmComputed(record));
 
   return Number.isFinite(businessKm) && businessKm > 0 ? businessKm : 0;
 };
@@ -1042,6 +1786,30 @@ const formatDailyTripMeta = (record) =>
   ]
     .filter(Boolean)
     .join(" / ");
+
+const hasMetricValue = (value) => Number.isFinite(Number(value));
+
+const formatOptionalMetric = (
+  value,
+  {
+    suffix = "",
+    maximumFractionDigits = 2,
+  } = {},
+) => {
+  const numeric = Number(value);
+
+  if (!Number.isFinite(numeric)) {
+    return "—";
+  }
+
+  return `${numeric.toLocaleString(undefined, { maximumFractionDigits })}${suffix}`;
+};
+
+const formatOptionalMoney = (value) => {
+  const numeric = Number(value);
+
+  return Number.isFinite(numeric) ? formatMoney(numeric) : "—";
+};
 
 const formatTransactionStatus = (status) =>
   (
@@ -1145,6 +1913,13 @@ const getAuditActorLabel = (drivers, actorId, actorRole) => {
 
   return actorRole ?? actorId ?? "System";
 };
+
+const getPasswordResetEmailNotice = (emailOutbox = [], requestId) =>
+  (emailOutbox ?? []).find(
+    (entry) =>
+      entry.relatedRequestId === requestId &&
+      String(entry.channel ?? "").trim().toLowerCase() === "email",
+  ) ?? null;
 
 const buildHistoricalAuditTrail = (source, drivers) => {
   if (!source) {
@@ -1308,7 +2083,7 @@ const buildHistoricalAuditTrail = (source, drivers) => {
           entityType: "driver",
           entityId: driver.staffId,
           title: `Driver created / ${driver.name}`,
-          detail: `${driver.staffId} / ${driver.route}`,
+          detail: `${driver.staffId} / ${getDriverRouteSummary(driver)}${driver.email ? ` / ${driver.email}` : ""}`,
           actorId: driver.createdBy,
           actorRole: driver.createdByRole,
         })
@@ -1322,7 +2097,7 @@ const buildHistoricalAuditTrail = (source, drivers) => {
           entityType: "driver",
           entityId: driver.staffId,
           title: `Driver updated / ${driver.name}`,
-          detail: `${driver.staffId} / ${driver.route}`,
+          detail: `${driver.staffId} / ${getDriverRouteSummary(driver)}${driver.email ? ` / ${driver.email}` : ""}`,
           actorId: driver.updatedBy,
           actorRole: driver.updatedByRole,
         })
@@ -1468,17 +2243,29 @@ const deriveSnapshot = (source) => {
   }
 
   const currentDate = new Date();
+  const routes = collectRouteMasterRecords(source);
   const drivers = (source.drivers ?? []).map((driver) => {
     const staffId = driver.staffId ?? driver.id ?? driver.name;
+    const routeAssignments = normalizeDriverRouteAssignments(driver, routes);
     const prdpDays =
       driver.prdpExpiryDate != null
         ? getDaysLeft(driver.prdpExpiryDate, currentDate)
         : driver.prdpDays ?? null;
+    const licenseDays =
+      driver.licenseExpiryDate != null
+        ? getDaysLeft(driver.licenseExpiryDate, currentDate)
+        : driver.licenseDays ?? null;
 
     return {
       ...driver,
       staffId,
+      routeIds: routeAssignments.routeIds,
+      routeNames: routeAssignments.routeNames,
+      primaryRouteId: routeAssignments.primaryRouteId,
+      route: routeAssignments.primaryRoute,
+      routeSummary: routeAssignments.routeSummary,
       prdpDays,
+      licenseDays,
     };
   });
   const driverMap = new Map(drivers.map((driver) => [driver.staffId, driver]));
@@ -1531,32 +2318,35 @@ const deriveSnapshot = (source) => {
   }, new Map());
 
   const baseVehicles = rawVehicles.map((vehicle) => {
+    const normalizedVehicle = normalizeVehicleCapabilityHooks(vehicle);
     const serviceIntervalKm = Number(
-      vehicle.serviceIntervalKm ?? source.profile.serviceIntervalKm ?? 10000,
+      normalizedVehicle.serviceIntervalKm ?? source.profile.serviceIntervalKm ?? 10000,
     );
     const lastServiceOdo = Number(
-      vehicle.lastServiceOdo ??
-        (vehicle.nextServiceAt != null ? vehicle.nextServiceAt - serviceIntervalKm : 0),
+      normalizedVehicle.lastServiceOdo ??
+        (normalizedVehicle.nextServiceAt != null
+          ? normalizedVehicle.nextServiceAt - serviceIntervalKm
+          : 0),
     );
     const kmsRemaining =
-      lastServiceOdo + serviceIntervalKm - Number(vehicle.currentOdometer ?? 0);
+      lastServiceOdo + serviceIntervalKm - Number(normalizedVehicle.currentOdometer ?? 0);
     const permitDays =
-      vehicle.permitExpiryDate != null
-        ? getDaysLeft(vehicle.permitExpiryDate, currentDate)
-        : vehicle.permitDays ?? 365;
+      normalizedVehicle.permitExpiryDate != null
+        ? getDaysLeft(normalizedVehicle.permitExpiryDate, currentDate)
+        : normalizedVehicle.permitDays ?? 365;
     const discDays =
-      vehicle.discExpiryDate != null
-        ? getDaysLeft(vehicle.discExpiryDate, currentDate)
-        : vehicle.discDays ?? 365;
+      normalizedVehicle.discExpiryDate != null
+        ? getDaysLeft(normalizedVehicle.discExpiryDate, currentDate)
+        : normalizedVehicle.discDays ?? 365;
     const minimumDocumentDays = Math.min(permitDays, discDays);
-    const defectsOpen = openDefectsByVehicle.get(vehicle.id) ?? vehicle.defectsOpen ?? 0;
+    const defectsOpen = openDefectsByVehicle.get(normalizedVehicle.id) ?? normalizedVehicle.defectsOpen ?? 0;
     const assignedDriverId =
-      vehicle.assignedDriverId ??
-      drivers.find((driver) => driver.name === vehicle.assignedDriver)?.staffId ??
+      normalizedVehicle.assignedDriverId ??
+      drivers.find((driver) => driver.name === normalizedVehicle.assignedDriver)?.staffId ??
       null;
     const assignedDriver = assignedDriverId ? driverMap.get(assignedDriverId) : null;
     const healthState = getVehicleHealthState({
-      status: vehicle.status,
+      status: normalizedVehicle.status,
       defectsOpen,
       kmsRemaining,
       minimumDocumentDays,
@@ -1569,12 +2359,12 @@ const deriveSnapshot = (source) => {
     };
 
     return {
-      ...vehicle,
-      status: vehicle.status ?? "active",
+      ...normalizedVehicle,
+      status: normalizedVehicle.status ?? "active",
       assignedDriverId,
       assignedDriver: assignedDriver?.name ?? "Unassigned",
       assignedDriverStaff: assignedDriver ?? null,
-      currentOdometer: Number(vehicle.currentOdometer ?? 0),
+      currentOdometer: Number(normalizedVehicle.currentOdometer ?? 0),
       serviceIntervalKm,
       lastServiceOdo,
       nextServiceAt: lastServiceOdo + serviceIntervalKm,
@@ -1586,13 +2376,55 @@ const deriveSnapshot = (source) => {
       minimumDocumentDays,
       healthState,
       healthLabel: healthLabelMap[healthState] ?? "Healthy",
-      archivedAt: vehicle.archivedAt ?? null,
+      archivedAt: normalizedVehicle.archivedAt ?? null,
     };
   });
 
-  const transactions = [...(source.financeTransactions ?? [])].sort(
-    (left, right) => new Date(right.timestamp) - new Date(left.timestamp),
-  );
+  const normalizedTransactions = [...(source.financeTransactions ?? [])]
+    .map((record) => {
+      if (record?.type !== "income") {
+        return record;
+      }
+
+      return {
+        ...record,
+        ...buildTripAnalyticsFields(record),
+        ...(record.incomeKind === "standard" ? buildDailyAnalyticsFields(record) : {}),
+        tripLogbook: Array.isArray(record.tripLogbook)
+          ? record.tripLogbook.map((entry) => createDailyTripLogEntry(record.route, entry))
+          : record.tripLogbook,
+      };
+    })
+    .sort((left, right) => new Date(right.timestamp) - new Date(left.timestamp));
+  const expenseTransactions = normalizedTransactions.filter((record) => record.type === "expense");
+  const transactions = normalizedTransactions.map((record) => {
+    if (record?.type !== "income") {
+      return record;
+    }
+
+    if (record.incomeKind === "standard") {
+      const matchingExpenses = expenseTransactions.filter(
+        (expenseRecord) =>
+          expenseRecord.vehicleId === record.vehicleId &&
+          String(expenseRecord.expenseDate ?? "").trim() === String(record.tripDate ?? "").trim(),
+      );
+
+      return {
+        ...record,
+        dailyAnalytics: calculateDailyAnalytics({
+          trips: record.tripLogbook,
+          expenses: matchingExpenses,
+          totalTakingsExpected: Number(record.amountClaimed ?? record.amount ?? 0),
+          dayRecord: record,
+        }),
+      };
+    }
+
+    return {
+      ...record,
+      tripAnalytics: calculateTripAnalytics(record),
+    };
+  });
   const deposits = [...(source.deposits ?? [])].sort(
     (left, right) => new Date(right.timestamp) - new Date(left.timestamp),
   );
@@ -1800,6 +2632,23 @@ const deriveSnapshot = (source) => {
             ? "Collect renewal slip and restrict reassignment until renewed."
             : "Track driver renewal in advance.",
       })),
+    ...drivers
+      .filter((driver) => driver.role === "Driver" && driver.licenseExpiryDate)
+      .map((driver) => ({
+        id: `${driver.staffId}-licence`,
+        subject: driver.name,
+        subjectId: driver.staffId,
+        subjectType: "staff",
+        document: "Driver licence",
+        expiryDate: driver.licenseExpiryDate,
+        daysLeft: driver.licenseDays ?? 365,
+        stage: getDocumentStage(driver.licenseDays ?? 365),
+        owner: "HR Admin",
+        action:
+          (driver.licenseDays ?? 365) < 30
+            ? "Book the driver licence renewal and verify the updated card."
+            : "Track driver licence renewal in advance.",
+      })),
   ].sort((left, right) => left.daysLeft - right.daysLeft);
   const activeDriver = drivers.find((driver) => driver.staffId === resolvedDriverId) ?? drivers[0];
   const linkedVehicleRecords = enrichedVehicles.filter(
@@ -1824,6 +2673,7 @@ const deriveSnapshot = (source) => {
 
   return {
     ...source,
+    routes,
     drivers,
     defects,
     auditTrail,
@@ -1896,6 +2746,7 @@ const deriveSnapshot = (source) => {
         vehicleSpecific: expenseSummary(assetExpenses),
         operational: expenseSummary(operationalExpenses),
       },
+      expenseCatalog: collectExpensePresetCatalog(source.finance ?? {}, transactions),
       bankingBatch: {
         ...source.finance?.bankingBatch,
         reference: batchReference,
@@ -2121,39 +2972,81 @@ const getExpenseDraftValidationError = (draft) => {
   return null;
 };
 
-const createExpenseDraft = (expenseKind, vehicleId) => ({
-  id: null,
-  expenseKind,
-  category: expenseKind === "asset" ? "Fuel" : "Salary",
-  description: "",
-  expenseDate: toDateInputValue(),
-  reference: "",
-  vehicleId: vehicleId ?? "",
-  amount: "",
-  cashExpense: true,
-});
+const createExpenseDraft = (expenseKind, vehicleId, expenseCatalog = null) => {
+  const defaultCategory =
+    getExpenseCatalogEntries(expenseCatalog, expenseKind)[0]?.name ??
+    (expenseKind === "asset" ? "Fuel" : "Salary");
+  const defaultDescription =
+    getExpenseDescriptionOptions(expenseCatalog, expenseKind, defaultCategory)[0] ?? "";
 
-const createVehicleDraft = (vehicle, defaultInterval) => ({
-  id: vehicle?.id ?? null,
-  registration: vehicle?.registration ?? "",
-  model: vehicle?.model ?? "",
-  route: vehicle?.route ?? "",
-  utilisation: vehicle?.utilisation ?? 0,
-  currentOdometer: vehicle?.currentOdometer ?? 0,
-  lastServiceOdo: vehicle?.lastServiceOdo ?? 0,
-  serviceIntervalKm: vehicle?.serviceIntervalKm ?? defaultInterval,
-  permitExpiryDate: vehicle?.permitExpiryDate ?? "",
-  discExpiryDate: vehicle?.discExpiryDate ?? "",
-  assignedDriverId: vehicle?.assignedDriverId ?? "",
-  status: vehicle?.status ?? "active",
+  return {
+    id: null,
+    expenseKind,
+    category: defaultCategory,
+    description: defaultDescription,
+    descriptionPreset: defaultDescription || EXPENSE_CUSTOM_DESCRIPTION_VALUE,
+    expenseDate: toDateInputValue(),
+    reference: "",
+    vehicleId: vehicleId ?? "",
+    amount: "",
+    cashExpense: true,
+  };
+};
+
+const createVehicleDraft = (vehicle, defaultInterval) => {
+  const normalizedVehicle = normalizeVehicleCapabilityHooks(vehicle ?? {});
+
+  return {
+    id: vehicle?.id ?? null,
+    registration: vehicle?.registration ?? "",
+    model: vehicle?.model ?? "",
+    route: vehicle?.route ?? "",
+    utilisation: vehicle?.utilisation ?? 0,
+    currentOdometer: vehicle?.currentOdometer ?? 0,
+    lastServiceOdo: vehicle?.lastServiceOdo ?? 0,
+    serviceIntervalKm: vehicle?.serviceIntervalKm ?? defaultInterval,
+    permitExpiryDate: vehicle?.permitExpiryDate ?? "",
+    discExpiryDate: vehicle?.discExpiryDate ?? "",
+    assignedDriverId: vehicle?.assignedDriverId ?? "",
+    status: vehicle?.status ?? "active",
+    canDoRouteService: normalizedVehicle.canDoRouteService,
+    canDoSpecialTrips: normalizedVehicle.canDoSpecialTrips,
+    canDoContracts: normalizedVehicle.canDoContracts,
+    seatCapacity: normalizedVehicle.seatCapacity,
+    currentRouteId: normalizedVehicle.currentRouteId,
+  };
+};
+
+const createRouteDraft = (route = null) => ({
+  id: route?.id ?? null,
+  name: route?.name ?? route?.route ?? "",
+  code: route?.code ?? "",
+  type: route?.type ?? "route_service",
+  primaryOrigin: route?.primaryOrigin ?? "",
+  primaryDestination: route?.primaryDestination ?? "",
+  isActive: route?.isActive ?? true,
 });
 
 const createDriverDraft = (driver) => ({
   staffId: driver?.staffId ?? "",
   name: driver?.name ?? "",
-  route: driver?.route ?? "",
+  email: driver?.email ?? "",
+  routeIds: Array.isArray(driver?.routeIds)
+    ? driver.routeIds
+    : Array.isArray(driver?.route_ids)
+      ? driver.route_ids
+      : driver?.primaryRouteId
+        ? [driver.primaryRouteId]
+        : buildRouteReferenceId(driver?.route)
+          ? [buildRouteReferenceId(driver?.route)]
+          : [],
   shiftStatus: driver?.shiftStatus ?? "Ready for dispatch",
+  licenseNumber: driver?.licenseNumber ?? "",
+  licenseCode: driver?.licenseCode ?? "",
+  licenseExpiryDate: driver?.licenseExpiryDate ?? "",
+  prdpNumber: driver?.prdpNumber ?? "",
   prdpExpiryDate: driver?.prdpExpiryDate ?? "",
+  accessPassword: driver?.accessPassword ?? "",
 });
 
 const createDriverAllocationDraft = (staffId = "", vehicleId = "") => ({
@@ -2188,6 +3081,7 @@ function App() {
   const [authSubmitting, setAuthSubmitting] = useState(false);
   const [factoryResetSubmitting, setFactoryResetSubmitting] = useState(false);
   const [authError, setAuthError] = useState(null);
+  const [authRecoveryFeedback, setAuthRecoveryFeedback] = useState(null);
   const [authDraft, setAuthDraft] = useState({
     email: "",
     password: "",
@@ -2433,6 +3327,10 @@ function App() {
     () => normalizeModuleViewAccess(authIdentity?.moduleAccess, authIdentity?.role),
     [authIdentity],
   );
+  const currentUserRecord = useMemo(
+    () => getStoredAppUserByIdentity(currentSnapshot, authIdentity),
+    [authIdentity, currentSnapshot],
+  );
   const authDisplayName = useMemo(() => {
     if (!authIdentity || !currentSnapshot) {
       return authIdentity?.email ?? null;
@@ -2552,13 +3450,50 @@ function App() {
     });
 
   const hasModuleUpdateAccess = (current, moduleKey) =>
-    canEditModuleUpdates(activeRole, moduleKey, getPermissionControls(current));
+    canEditModuleUpdates(
+      activeRole,
+      moduleKey,
+      getPermissionControls(current),
+      getStoredAppUserByIdentity(current, authIdentity),
+    );
+
+  const updateAuthDraft = (updater) => {
+    setAuthRecoveryFeedback(null);
+    setAuthDraft(updater);
+  };
+
+  const buildPasswordResetEmailNotice = ({
+    requestId,
+    timestamp,
+    normalizedEmail,
+    mappedAccount,
+    recipientEmails,
+  }) => ({
+    id: createRecordId("mail"),
+    channel: "email",
+    createdAt: timestamp,
+    relatedRequestId: requestId,
+    recipients: recipientEmails,
+    subject: `TaxiFlow password reset request / ${normalizedEmail}`,
+    preview: mappedAccount
+      ? `${mappedAccount.name} (${mappedAccount.role}) requested a password reset.`
+      : `${normalizedEmail} requested a password reset from the sign-in screen.`,
+    body: [
+      `TaxiFlow password reset requested for ${normalizedEmail}.`,
+      mappedAccount?.name ? `Account name: ${mappedAccount.name}.` : "Account name not mapped.",
+      mappedAccount?.role ? `Role: ${mappedAccount.role}.` : "Role not mapped.",
+      `Requested at: ${formatStamp(timestamp)}.`,
+      "Management must reset the password and contact the user.",
+    ].join(" "),
+    status: "queued",
+  });
 
   const handleAuthSubmit = async (event) => {
     event.preventDefault();
 
     setAuthSubmitting(true);
     setAuthError(null);
+    setAuthRecoveryFeedback(null);
 
     const normalizedEmail = authDraft.email.trim().toLowerCase();
 
@@ -2571,7 +3506,9 @@ function App() {
         return;
       }
 
-      if (authDraft.password !== LOCAL_AUTH_PASSWORD) {
+      const expectedPassword = account.accessPassword ?? LOCAL_AUTH_PASSWORD;
+
+      if (authDraft.password !== expectedPassword) {
         setAuthError("Incorrect password for this TaxiFlow account.");
         setAuthSubmitting(false);
         return;
@@ -2604,6 +3541,182 @@ function App() {
       password: "",
     }));
     setAuthSubmitting(false);
+  };
+
+  const handlePasswordResetRequest = () => {
+    const normalizedEmail = normalizeEmailAddress(authDraft.email);
+
+    if (!normalizedEmail) {
+      setAuthRecoveryFeedback({
+        tone: "danger",
+        message: "Enter the email assigned to your TaxiFlow account before sending a reset request.",
+      });
+      return;
+    }
+
+    if (!isValidEmailAddress(normalizedEmail)) {
+      setAuthRecoveryFeedback({
+        tone: "danger",
+        message: "Enter a valid TaxiFlow email address before sending a reset request.",
+      });
+      return;
+    }
+
+    let response = { ok: false, error: "Unable to send the password reset request." };
+
+    setSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const currentUsers = getAppUsers(current);
+      const managementRecipients = Array.from(
+        new Map(
+          currentUsers
+            .filter((user) => PRIVILEGED_ROLES.has(user.role))
+            .map((user) => [normalizeEmailAddress(user.email), normalizeAppUser(user)]),
+        ).values(),
+      );
+
+      if (managementRecipients.length === 0) {
+        response = {
+          ok: false,
+          error: "No management accounts are available yet to receive this reset request.",
+        };
+        return current;
+      }
+
+      const mappedAccount = getAppUserByEmail(current, normalizedEmail);
+      const timestamp = new Date().toISOString();
+      const recipientEmails = managementRecipients.map((user) => user.email);
+      const existingPendingRequest =
+        (current.passwordResetRequests ?? []).find(
+          (request) =>
+            normalizeEmailAddress(request.email) === normalizedEmail &&
+            String(request.status ?? "pending").trim().toLowerCase() === "pending",
+        ) ?? null;
+
+      if (existingPendingRequest) {
+        const hasEmailNotice = Boolean(
+          getPasswordResetEmailNotice(current.emailOutbox ?? [], existingPendingRequest.id),
+        );
+        const nextRequest = {
+          ...existingPendingRequest,
+          accountName: mappedAccount?.name ?? existingPendingRequest.accountName ?? normalizedEmail,
+          accountRole: mappedAccount?.role ?? existingPendingRequest.accountRole ?? null,
+          managementRecipients: recipientEmails,
+          note:
+            mappedAccount
+              ? null
+              : existingPendingRequest.note ?? "Email not mapped to a current TaxiFlow account.",
+          notificationStatus: "sent",
+          notificationSentAt:
+            existingPendingRequest.notificationSentAt ??
+            existingPendingRequest.requestedAt ??
+            timestamp,
+        };
+        const nextEmail = hasEmailNotice
+          ? null
+          : buildPasswordResetEmailNotice({
+              requestId: existingPendingRequest.id,
+              timestamp,
+              normalizedEmail,
+              mappedAccount,
+              recipientEmails,
+            });
+
+        response = {
+          ok: true,
+          message: hasEmailNotice
+            ? "Management has already been notified in-app and by email. They will reset the password for this account."
+            : "The in-app management notice is already active. TaxiFlow queued the missing management email again for this password reset.",
+        };
+
+        return {
+          ...current,
+          passwordResetRequests: (current.passwordResetRequests ?? []).map((request) =>
+            request.id === existingPendingRequest.id ? nextRequest : request,
+          ),
+          emailOutbox: nextEmail ? [nextEmail, ...(current.emailOutbox ?? [])] : current.emailOutbox ?? [],
+          auditTrail: nextEmail
+            ? appendAuditTrail(current.auditTrail, [
+                createAuditEvent({
+                  timestamp,
+                  scope: "system",
+                  action: "request",
+                  entityType: "password-reset-email",
+                  entityId: existingPendingRequest.id,
+                  title: `Password reset email requeued / ${normalizedEmail}`,
+                  detail: `Management email queue ${recipientEmails.join(", ")}`,
+                  actorId: normalizedEmail,
+                  actorRole: "Unauthenticated",
+                }),
+              ])
+            : current.auditTrail,
+        };
+      }
+
+      const requestId = createRecordId("pwd");
+      const nextRequest = {
+        id: requestId,
+        email: normalizedEmail,
+        accountName: mappedAccount?.name ?? normalizedEmail,
+        accountRole: mappedAccount?.role ?? null,
+        requestedAt: timestamp,
+        requestedVia: "Sign-in screen",
+        status: "pending",
+        managementRecipients: recipientEmails,
+        note: mappedAccount ? null : "Email not mapped to a current TaxiFlow account.",
+        notificationStatus: "sent",
+        notificationSentAt: timestamp,
+      };
+      const nextEmail = buildPasswordResetEmailNotice({
+        requestId,
+        timestamp,
+        normalizedEmail,
+        mappedAccount,
+        recipientEmails,
+      });
+
+      response = {
+        ok: true,
+        message:
+          "Management has been notified in-app and the email queue has been created. They will reset the password for this account.",
+      };
+
+      return {
+        ...current,
+        passwordResetRequests: [nextRequest, ...(current.passwordResetRequests ?? [])],
+        emailOutbox: [nextEmail, ...(current.emailOutbox ?? [])],
+        auditTrail: appendAuditTrail(current.auditTrail, [
+          createAuditEvent({
+            timestamp,
+            scope: "system",
+            action: "request",
+            entityType: "password-reset",
+            entityId: requestId,
+            title: `Password reset requested / ${normalizedEmail}`,
+            detail: `Sign-in screen / Email queue ${recipientEmails.join(", ")}`,
+            actorId: normalizedEmail,
+            actorRole: "Unauthenticated",
+          }),
+        ]),
+      };
+    });
+
+    setAuthError(null);
+
+    if (response.ok) {
+      setAuthDraft((current) => ({
+        ...current,
+        password: "",
+      }));
+    }
+
+    setAuthRecoveryFeedback({
+      tone: response.ok ? "success" : "danger",
+      message: response.message ?? response.error,
+    });
   };
 
   const handleSignOut = async () => {
@@ -2644,9 +3757,11 @@ function App() {
         error={authError}
         fleetName={currentSnapshot.profile.fleetName}
         isLocalAuth={!authEnabled}
-        onChange={setAuthDraft}
+        onChange={updateAuthDraft}
+        onRequestPasswordReset={handlePasswordResetRequest}
         onSubmit={handleAuthSubmit}
         password={authDraft.password}
+        passwordResetFeedback={authRecoveryFeedback}
         submitting={authSubmitting}
       />
     );
@@ -2917,6 +4032,15 @@ function App() {
         return current;
       }
 
+      const nextAccessPassword = String(draft.nextAccessPassword ?? "").trim();
+      if (nextAccessPassword && nextAccessPassword.length < 6) {
+        result = {
+          ok: false,
+          error: "Reset password must be at least 6 characters long.",
+        };
+        return current;
+      }
+
       if (!canAssignRoleToUser(nextRole, existingUser)) {
         result = {
           ok: false,
@@ -2933,9 +4057,19 @@ function App() {
 
       const timestamp = new Date().toISOString();
       const actorId = resolveCurrentActorId(current);
+      const resolvedRequestIds = nextAccessPassword
+        ? (current.passwordResetRequests ?? [])
+            .filter(
+              (request) =>
+                normalizeEmailAddress(request.email) === existingUser.email &&
+                String(request.status ?? "pending").trim().toLowerCase() === "pending",
+            )
+            .map((request) => request.id)
+        : [];
       const nextUser = normalizeAppUser({
         ...existingUser,
         role: nextRole,
+        accessPassword: nextAccessPassword || existingUser.accessPassword,
         moduleAccess: normalizeModuleViewAccess(draft.moduleAccess, nextRole),
         updatedAt: timestamp,
         updatedBy: actorId,
@@ -2944,18 +4078,64 @@ function App() {
       const nextUsers = sortAppUsers(
         currentUsers.map((user) => (user.email === existingUser.email ? nextUser : normalizeAppUser(user))),
       );
+      const nextDrivers =
+        nextAccessPassword && existingUser.staffId
+          ? (current.drivers ?? []).map((driver) =>
+              driver.staffId === existingUser.staffId
+                ? {
+                    ...driver,
+                    accessPassword: nextAccessPassword,
+                    updatedAt: timestamp,
+                    updatedBy: actorId,
+                    updatedByRole: activeRole,
+                  }
+                : driver,
+            )
+          : current.drivers ?? [];
       const enabledModules = SETTINGS_ASSIGNABLE_MODULES.filter(
         (moduleKey) => nextUser.moduleAccess[moduleKey],
       ).map((moduleKey) => MODULE_VIEW_ACCESS[moduleKey].label);
+      const nextPasswordResetRequests = resolvedRequestIds.length
+        ? (current.passwordResetRequests ?? []).map((request) =>
+            resolvedRequestIds.includes(request.id)
+              ? {
+                  ...request,
+                  status: "resolved",
+                  notificationStatus: "sent",
+                  notificationSentAt:
+                    request.notificationSentAt ?? request.requestedAt ?? timestamp,
+                  resolvedAt: timestamp,
+                  resolvedBy: actorId,
+                  resolvedByRole: activeRole,
+                }
+              : request,
+          )
+        : current.passwordResetRequests ?? [];
+      const nextEmailOutbox = resolvedRequestIds.length
+        ? (current.emailOutbox ?? []).map((entry) =>
+            resolvedRequestIds.includes(entry.relatedRequestId) &&
+            String(entry.status ?? "queued").trim().toLowerCase() === "queued"
+              ? {
+                  ...entry,
+                  status: "actioned",
+                  actionedAt: timestamp,
+                  actionedBy: actorId,
+                }
+              : entry,
+          )
+        : current.emailOutbox ?? [];
 
       result = {
         ok: true,
-        message: `${nextUser.name} updated as ${nextUser.role}.`,
+        message: `${nextUser.name} updated as ${nextUser.role}.${nextAccessPassword ? " Password reset saved." : ""}`,
       };
 
       return {
         ...current,
         appUsers: nextUsers,
+        drivers: nextDrivers,
+        passwordResetRequests: nextPasswordResetRequests,
+        emailOutbox: nextEmailOutbox,
         auditTrail: appendAuditTrail(current.auditTrail, [
           buildCurrentAuditEvent(current, {
             timestamp,
@@ -2970,7 +4150,232 @@ function App() {
               enabledModules.length > 0
                 ? `Rights ${enabledModules.join(", ")}`
                 : "Rights overview only",
-            ].join(" / "),
+              nextAccessPassword ? "Local password reset saved" : null,
+              resolvedRequestIds.length > 0
+                ? `${resolvedRequestIds.length} password reset request${resolvedRequestIds.length === 1 ? "" : "s"} handled`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" / "),
+          }),
+        ]),
+      };
+    });
+
+    return result;
+  };
+
+  const resetUserPassword = ({ email, nextAccessPassword }) => {
+    let result = { ok: false, error: "Unable to reset this TaxiFlow password." };
+
+    setSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+
+      if (!PASSWORD_RESET_ROLES.has(activeRole)) {
+        result = { ok: false, error: "Only management can reset TaxiFlow passwords." };
+        return current;
+      }
+
+      const normalizedEmail = normalizeEmailAddress(email);
+      const password = String(nextAccessPassword ?? "").trim();
+      const currentUsers = getAppUsers(current);
+      const existingUser =
+        currentUsers.find((user) => normalizeEmailAddress(user.email) === normalizedEmail) ?? null;
+
+      if (!existingUser) {
+        result = { ok: false, error: "This user account could not be found." };
+        return current;
+      }
+
+      if (activeRole !== "Owner" && existingUser.role === "Owner") {
+        result = { ok: false, error: "Only the owner can reset another owner password." };
+        return current;
+      }
+
+      if (!password) {
+        result = { ok: false, error: "Enter the new password before saving the reset." };
+        return current;
+      }
+
+      if (password.length < 6) {
+        result = { ok: false, error: "Reset password must be at least 6 characters long." };
+        return current;
+      }
+
+      const timestamp = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
+      const nextUser = normalizeAppUser({
+        ...existingUser,
+        accessPassword: password,
+        updatedAt: timestamp,
+        updatedBy: actorId,
+        updatedByRole: activeRole,
+      });
+      const nextUsers = sortAppUsers(
+        currentUsers.map((user) =>
+          user.email === existingUser.email ? nextUser : normalizeAppUser(user),
+        ),
+      );
+      const nextDrivers = existingUser.staffId
+        ? (current.drivers ?? []).map((driver) =>
+            driver.staffId === existingUser.staffId
+              ? {
+                  ...driver,
+                  accessPassword: password,
+                  updatedAt: timestamp,
+                  updatedBy: actorId,
+                  updatedByRole: activeRole,
+                }
+              : driver,
+          )
+        : current.drivers ?? [];
+      const resolvedRequestIds = (current.passwordResetRequests ?? [])
+        .filter(
+          (request) =>
+            normalizeEmailAddress(request.email) === normalizedEmail &&
+            String(request.status ?? "pending").trim().toLowerCase() === "pending",
+        )
+        .map((request) => request.id);
+      const nextPasswordResetRequests = resolvedRequestIds.length
+        ? (current.passwordResetRequests ?? []).map((request) =>
+            resolvedRequestIds.includes(request.id)
+              ? {
+                  ...request,
+                  status: "resolved",
+                  notificationStatus: "sent",
+                  notificationSentAt:
+                    request.notificationSentAt ?? request.requestedAt ?? timestamp,
+                  resolvedAt: timestamp,
+                  resolvedBy: actorId,
+                  resolvedByRole: activeRole,
+                }
+              : request,
+          )
+        : current.passwordResetRequests ?? [];
+      const nextEmailOutbox = resolvedRequestIds.length
+        ? (current.emailOutbox ?? []).map((entry) =>
+            resolvedRequestIds.includes(entry.relatedRequestId) &&
+            String(entry.status ?? "queued").trim().toLowerCase() === "queued"
+              ? {
+                  ...entry,
+                  status: "actioned",
+                  actionedAt: timestamp,
+                  actionedBy: actorId,
+                }
+              : entry,
+          )
+        : current.emailOutbox ?? [];
+
+      result = {
+        ok: true,
+        message: `${nextUser.name} password reset saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}`,
+      };
+
+      return {
+        ...current,
+        appUsers: nextUsers,
+        drivers: nextDrivers,
+        passwordResetRequests: nextPasswordResetRequests,
+        emailOutbox: nextEmailOutbox,
+        auditTrail: appendAuditTrail(current.auditTrail, [
+          buildCurrentAuditEvent(current, {
+            timestamp,
+            scope: "system",
+            action: "update",
+            entityType: "password-reset",
+            entityId: nextUser.id,
+            title: `Password reset saved / ${nextUser.name}`,
+            detail: [
+              nextUser.email,
+              activeRole === "Owner" ? "Owner reset saved" : "Management reset saved",
+              resolvedRequestIds.length > 0
+                ? `${resolvedRequestIds.length} password reset request${resolvedRequestIds.length === 1 ? "" : "s"} handled`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" / "),
+          }),
+        ]),
+      };
+    });
+
+    return result;
+  };
+
+  const resolvePasswordResetRequest = (requestId) => {
+    let result = { ok: false, error: "Unable to close this password reset request." };
+
+    setSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+
+      if (!PASSWORD_RESET_ROLES.has(activeRole)) {
+        result = { ok: false, error: "Only management can close password reset requests." };
+        return current;
+      }
+
+      const targetRequest =
+        (current.passwordResetRequests ?? []).find((request) => request.id === requestId) ?? null;
+
+      if (!targetRequest) {
+        result = { ok: false, error: "Password reset request not found." };
+        return current;
+      }
+
+      if (String(targetRequest.status ?? "pending").trim().toLowerCase() === "resolved") {
+        result = { ok: false, error: "This password reset request is already marked as handled." };
+        return current;
+      }
+
+      const timestamp = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
+      const nextPasswordResetRequests = (current.passwordResetRequests ?? []).map((request) =>
+        request.id === requestId
+          ? {
+              ...request,
+              status: "resolved",
+              notificationStatus: "sent",
+              notificationSentAt:
+                request.notificationSentAt ?? request.requestedAt ?? timestamp,
+              resolvedAt: timestamp,
+              resolvedBy: actorId,
+              resolvedByRole: activeRole,
+            }
+          : request,
+      );
+      const nextEmailOutbox = (current.emailOutbox ?? []).map((entry) =>
+        entry.relatedRequestId === requestId &&
+        String(entry.status ?? "queued").trim().toLowerCase() === "queued"
+          ? {
+              ...entry,
+              status: "actioned",
+              actionedAt: timestamp,
+              actionedBy: actorId,
+            }
+          : entry,
+      );
+
+      result = {
+        ok: true,
+        message: `Password reset request marked as handled for ${targetRequest.email}.`,
+      };
+
+      return {
+        ...current,
+        passwordResetRequests: nextPasswordResetRequests,
+        emailOutbox: nextEmailOutbox,
+        auditTrail: appendAuditTrail(current.auditTrail, [
+          buildCurrentAuditEvent(current, {
+            timestamp,
+            scope: "system",
+            action: "update",
+            entityType: "password-reset",
+            entityId: requestId,
+            title: `Password reset handled / ${targetRequest.email}`,
+            detail: "Management confirmed the password reset request was handled.",
           }),
         ]),
       };
@@ -3028,7 +4433,7 @@ function App() {
       const actorId = resolveCurrentActorId(current);
       const isUpdate = Boolean(existing);
 
-      if (activeRole === "Admin" && !hasModuleUpdateAccess(current, "finance")) {
+      if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
         result = { ok: false, error: getModuleAccessErrorMessage("finance") };
         return current;
       }
@@ -3068,8 +4473,9 @@ function App() {
 
       const normalizedTripLogbook = [];
       for (const [index, entry] of tripLogbook.entries()) {
-        const fromLocation = String(entry?.fromLocation ?? "").trim();
-        const toLocation = String(entry?.toLocation ?? "").trim();
+        const normalizedEntry = createDailyTripLogEntry(draft.route ?? vehicle.route, entry);
+        const fromLocation = String(normalizedEntry.fromLocation ?? "").trim();
+        const toLocation = String(normalizedEntry.toLocation ?? "").trim();
         const passengerCount = Number(entry?.passengerCount);
         const amountCollected = Number(entry?.amountCollected);
 
@@ -3091,11 +4497,16 @@ function App() {
         }
 
         normalizedTripLogbook.push({
-          id: entry.id ?? createRecordId("trip-leg"),
+          id: normalizedEntry.id ?? createRecordId("trip-leg"),
           fromLocation,
           toLocation,
+          departingFromPoint: String(
+            normalizedEntry.departingFromPoint ?? fromLocation,
+          ).trim(),
+          goingToPoint: String(normalizedEntry.goingToPoint ?? toLocation).trim(),
           passengerCount,
           amountCollected,
+          ...buildTripAnalyticsFields(normalizedEntry),
         });
       }
 
@@ -3112,6 +4523,19 @@ function App() {
         draft.vehicleId,
         draft.id ?? null,
       );
+      const recordAnalytics = buildTripAnalyticsFields({
+        ...existing,
+        timeIn,
+        timeOut,
+        odometerStart: draft.odometerStart ?? existing?.odometerStart ?? openingOdo,
+        odometerEnd: draft.odometerEnd ?? existing?.odometerEnd ?? closingOdo,
+      });
+      const dailyAnalytics = buildDailyAnalyticsFields({
+        ...existing,
+        dayStartOdometer: draft.dayStartOdometer ?? existing?.dayStartOdometer ?? openingOdo,
+        dayEndOdometer: draft.dayEndOdometer ?? existing?.dayEndOdometer ?? closingOdo,
+        notes: draft.notes ?? existing?.notes,
+      });
       const nextRecord = {
         ...existing,
         id: draft.id ?? createRecordId("txn-inc"),
@@ -3128,6 +4552,8 @@ function App() {
         totalPassengers: tripLogTotals.totalPassengers,
         openingOdo,
         closingOdo,
+        ...recordAnalytics,
+        ...dailyAnalytics,
         amountClaimed,
         actualCashReceived: null,
         amount: amountClaimed,
@@ -3211,7 +4637,7 @@ function App() {
       const actorId = resolveCurrentActorId(current);
       const isUpdate = Boolean(existing);
 
-      if (activeRole === "Admin" && !hasModuleUpdateAccess(current, "finance")) {
+      if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
         result = { ok: false, error: getModuleAccessErrorMessage("finance") };
         return current;
       }
@@ -3252,6 +4678,15 @@ function App() {
         return current;
       }
 
+      const recordAnalytics = buildTripAnalyticsFields({
+        ...existing,
+        timeIn: draft.timeIn ?? existing?.timeIn,
+        timeOut: draft.timeOut ?? existing?.timeOut,
+        odometerStart: draft.odometerStart ?? existing?.odometerStart ?? openingOdo,
+        odometerEnd: draft.odometerEnd ?? existing?.odometerEnd ?? closingOdo,
+        kmComputed: draft.kmComputed ?? existing?.kmComputed ?? businessKm,
+        tripDurationMin: draft.tripDurationMin ?? existing?.tripDurationMin,
+      });
       const nextRecord = {
         ...existing,
         id: draft.id ?? createRecordId("txn-sp"),
@@ -3266,8 +4701,11 @@ function App() {
         openingOdo,
         closingOdo,
         businessKm,
+        ...recordAnalytics,
         fromLocation,
         toLocation,
+        departingFromPoint: fromLocation,
+        goingToPoint: toLocation,
         travelReason,
         fuelOilCost,
         repairMaintenanceCost,
@@ -3339,7 +4777,10 @@ function App() {
       const amount = Number(draft.amount);
       const expenseKind = draft.expenseKind;
       const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
-      const status = PRIVILEGED_ROLES.has(activeRole) ? "verified" : "pending";
+      const status =
+        activeRole !== "Driver" && hasModuleUpdateAccess(current, "finance")
+          ? "verified"
+          : "pending";
       const now = new Date().toISOString();
       const expenseDate = String(draft.expenseDate ?? "").trim();
       const description = draft.description?.trim() ?? "";
@@ -3347,7 +4788,7 @@ function App() {
       const actorId = resolveCurrentActorId(current);
       const isUpdate = Boolean(existing);
 
-      if (activeRole === "Admin" && !hasModuleUpdateAccess(current, "finance")) {
+      if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
         result = { ok: false, error: getModuleAccessErrorMessage("finance") };
         return current;
       }
@@ -3430,6 +4871,93 @@ function App() {
         ...current,
         financeTransactions: nextTransactions,
         auditTrail: nextAuditTrail,
+      };
+    });
+
+    return result;
+  };
+
+  const saveExpensePreset = (draft) => {
+    let result = { ok: false, error: "Unable to save the expense setup." };
+
+    setSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+      if (!PRIVILEGED_ROLES.has(activeRole)) {
+        result = { ok: false, error: "Only management can save expense setup." };
+        return current;
+      }
+      if (!hasModuleUpdateAccess(current, "finance")) {
+        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
+        return current;
+      }
+
+      const expenseKind = draft.expenseKind === "operational" ? "operational" : "asset";
+      const category = normalizeExpensePresetName(draft.category);
+      const description = normalizeExpensePresetName(draft.description);
+
+      if (!category) {
+        result = { ok: false, error: "Enter an expense category to save." };
+        return current;
+      }
+      if (category.toLowerCase() === EXPENSE_OTHER_CATEGORY.toLowerCase()) {
+        result = {
+          ok: false,
+          error: "Other is already available in the category list and cannot be saved as a preset.",
+        };
+        return current;
+      }
+
+      const currentCatalog = normalizeExpensePresetCatalog(current.finance?.expenseCatalog ?? {});
+      const currentItems = currentCatalog[expenseKind] ?? [];
+      const existingEntry =
+        currentItems.find((entry) => entry.name.toLowerCase() === category.toLowerCase()) ?? null;
+      const nextEntry = normalizeExpensePresetRecord(
+        {
+          ...existingEntry,
+          name: category,
+          descriptions: [...(existingEntry?.descriptions ?? []), description],
+        },
+        expenseKind,
+      );
+      const nextCatalog = normalizeExpensePresetCatalog({
+        ...currentCatalog,
+        [expenseKind]: existingEntry
+          ? currentItems.map((entry) =>
+              entry.name.toLowerCase() === category.toLowerCase() ? nextEntry : entry,
+            )
+          : [...currentItems, nextEntry],
+      });
+      const now = new Date().toISOString();
+
+      result = {
+        ok: true,
+        message: description
+          ? `${category} saved with ${description}.`
+          : `${category} saved.`,
+      };
+
+      return {
+        ...current,
+        finance: {
+          ...current.finance,
+          expenseCatalog: nextCatalog,
+        },
+        auditTrail: appendAuditTrail(current.auditTrail, [
+          buildCurrentAuditEvent(current, {
+            timestamp: now,
+            scope: "finance",
+            action: existingEntry ? "update" : "create",
+            entityType: "expense-preset",
+            entityId: nextEntry.id,
+            title: `Expense setup ${existingEntry ? "updated" : "created"} / ${category}`,
+            detail: [
+              expenseKind === "asset" ? "Vehicle cost" : "Business cost",
+              description || "Category only",
+            ].join(" / "),
+          }),
+        ]),
       };
     });
 
@@ -3742,7 +5270,10 @@ function App() {
         result = { ok: false, error: "Only management can edit vehicle settings." };
         return current;
       }
-      if (!draft.registration?.trim() || !draft.model?.trim() || !draft.route?.trim()) {
+      const routeCatalog = collectRouteMasterRecords(current);
+      const routeSelection = resolveVehicleRouteSelection(draft, routeCatalog);
+
+      if (!draft.registration?.trim() || !draft.model?.trim() || !routeSelection.route) {
         result = { ok: false, error: "Registration, model, and route are required." };
         return current;
       }
@@ -3752,7 +5283,7 @@ function App() {
         draft.assignedDriverId != null && draft.assignedDriverId !== ""
           ? current.drivers.find((driver) => driver.staffId === draft.assignedDriverId)
           : null;
-      if (activeRole === "Admin" && !hasModuleUpdateAccess(current, "fleet")) {
+      if (!hasModuleUpdateAccess(current, "fleet")) {
         result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
         return current;
       }
@@ -3762,12 +5293,18 @@ function App() {
       }
       const now = new Date().toISOString();
       const actorId = resolveCurrentActorId(current);
+      const capabilityFields = normalizeVehicleCapabilityHooks({
+        ...existing,
+        ...draft,
+        route: routeSelection.route,
+        currentRouteId: routeSelection.currentRouteId,
+      });
       const nextVehicle = {
         ...existing,
         id: draft.id ?? createRecordId("veh"),
         registration: draft.registration.trim().toUpperCase(),
         model: draft.model.trim(),
-        route: draft.route.trim(),
+        route: routeSelection.route,
         status: draft.status ?? "active",
         utilisation: Number(draft.utilisation ?? 0),
         currentOdometer: Number(draft.currentOdometer ?? 0),
@@ -3776,6 +5313,11 @@ function App() {
         permitExpiryDate: draft.permitExpiryDate || null,
         discExpiryDate: draft.discExpiryDate || null,
         assignedDriverId: draft.assignedDriverId || null,
+        canDoRouteService: capabilityFields.canDoRouteService,
+        canDoSpecialTrips: capabilityFields.canDoSpecialTrips,
+        canDoContracts: capabilityFields.canDoContracts,
+        seatCapacity: capabilityFields.seatCapacity,
+        currentRouteId: routeSelection.currentRouteId ?? capabilityFields.currentRouteId,
         createdAt: existing?.createdAt ?? now,
         createdBy: existing?.createdBy ?? actorId,
         createdByRole: existing?.createdByRole ?? activeRole,
@@ -3830,6 +5372,119 @@ function App() {
     return result;
   };
 
+  const saveRouteProfile = (draft) => {
+    let result = { ok: false, error: "Unable to save the route profile." };
+
+    setSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+      if (!PRIVILEGED_ROLES.has(activeRole)) {
+        result = { ok: false, error: "Only management can edit route settings." };
+        return current;
+      }
+      if (!hasModuleUpdateAccess(current, "fleet")) {
+        result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
+        return current;
+      }
+
+      const routeName = String(draft.name ?? "").trim();
+      const routeCode = String(draft.code ?? "").trim().toUpperCase();
+      const routeType = String(draft.type ?? "route_service").trim() || "route_service";
+      const primaryOrigin = String(draft.primaryOrigin ?? "").trim();
+      const primaryDestination = String(draft.primaryDestination ?? "").trim();
+
+      if (!routeName) {
+        result = { ok: false, error: "Route name is required." };
+        return current;
+      }
+      if (!primaryOrigin || !primaryDestination) {
+        result = { ok: false, error: "Primary origin and destination are required." };
+        return current;
+      }
+
+      const normalizedDraft = normalizeRouteMasterRecord({
+        ...draft,
+        name: routeName,
+        code: routeCode,
+        type: routeType,
+        primaryOrigin,
+        primaryDestination,
+        route: routeName,
+        isActive: draft.isActive ?? true,
+      });
+
+      if (!normalizedDraft) {
+        result = { ok: false, error: "Enter a valid route name." };
+        return current;
+      }
+
+      const currentRoutes = current.routes ?? [];
+      const existingRoute =
+        currentRoutes.find(
+          (route) =>
+            route.id === draft.id ||
+            route.id === normalizedDraft.id ||
+            route.name?.trim().toLowerCase() === normalizedDraft.name.trim().toLowerCase(),
+        ) ?? null;
+      const duplicateCode = currentRoutes.find(
+        (route) =>
+          route.id !== existingRoute?.id &&
+          String(route.code ?? "").trim().toUpperCase() === normalizedDraft.code,
+      );
+
+      if (duplicateCode) {
+        result = { ok: false, error: "This route code is already linked to another route." };
+        return current;
+      }
+
+      const now = new Date().toISOString();
+      const actorId = resolveCurrentActorId(current);
+      const nextRoute = {
+        ...existingRoute,
+        ...normalizedDraft,
+        createdAt: existingRoute?.createdAt ?? now,
+        createdBy: existingRoute?.createdBy ?? actorId,
+        createdByRole: existingRoute?.createdByRole ?? activeRole,
+        updatedAt: existingRoute ? now : null,
+        updatedBy: existingRoute ? actorId : null,
+        updatedByRole: existingRoute ? activeRole : null,
+      };
+      const nextRoutesBase = existingRoute
+        ? currentRoutes.map((route) => (route.id === existingRoute.id ? nextRoute : route))
+        : [nextRoute, ...currentRoutes];
+      const nextRoutes = collectRouteMasterRecords({
+        ...current,
+        routes: nextRoutesBase,
+      });
+      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp: now,
+          scope: "fleet",
+          action: existingRoute ? "update" : "create",
+          entityType: "route",
+          entityId: nextRoute.id,
+          title: `Route ${existingRoute ? "updated" : "created"} / ${nextRoute.code}`,
+          detail: `${nextRoute.name} / ${nextRoute.type}`,
+        }),
+      ]);
+
+      result = {
+        ok: true,
+        message: existingRoute ? "Route profile updated." : "Route profile created.",
+        routeId: nextRoute.id,
+      };
+
+      return {
+        ...current,
+        routes: nextRoutes,
+        auditTrail: nextAuditTrail,
+      };
+    });
+
+    return result;
+  };
+
   const allocateDriverShift = (draft) => {
     let result = { ok: false, error: "Unable to save the driver allocation." };
 
@@ -3841,7 +5496,7 @@ function App() {
         result = { ok: false, error: "Only management can allocate drivers to vehicles." };
         return current;
       }
-      if (activeRole === "Admin" && !hasModuleUpdateAccess(current, "drivers")) {
+      if (!hasModuleUpdateAccess(current, "drivers")) {
         result = { ok: false, error: getModuleAccessErrorMessage("drivers") };
         return current;
       }
@@ -3957,54 +5612,173 @@ function App() {
         result = { ok: false, error: "Only management can add drivers." };
         return current;
       }
-      if (activeRole === "Admin" && !hasModuleUpdateAccess(current, "drivers")) {
+      if (!hasModuleUpdateAccess(current, "drivers")) {
         result = { ok: false, error: getModuleAccessErrorMessage("drivers") };
         return current;
       }
-      if (!draft.name?.trim() || !draft.route?.trim()) {
-        result = { ok: false, error: "Driver name and route are required." };
+
+      const driverName = String(draft.name ?? "").trim();
+      if (!driverName) {
+        result = { ok: false, error: "Driver name is required." };
+        return current;
+      }
+
+      const email = normalizeEmailAddress(draft.email);
+      if (!email) {
+        result = { ok: false, error: "Driver email is required." };
+        return current;
+      }
+      if (!isValidEmailAddress(email)) {
+        result = { ok: false, error: "Enter a valid driver email address." };
+        return current;
+      }
+
+      const routeCatalog = collectRouteMasterRecords(current);
+      const selectedRouteIds = Array.from(
+        new Set(
+          (Array.isArray(draft.routeIds) ? draft.routeIds : [])
+            .map((value) => String(value ?? "").trim())
+            .filter(Boolean),
+        ),
+      );
+      const selectedRoutes = selectedRouteIds
+        .map((routeId) => routeCatalog.find((route) => route.id === routeId) ?? null)
+        .filter(Boolean);
+
+      if (selectedRoutes.length === 0) {
+        result = {
+          ok: false,
+          error:
+            routeCatalog.length > 0
+              ? "Select at least one route for this driver."
+              : "Add a route in Fleet & Operations before saving this driver.",
+        };
+        return current;
+      }
+
+      const existingDriver =
+        (current.drivers ?? []).find(
+          (driver) => driver.staffId === String(draft.staffId ?? "").trim(),
+        ) ?? null;
+      const currentUsers = getAppUsers(current);
+      const existingUser =
+        currentUsers.find(
+          (user) =>
+            user.staffId === existingDriver?.staffId ||
+            normalizeEmailAddress(user.email) === normalizeEmailAddress(existingDriver?.email),
+        ) ?? null;
+
+      if (
+        currentUsers.some(
+          (user) =>
+            normalizeEmailAddress(user.email) === email &&
+            user.staffId !== existingDriver?.staffId,
+        )
+      ) {
+        result = {
+          ok: false,
+          error: "This email is already linked to another TaxiFlow account.",
+        };
+        return current;
+      }
+
+      const accessPassword = String(draft.accessPassword ?? "").trim();
+      if (!existingDriver && !accessPassword) {
+        result = { ok: false, error: "Create a password for this driver before saving." };
+        return current;
+      }
+      if (accessPassword && accessPassword.length < 6) {
+        result = {
+          ok: false,
+          error: "Driver password must be at least 6 characters long.",
+        };
         return current;
       }
 
       const now = new Date().toISOString();
       const actorId = resolveCurrentActorId(current);
+      const routeNames = selectedRoutes.map((route) => route.name);
+      const primaryRoute = routeNames[0] ?? "";
       const nextDriver = {
-        staffId: draft.staffId?.trim() || createRecordId("drv"),
-        name: draft.name.trim(),
-        route: draft.route.trim(),
+        ...existingDriver,
+        staffId: existingDriver?.staffId ?? (draft.staffId?.trim() || createRecordId("drv")),
+        name: driverName,
+        email,
+        route: primaryRoute,
+        routeIds: selectedRouteIds,
+        routeNames,
+        primaryRouteId: selectedRouteIds[0] ?? null,
         shiftStatus: draft.shiftStatus ?? "Ready for dispatch",
-        avgShiftRevenue: 0,
-        cashAccuracy: 100,
+        avgShiftRevenue: existingDriver?.avgShiftRevenue ?? 0,
+        cashAccuracy: existingDriver?.cashAccuracy ?? 100,
+        licenseNumber: String(draft.licenseNumber ?? "").trim() || null,
+        licenseCode: String(draft.licenseCode ?? "").trim().toUpperCase() || null,
+        licenseExpiryDate: draft.licenseExpiryDate || null,
+        prdpNumber: String(draft.prdpNumber ?? "").trim() || null,
         prdpExpiryDate: draft.prdpExpiryDate || null,
+        accessPassword: accessPassword || existingDriver?.accessPassword || null,
         role: "Driver",
-        createdAt: now,
-        createdBy: actorId,
-        createdByRole: activeRole,
-        updatedAt: null,
-        updatedBy: null,
-        updatedByRole: null,
+        createdAt: existingDriver?.createdAt ?? now,
+        createdBy: existingDriver?.createdBy ?? actorId,
+        createdByRole: existingDriver?.createdByRole ?? activeRole,
+        updatedAt: existingDriver ? now : null,
+        updatedBy: existingDriver ? actorId : null,
+        updatedByRole: existingDriver ? activeRole : null,
       };
+      const nextDriverUser = normalizeAppUser({
+        ...existingUser,
+        email,
+        name: nextDriver.name,
+        role: "Driver",
+        actorId: existingUser?.actorId ?? nextDriver.staffId,
+        staffId: nextDriver.staffId,
+        accessPassword: nextDriver.accessPassword,
+        createdAt: existingUser?.createdAt ?? nextDriver.createdAt,
+        createdBy: existingUser?.createdBy ?? nextDriver.createdBy,
+        createdByRole: existingUser?.createdByRole ?? nextDriver.createdByRole,
+        updatedAt: existingUser ? now : null,
+        updatedBy: existingUser ? actorId : null,
+        updatedByRole: existingUser ? activeRole : null,
+      });
+      const nextDrivers = existingDriver
+        ? (current.drivers ?? []).map((driver) =>
+            driver.staffId === existingDriver.staffId ? nextDriver : driver,
+          )
+        : [nextDriver, ...(current.drivers ?? [])];
+      const nextUsers = sortAppUsers(
+        existingUser
+          ? currentUsers.map((user) =>
+              user.staffId === nextDriver.staffId ||
+              normalizeEmailAddress(user.email) === normalizeEmailAddress(existingUser.email)
+                ? nextDriverUser
+                : normalizeAppUser(user),
+            )
+          : [...currentUsers, nextDriverUser],
+      );
       const nextAuditTrail = appendAuditTrail(current.auditTrail, [
         buildCurrentAuditEvent(current, {
           timestamp: now,
           scope: "drivers",
-          action: "create",
+          action: existingDriver ? "update" : "create",
           entityType: "driver",
           entityId: nextDriver.staffId,
-          title: `Driver created / ${nextDriver.name}`,
-          detail: `${nextDriver.staffId} / ${nextDriver.route}`,
+          title: `Driver ${existingDriver ? "updated" : "created"} / ${nextDriver.name}`,
+          detail: `${nextDriver.staffId} / ${getDriverRouteSummary(nextDriver)} / ${nextDriver.email}`,
         }),
       ]);
 
       result = {
         ok: true,
-        message: `${nextDriver.name} added to the driver roster.`,
+        message: existingDriver
+          ? `${nextDriver.name} updated in the driver roster.`
+          : `${nextDriver.name} added to the driver roster.`,
         staffId: nextDriver.staffId,
       };
 
       return {
         ...current,
-        drivers: [nextDriver, ...(current.drivers ?? [])],
+        drivers: nextDrivers,
+        appUsers: nextUsers,
         auditTrail: nextAuditTrail,
       };
     });
@@ -4019,8 +5793,8 @@ function App() {
       if (!current) {
         return current;
       }
-      if (!["Owner", "Admin"].includes(activeRole)) {
-        result = { ok: false, error: "Only Admin or Owner can archive vehicles." };
+      if (!PRIVILEGED_ROLES.has(activeRole)) {
+        result = { ok: false, error: "Only management can archive vehicles." };
         return current;
       }
       if (!hasModuleUpdateAccess(current, "fleet")) {
@@ -4092,7 +5866,7 @@ function App() {
         result = { ok: false, error: "Select a valid problem category." };
         return current;
       }
-      if (activeRole === "Admin" && !hasModuleUpdateAccess(current, "fleet")) {
+      if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "fleet")) {
         result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
         return current;
       }
@@ -4417,6 +6191,9 @@ function App() {
     (driver) => driver.role === "Driver",
   ).length;
   const overviewAttentionCount = openDefects + criticalDocs;
+  const pendingPasswordResetCount = (currentSnapshot.passwordResetRequests ?? []).filter(
+    (request) => String(request.status ?? "pending").trim().toLowerCase() === "pending",
+  ).length;
 
   const moduleMeta = {
     overview: {
@@ -4432,15 +6209,15 @@ function App() {
     },
     fleet: {
       stat: activeRole === "Driver" ? currentSnapshot.driverTerminal.assignedVehicle : `${visibleFleetCount}`,
-      sub: activeRole === "Driver" ? "My vehicle" : "Visible fleet",
+      sub: activeRole === "Driver" ? "My vehicle" : "Visible vehicles",
     },
     drivers: {
       stat: `${activeDrivers}`,
       sub: "Active drivers",
     },
     settings: {
-      stat: `${appUsers.length}`,
-      sub: "User access",
+      stat: pendingPasswordResetCount > 0 ? `${pendingPasswordResetCount}` : `${appUsers.length}`,
+      sub: pendingPasswordResetCount > 0 ? "Reset requests" : "User access",
     },
   };
 
@@ -4452,7 +6229,7 @@ function App() {
             <div className="brand-lockup compact">
               <img
                 className="brand-logo compact toolbar-logo"
-                src="/taxiflow-favicon.png"
+                src="/taxiflow-logo.png"
                 alt="TaxiFlow logo"
               />
               <div>
@@ -4544,11 +6321,13 @@ function App() {
             <FinancePanel
               snapshot={currentSnapshot}
               activeRole={activeRole}
+              currentUserRecord={currentUserRecord}
               permissionControls={permissionControls}
               onNavigate={setActiveView}
               onSaveStandardIncome={saveStandardIncome}
               onSaveSpecialIncome={saveSpecialIncome}
               onSaveExpense={saveExpense}
+              onSaveExpensePreset={saveExpensePreset}
               onVerifyIncome={verifyIncome}
               onDeleteTransaction={deleteTransaction}
               onLockDeposit={lockDeposit}
@@ -4558,8 +6337,10 @@ function App() {
             <FleetPanel
               snapshot={currentSnapshot}
               activeRole={activeRole}
+              currentUserRecord={currentUserRecord}
               permissionControls={permissionControls}
               onSaveVehicle={saveVehicleProfile}
+              onSaveRoute={saveRouteProfile}
               onArchiveVehicle={archiveVehicle}
               onLogDefect={logDefect}
               onResolveDefect={resolveDefect}
@@ -4570,6 +6351,7 @@ function App() {
             <DriversPanel
               snapshot={currentSnapshot}
               activeRole={activeRole}
+              currentUserRecord={currentUserRecord}
               permissionControls={permissionControls}
               onShortcutAction={handleDriverShortcut}
               shortcutIntent={driverShortcutIntent}
@@ -4583,6 +6365,7 @@ function App() {
           )}
           {activeView === "settings" && (
             <SettingsPanel
+              activeRole={activeRole}
               snapshot={currentSnapshot}
               backendMode={backendMode}
               backendModeLabel={backendModeLabel}
@@ -4592,6 +6375,8 @@ function App() {
               isLocalAuth={!authEnabled}
               onChangeBackendMode={handleBackendModeChange}
               onFactoryReset={handleFactoryReset}
+              onResolvePasswordResetRequest={resolvePasswordResetRequest}
+              onResetUserPassword={resetUserPassword}
               onSaveUserAccess={saveUserAccess}
             />
           )}
@@ -4876,7 +6661,7 @@ function OverviewPanel({
         </InsightCard>
 
         <InsightCard
-          title="Fleet overview"
+          title="Fleet & Operations overview"
           metric={`${visibleFleetCount}`}
           meta={`${activeVehicles.length} active / ${archivedVehicles} archived`}
           icon={Wrench}
@@ -4948,7 +6733,7 @@ function OverviewPanel({
               <ChevronRight size={16} />
             </button>
             <button className="cta-link" onClick={() => onNavigate("fleet")} type="button">
-              Fleet
+              Fleet & Operations
               <ChevronRight size={16} />
             </button>
             <button className="cta-link" onClick={() => onNavigate("drivers")} type="button">
@@ -4960,16 +6745,6 @@ function OverviewPanel({
       </div>
 
       <CompliancePanel snapshot={snapshot} />
-
-      {activeRole !== "Driver" && (
-        <AdminEditAccessPanel
-          activeRole={activeRole}
-          permissionControls={permissionControls}
-          onRequestAdminModuleAccess={onRequestAdminModuleAccess}
-          onReviewAdminModuleAccess={onReviewAdminModuleAccess}
-          onSetAdminModuleAccess={onSetAdminModuleAccess}
-        />
-      )}
 
       {activeRole === "Owner" && (
         <Panel eyebrow="Owner tools" title="System activity history" icon={Clock}>
@@ -5000,6 +6775,7 @@ function OverviewPanel({
 function AdminEditAccessPanel({
   activeRole,
   permissionControls,
+  storedAppUsers,
   onRequestAdminModuleAccess,
   onReviewAdminModuleAccess,
   onSetAdminModuleAccess,
@@ -5028,16 +6804,24 @@ function AdminEditAccessPanel({
       <div className="overview-board-grid">
         {Object.entries(MODULE_EDIT_ACCESS).map(([moduleKey, moduleConfig]) => {
           const control = permissionControls[moduleKey];
-          const status = getModuleAccessStatus(control);
+          const ownerSettingsAccess = (storedAppUsers ?? []).some(
+            (user) =>
+              normalizeRole(user.role) === "Admin" &&
+              normalizeModuleViewAccess(user.moduleAccess, user.role)?.[moduleKey],
+          );
+          const effectiveControl = ownerSettingsAccess ? { ...control, active: true } : control;
+          const status = getModuleAccessStatus(effectiveControl);
           const requestMeta = control.requestedAt
             ? `Requested ${formatStamp(control.requestedAt)}`
             : "No owner request has been sent yet.";
           const reviewMeta = control.ownerReviewedAt
             ? `Owner reviewed ${formatStamp(control.ownerReviewedAt)}`
             : "Owner decision still pending.";
-          const grantMeta = control.grantedAt
-            ? `Manager granted ${formatStamp(control.grantedAt)}`
-            : "Admin access is not active.";
+          const grantMeta = ownerSettingsAccess
+            ? "Enabled by owner in Settings."
+            : control.grantedAt
+              ? `Manager granted ${formatStamp(control.grantedAt)}`
+              : "Admin access is not active.";
 
           return (
             <article key={moduleKey} className="overview-board">
@@ -5051,7 +6835,7 @@ function AdminEditAccessPanel({
                   {status.label}
                 </span>
                 <span className="status-chip" data-tone="info">
-                  {control.active
+                  {effectiveControl.active
                     ? grantMeta
                     : ["approved", "rejected"].includes(control.requestStatus)
                       ? reviewMeta
@@ -5059,7 +6843,10 @@ function AdminEditAccessPanel({
                 </span>
               </div>
               <div className="finance-form-actions">
-                {activeRole === "Manager" && control.requestStatus !== "approved" && !control.active && (
+                {activeRole === "Manager" &&
+                  !ownerSettingsAccess &&
+                  control.requestStatus !== "approved" &&
+                  !control.active && (
                   <button
                     type="button"
                     className="action-button primary"
@@ -5069,7 +6856,10 @@ function AdminEditAccessPanel({
                     Ask owner
                   </button>
                 )}
-                {activeRole === "Manager" && control.requestStatus === "approved" && !control.active && (
+                {activeRole === "Manager" &&
+                  !ownerSettingsAccess &&
+                  control.requestStatus === "approved" &&
+                  !control.active && (
                   <button
                     type="button"
                     className="action-button primary"
@@ -5078,7 +6868,7 @@ function AdminEditAccessPanel({
                     Grant to admin
                   </button>
                 )}
-                {["Owner", "Manager"].includes(activeRole) && control.active && (
+                {["Owner", "Manager"].includes(activeRole) && control.active && !ownerSettingsAccess && (
                   <button
                     type="button"
                     className="action-button"
@@ -5087,7 +6877,7 @@ function AdminEditAccessPanel({
                     Remove admin access
                   </button>
                 )}
-                {activeRole === "Owner" && control.requestStatus === "pending" && (
+                {activeRole === "Owner" && control.requestStatus === "pending" && !ownerSettingsAccess && (
                   <>
                     <button
                       type="button"
@@ -5108,13 +6898,17 @@ function AdminEditAccessPanel({
               </div>
               <p className="panel-note">
                 {activeRole === "Owner" &&
-                  (control.requestStatus === "pending"
+                  (ownerSettingsAccess
+                    ? "Admin access for this area is currently being controlled in Settings."
+                    : control.requestStatus === "pending"
                     ? "Review the manager request before admin can receive edit access."
                     : control.active
                       ? "Admin is currently allowed to edit saved records in this area."
                       : "Only the owner can approve new admin edit access requests.")}
                 {activeRole === "Manager" &&
-                  (control.requestStatus === "pending"
+                  (ownerSettingsAccess
+                    ? "Owner Settings already control admin access for this area."
+                    : control.requestStatus === "pending"
                     ? "Waiting for the owner to respond."
                     : control.requestStatus === "approved" && !control.active
                       ? "Owner approval is ready. You can now grant admin access."
@@ -5122,9 +6916,11 @@ function AdminEditAccessPanel({
                         ? "Admin edit access is live for this area."
                         : "Ask the owner first, then grant access to admin after approval.")}
                 {activeRole === "Admin" &&
-                  (control.active
-                    ? "You can edit saved records in this area while this manager grant stays active."
-                    : "Edits stay locked until the manager receives owner approval and grants access.")}
+                  (effectiveControl.active
+                    ? ownerSettingsAccess
+                      ? "You can edit saved records in this area because the owner enabled it in Settings."
+                      : "You can edit saved records in this area while this manager grant stays active."
+                    : "Edits stay locked until the owner enables this area in Settings or a manager grant becomes active.")}
               </p>
             </article>
           );
@@ -5137,11 +6933,13 @@ function AdminEditAccessPanel({
 function FinancePanel({
   snapshot,
   activeRole,
+  currentUserRecord,
   permissionControls,
   onNavigate,
   onSaveStandardIncome,
   onSaveSpecialIncome,
   onSaveExpense,
+  onSaveExpensePreset,
   onVerifyIncome,
   onDeleteTransaction,
   onLockDeposit,
@@ -5168,11 +6966,15 @@ function FinancePanel({
   );
   const [specialDraft, setSpecialDraft] = useState(() => createSpecialDraft(defaultVehicleId));
   const [expenseDraft, setExpenseDraft] = useState(() =>
-    createExpenseDraft("asset", defaultVehicleId),
+    createExpenseDraft("asset", defaultVehicleId, finance.expenseCatalog),
+  );
+  const [expensePresetDraft, setExpensePresetDraft] = useState(() =>
+    createExpensePresetDraft("asset"),
   );
 
   const incomeRecords = snapshot.financeTransactions.filter((record) => record.type === "income");
   const expenseRecords = snapshot.financeTransactions.filter((record) => record.type === "expense");
+  const expenseKind = expenseView === "vehicle" ? "asset" : "operational";
   const filteredExpenseRecords = expenseRecords.filter((record) =>
     expenseView === "vehicle" ? record.expenseKind === "asset" : record.expenseKind === "operational",
   );
@@ -5180,6 +6982,21 @@ function FinancePanel({
     expenseView === "vehicle"
       ? finance.expenseManagement.vehicleSpecific
       : finance.expenseManagement.operational;
+  const expensePresetItems = getExpenseCatalogEntries(finance.expenseCatalog, expenseKind);
+  const expenseCategoryOptions = getExpenseCategoryOptions(
+    finance.expenseCatalog,
+    expenseDraft.expenseKind,
+    expenseDraft.category,
+  );
+  const expenseDescriptionOptions = getExpenseDescriptionOptions(
+    finance.expenseCatalog,
+    expenseDraft.expenseKind,
+    expenseDraft.category,
+  );
+  const usesCustomExpenseDescription =
+    expenseDraft.category === EXPENSE_OTHER_CATEGORY ||
+    expenseDraft.descriptionPreset === EXPENSE_CUSTOM_DESCRIPTION_VALUE ||
+    expenseDescriptionOptions.length === 0;
   const selectedVehicleOpening =
     finance.vehicleOpenings?.[standardDraft.vehicleId || defaultVehicleId] ?? 0;
   const selectedStandardVehicleRoute =
@@ -5206,10 +7023,12 @@ function FinancePanel({
     activeRole,
     "finance",
     permissionControls,
+    currentUserRecord,
   );
   const canRecordCashHandIn = canRecordCashHandoverForRole(activeRole);
   const canVerifyFinanceChecks = canVerifyCashCheckForRole(activeRole);
   const financeAccessStatus = getModuleAccessStatus(permissionControls.finance);
+  const autoCheckFinanceEntries = activeRole !== "Driver" && canEditFinanceUpdates;
 
   useEffect(() => {
     if (!standardDraft.vehicleId && defaultVehicleId) {
@@ -5264,10 +7083,12 @@ function FinancePanel({
   };
 
   const handleExpenseViewChange = (nextView) => {
+    const nextExpenseKind = nextView === "vehicle" ? "asset" : "operational";
     setExpenseView(nextView);
     setExpenseDraft(
-      createExpenseDraft(nextView === "vehicle" ? "asset" : "operational", defaultVehicleId),
+      createExpenseDraft(nextExpenseKind, defaultVehicleId, finance.expenseCatalog),
     );
+    setExpensePresetDraft(createExpensePresetDraft(nextExpenseKind));
   };
 
   const handleStandardSubmit = (event) => {
@@ -5300,8 +7121,20 @@ function FinancePanel({
     pushFeedback(response);
     if (response.ok) {
       setExpenseDraft(
-        createExpenseDraft(expenseView === "vehicle" ? "asset" : "operational", defaultVehicleId),
+        createExpenseDraft(expenseKind, defaultVehicleId, finance.expenseCatalog),
       );
+    }
+  };
+
+  const handleExpensePresetSubmit = (event) => {
+    event.preventDefault();
+    const response = onSaveExpensePreset({
+      ...expensePresetDraft,
+      expenseKind,
+    });
+    pushFeedback(response);
+    if (response.ok) {
+      setExpensePresetDraft(createExpensePresetDraft(expenseKind));
     }
   };
 
@@ -5374,6 +7207,12 @@ function FinancePanel({
       expenseKind: record.expenseKind,
       category: record.category ?? "",
       description: record.description ?? "",
+      descriptionPreset: getExpenseDescriptionPresetValue(
+        finance.expenseCatalog,
+        record.expenseKind,
+        record.category ?? "",
+        record.description ?? "",
+      ),
       expenseDate: record.expenseDate ?? toDateInputValue(record.timestamp),
       reference: record.reference ?? "",
       vehicleId: record.vehicleId ?? defaultVehicleId,
@@ -5466,16 +7305,16 @@ function FinancePanel({
         </div>
       )}
 
-      {activeRole === "Admin" && !canEditFinanceUpdates && (
+      {PRIVILEGED_ROLES.has(activeRole) && !canEditFinanceUpdates && (
         <article className="overview-board">
           <div className="overview-board-head">
-            <p className="eyebrow">Admin access</p>
+            <p className="eyebrow">Management access</p>
             <h3>Money edits are locked</h3>
           </div>
           <p className="panel-note">
-            A manager must ask the owner for approval, then grant admin access before you can edit
-            saved daily takings, delete records, or finish deposits. Cash hand-ins stay available
-            so you can compare what was received against the app.
+            The owner can enable Money rights in Settings. Until then this management account
+            cannot edit saved daily takings, delete records, or finish deposits. Cash hand-ins stay
+            available so you can compare what was received against the app.
           </p>
           <div className="finance-form-meta">
             <span className="status-chip" data-tone={financeAccessStatus.tone}>
@@ -6103,6 +7942,92 @@ function FinancePanel({
           <div className="finance-board-grid finance-board-grid-3">
             <article className="overview-board">
               <div className="overview-board-head">
+                <p className="eyebrow">Expense setup</p>
+                <h3>{expenseView === "vehicle" ? "Vehicle cost" : "Business cost"} presets</h3>
+              </div>
+
+              <div className="compact-feed">
+                {expensePresetItems.slice(0, 6).map((entry) => (
+                  <CompactFeedItem
+                    key={entry.id}
+                    title={entry.name}
+                    subtitle={
+                      entry.descriptions.length > 0
+                        ? entry.descriptions.slice(0, 2).join(" / ")
+                        : "Category saved without preset descriptions"
+                    }
+                    tone="info"
+                    meta={`${entry.descriptions.length} descriptions`}
+                  />
+                ))}
+                {expensePresetItems.length === 0 && (
+                  <CompactFeedItem
+                    title="No saved setup yet"
+                    subtitle="Add preset categories and descriptions for faster expense entry"
+                    tone="warning"
+                    meta="Expense setup"
+                  />
+                )}
+              </div>
+
+              <form className="finance-form" onSubmit={handleExpensePresetSubmit}>
+                <div className="finance-form-grid">
+                  <label className="finance-field">
+                    <span>Category name</span>
+                    <input
+                      type="text"
+                      placeholder="Subscription"
+                      value={expensePresetDraft.category}
+                      onChange={(event) =>
+                        setExpensePresetDraft((current) => ({
+                          ...current,
+                          category: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="finance-field finance-field-wide">
+                    <span>Description option</span>
+                    <input
+                      type="text"
+                      placeholder="Weekly subscription"
+                      value={expensePresetDraft.description}
+                      onChange={(event) =>
+                        setExpensePresetDraft((current) => ({
+                          ...current,
+                          description: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                </div>
+
+                <div className="finance-form-actions">
+                  <button
+                    type="submit"
+                    className="action-button primary"
+                    disabled={!canEditFinanceUpdates}
+                  >
+                    Save setup
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button"
+                    onClick={() => setExpensePresetDraft(createExpensePresetDraft(expenseKind))}
+                  >
+                    Clear
+                  </button>
+                </div>
+
+                <p className="finance-form-note" data-tone="info">
+                  Save a category on its own or add a preset description to that category. The
+                  entry form will then offer these as quick dropdown options.
+                </p>
+              </form>
+            </article>
+
+            <article className="overview-board">
+              <div className="overview-board-head">
                 <p className="eyebrow">Expense form</p>
                 <h3>{expenseView === "vehicle" ? "Vehicle cost" : "Business cost"} entry</h3>
               </div>
@@ -6111,31 +8036,65 @@ function FinancePanel({
                 <div className="finance-form-grid">
                   <label className="finance-field">
                     <span>Category</span>
-                    <input
-                      type="text"
+                    <select
                       value={expenseDraft.category}
                       onChange={(event) =>
-                        setExpenseDraft((current) => ({
-                          ...current,
-                          category: event.target.value,
-                        }))
+                        setExpenseDraft((current) =>
+                          syncExpenseDraftCategory(
+                            current,
+                            finance.expenseCatalog,
+                            event.target.value,
+                          ),
+                        )
                       }
-                    />
+                    >
+                      {expenseCategoryOptions.map((option) => (
+                        <option key={option} value={option}>
+                          {option}
+                        </option>
+                      ))}
+                    </select>
                   </label>
 
                   <label className="finance-field finance-field-wide">
                     <span>Description</span>
-                    <input
-                      type="text"
-                      placeholder="Weekly subscription for Rank 12"
-                      value={expenseDraft.description}
-                      onChange={(event) =>
-                        setExpenseDraft((current) => ({
-                          ...current,
-                          description: event.target.value,
-                        }))
-                      }
-                    />
+                    {usesCustomExpenseDescription ? (
+                      <input
+                        type="text"
+                        placeholder={
+                          expenseDraft.category === EXPENSE_OTHER_CATEGORY
+                            ? "Provide the expense details"
+                            : "Add the expense details"
+                        }
+                        value={expenseDraft.description}
+                        onChange={(event) =>
+                          setExpenseDraft((current) => ({
+                            ...current,
+                            description: event.target.value,
+                            descriptionPreset: EXPENSE_CUSTOM_DESCRIPTION_VALUE,
+                          }))
+                        }
+                      />
+                    ) : (
+                      <select
+                        value={expenseDraft.descriptionPreset}
+                        onChange={(event) =>
+                          setExpenseDraft((current) =>
+                            syncExpenseDraftDescriptionPreset(
+                              current,
+                              event.target.value,
+                            ),
+                          )
+                        }
+                      >
+                        {expenseDescriptionOptions.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                        <option value={EXPENSE_CUSTOM_DESCRIPTION_VALUE}>Other details</option>
+                      </select>
+                    )}
                   </label>
 
                   <label className="finance-field">
@@ -6227,9 +8186,17 @@ function FinancePanel({
                   </span>
                   <span
                     className="status-chip"
-                    data-tone={PRIVILEGED_ROLES.has(activeRole) ? "success" : "warning"}
+                    data-tone={expenseDraft.category === EXPENSE_OTHER_CATEGORY ? "warning" : "info"}
                   >
-                    Status starts as {PRIVILEGED_ROLES.has(activeRole) ? "checked" : "waiting"}
+                    {expenseDraft.category === EXPENSE_OTHER_CATEGORY
+                      ? "Other selected: description details are required"
+                      : `${expensePresetItems.length} preset categories available`}
+                  </span>
+                  <span
+                    className="status-chip"
+                    data-tone={autoCheckFinanceEntries ? "success" : "warning"}
+                  >
+                    Status starts as {autoCheckFinanceEntries ? "checked" : "waiting"}
                   </span>
                 </div>
 
@@ -6250,6 +8217,7 @@ function FinancePanel({
                           createExpenseDraft(
                             expenseView === "vehicle" ? "asset" : "operational",
                             defaultVehicleId,
+                            finance.expenseCatalog,
                           ),
                         )
                       }
@@ -6260,8 +8228,8 @@ function FinancePanel({
                 </div>
 
                 <p className="finance-form-note" data-tone="info">
-                  Capture the expense category, dated description, and receipt reference for items
-                  such as weekly subscriptions, rank fees, fuel, and repairs.
+                  Choose a saved category and description to capture expenses faster. Use Other when
+                  the cost is outside the usual list, then type the full details under Description.
                 </p>
               </form>
             </article>
@@ -6496,6 +8464,12 @@ function FinancePanel({
                       : record.status === "counted"
                         ? "Waiting for manager check"
                         : "Manager checked";
+                const dayAnalytics = !record.isSpecial ? record.dailyAnalytics ?? null : null;
+                const hasDayAnalytics = Boolean(dayAnalytics);
+                const hasTripDurationAnalytics =
+                  (dayAnalytics?.observedTripDurationCount ?? 0) > 0;
+                const hasWaitingAnalytics = (dayAnalytics?.waitingIntervalCount ?? 0) > 0;
+                const hasDayKmAnalytics = hasMetricValue(dayAnalytics?.dayKm);
 
                 return (
                   <article key={record.id} className="queue-card">
@@ -6539,6 +8513,83 @@ function FinancePanel({
                       )}
                       <InfoPair label="Distance gap" value={`${queueEntry.gapKm} km`} />
                     </div>
+
+                    {!record.isSpecial && (
+                      <div className="content-stack">
+                        <div className="overview-board-head">
+                          <p className="eyebrow">Analytics</p>
+                          <h3>Analytics Summary</h3>
+                        </div>
+                        <div className="queue-stats">
+                          <InfoPair
+                            label="Total trips"
+                            value={
+                              hasDayAnalytics
+                                ? formatOptionalMetric(dayAnalytics.totalTrips, {
+                                    maximumFractionDigits: 0,
+                                  })
+                                : "—"
+                            }
+                          />
+                          <InfoPair
+                            label="Total passengers"
+                            value={
+                              hasDayAnalytics
+                                ? formatOptionalMetric(dayAnalytics.totalPassengers, {
+                                    maximumFractionDigits: 0,
+                                  })
+                                : "—"
+                            }
+                          />
+                          <InfoPair
+                            label="Avg trip duration"
+                            value={
+                              hasTripDurationAnalytics
+                                ? formatOptionalMetric(dayAnalytics.avgTripDurationMin, {
+                                    suffix: " min",
+                                  })
+                                : "—"
+                            }
+                          />
+                          <InfoPair
+                            label="Avg waiting"
+                            value={
+                              hasWaitingAnalytics
+                                ? formatOptionalMetric(dayAnalytics.avgWaitingMin, {
+                                    suffix: " min",
+                                  })
+                                : "—"
+                            }
+                          />
+                          <InfoPair
+                            label="Avg takings / trip"
+                            value={
+                              hasDayAnalytics && (dayAnalytics.totalTrips ?? 0) > 0
+                                ? formatOptionalMoney(dayAnalytics.avgTakingsPerTrip)
+                                : "—"
+                            }
+                          />
+                          <InfoPair
+                            label="Avg passengers / trip"
+                            value={
+                              hasDayAnalytics && (dayAnalytics.totalTrips ?? 0) > 0
+                                ? formatOptionalMetric(dayAnalytics.avgPassengersPerTrip)
+                                : "—"
+                            }
+                          />
+                          <InfoPair
+                            label="KM / day"
+                            value={
+                              hasDayKmAnalytics
+                                ? formatOptionalMetric(dayAnalytics.dayKm, {
+                                    suffix: " km",
+                                  })
+                                : "—"
+                            }
+                          />
+                        </div>
+                      </div>
+                    )}
 
                     <div className="verification-actions">
                       <input
@@ -6596,8 +8647,10 @@ function FinancePanel({
 function FleetPanel({
   snapshot,
   activeRole,
+  currentUserRecord,
   permissionControls,
   onSaveVehicle,
+  onSaveRoute,
   onArchiveVehicle,
   onLogDefect,
   onResolveDefect,
@@ -6607,28 +8660,37 @@ function FleetPanel({
   const linkedVehicles = getDriverLinkedVehicles(snapshot);
   const availableVehicles = isDriver ? linkedVehicles : snapshot.vehicles;
   const canViewVehicleProfile = !isDriver;
-  const canManageVehicles = PRIVILEGED_ROLES.has(activeRole);
-  const canEditFleetUpdates = canEditModuleUpdates(activeRole, "fleet", permissionControls);
+  const canEditFleetUpdates = canEditModuleUpdates(
+    activeRole,
+    "fleet",
+    permissionControls,
+    currentUserRecord,
+  );
+  const canManageVehicles =
+    activeRole === "Owner" ||
+    (PRIVILEGED_ROLES.has(activeRole) && canEditFleetUpdates);
   const fleetAccessStatus = getModuleAccessStatus(permissionControls.fleet);
-  const canArchiveVehicles = ["Owner", "Admin"].includes(activeRole) && canEditFleetUpdates;
-  const canResolveDefects =
-    activeRole === "Owner" || activeRole === "Manager"
-      ? true
-      : activeRole === "Admin"
-        ? canEditFleetUpdates
-        : false;
+  const canArchiveVehicles = PRIVILEGED_ROLES.has(activeRole) && canEditFleetUpdates;
+  const canResolveDefects = PRIVILEGED_ROLES.has(activeRole) && canEditFleetUpdates;
+  const vehicleRouteOptions = useMemo(
+    () => snapshot.routes ?? [],
+    [snapshot.routes],
+  );
   const assignedVehicleId = isDriver
     ? snapshot.driverTerminal.assignedVehicleId ?? linkedVehicles[0]?.id ?? null
     : snapshot.driverTerminal.assignedVehicleId ?? snapshot.vehicles[0]?.id ?? null;
   const [activeFilter, setActiveFilter] = useState(isDriver ? "assigned" : "attention");
+  const [readinessFilter, setReadinessFilter] = useState("all");
   const [selectedVehicleId, setSelectedVehicleId] = useState(assignedVehicleId);
   const [feedback, setFeedback] = useState(null);
   const [vehicleDraft, setVehicleDraft] = useState(() =>
     createVehicleDraft(snapshot.vehicles[0], snapshot.profile.serviceIntervalKm),
   );
+  const [routeDraft, setRouteDraft] = useState(() => createRouteDraft());
   const [defectDraft, setDefectDraft] = useState(() => createDefectDraft(assignedVehicleId));
   const [resolutionCosts, setResolutionCosts] = useState({});
   const vehicleFormRef = useRef(null);
+  const routeFormRef = useRef(null);
   const vehicleProfileRef = useRef(null);
   const defectFormRef = useRef(null);
   const openDefectsRef = useRef(null);
@@ -6644,33 +8706,43 @@ function FleetPanel({
       archived: snapshot.vehicles.filter((vehicle) => vehicle.status === "archived").length,
     };
   }, [snapshot.vehicles]);
+  const readinessCounts = useMemo(() => {
+    const activeVehicles = snapshot.vehicles.filter((vehicle) => vehicle.status !== "archived");
+
+    return {
+      routeService: activeVehicles.filter((vehicle) => vehicle.canDoRouteService).length,
+      specialTrips: activeVehicles.filter((vehicle) => vehicle.canDoSpecialTrips).length,
+      contracts: activeVehicles.filter((vehicle) => vehicle.canDoContracts).length,
+    };
+  }, [snapshot.vehicles]);
 
   const filteredVehicles = useMemo(() => {
+    let nextVehicles;
+
     if (isDriver) {
-      return linkedVehicles;
-    }
-    if (activeFilter === "attention") {
-      return snapshot.vehicles.filter(
+      nextVehicles = linkedVehicles;
+    } else if (activeFilter === "attention") {
+      nextVehicles = snapshot.vehicles.filter(
         (vehicle) =>
           vehicle.status !== "archived" &&
           (vehicle.healthState === "warning" || vehicle.healthState === "danger"),
       );
-    }
-    if (activeFilter === "critical") {
-      return snapshot.vehicles.filter(
+    } else if (activeFilter === "critical") {
+      nextVehicles = snapshot.vehicles.filter(
         (vehicle) => vehicle.status !== "archived" && vehicle.healthState === "danger",
       );
-    }
-    if (activeFilter === "healthy") {
-      return snapshot.vehicles.filter(
+    } else if (activeFilter === "healthy") {
+      nextVehicles = snapshot.vehicles.filter(
         (vehicle) => vehicle.status !== "archived" && vehicle.healthState === "success",
       );
+    } else if (activeFilter === "archived") {
+      nextVehicles = snapshot.vehicles.filter((vehicle) => vehicle.status === "archived");
+    } else {
+      nextVehicles = snapshot.vehicles.filter((vehicle) => vehicle.status !== "archived");
     }
-    if (activeFilter === "archived") {
-      return snapshot.vehicles.filter((vehicle) => vehicle.status === "archived");
-    }
-    return snapshot.vehicles.filter((vehicle) => vehicle.status !== "archived");
-  }, [activeFilter, isDriver, linkedVehicles, snapshot.vehicles]);
+
+    return nextVehicles.filter((vehicle) => matchesVehicleReadiness(vehicle, readinessFilter));
+  }, [activeFilter, isDriver, linkedVehicles, readinessFilter, snapshot.vehicles]);
 
   useEffect(() => {
     if (!availableVehicles.some((vehicle) => vehicle.id === selectedVehicleId)) {
@@ -6823,6 +8895,112 @@ function FleetPanel({
     ],
     [selectedVehicle],
   );
+  const currentRouteRecord = useMemo(
+    () =>
+      (snapshot.routes ?? []).find(
+        (route) =>
+          route.id === selectedVehicle?.currentRouteId ||
+          route.name === selectedVehicle?.route,
+      ) ?? null,
+    [selectedVehicle?.currentRouteId, selectedVehicle?.route, snapshot.routes],
+  );
+  const passengerContribution = useMemo(() => {
+    const standardRouteRecords = vehicleIncomeRecords.filter(
+      (record) => record.incomeKind === "standard",
+    );
+    const totalTrips = sumBy(standardRouteRecords, getDailyTripTripCount);
+    const totalPassengers = sumBy(standardRouteRecords, getDailyTripPassengerTotal);
+
+    return {
+      capturedDays: standardRouteRecords.length,
+      totalTrips,
+      totalPassengers,
+      lastCapturedAt: standardRouteRecords[0]?.timestamp ?? null,
+    };
+  }, [vehicleIncomeRecords]);
+  const routeMovementPoints = useMemo(
+    () => currentRouteRecord?.routePoints ?? [],
+    [currentRouteRecord],
+  );
+  const lastKnownDriver = useMemo(() => {
+    if (selectedVehicle?.assignedDriver && selectedVehicle.assignedDriver !== "Unassigned") {
+      return selectedVehicle.assignedDriver;
+    }
+
+    const incomeDriver = vehicleIncomeRecords
+      .map(
+        (record) =>
+          snapshot.drivers.find((driver) => driver.staffId === record.createdBy)?.name ?? null,
+      )
+      .find(Boolean);
+
+    return (
+      incomeDriver ??
+      vehicleDefects.find((defect) => defect.reportedByName)?.reportedByName ??
+      "No driver history yet"
+    );
+  }, [selectedVehicle?.assignedDriver, snapshot.drivers, vehicleDefects, vehicleIncomeRecords]);
+  const latestFinanceActivity = vehicleLedger[0] ?? null;
+  const operatedRoutes = useMemo(
+    () =>
+      Object.values(
+        vehicleIncomeRecords.reduce((groups, record) => {
+          const key = record.isSpecial
+            ? formatTripRoute(record)
+            : record.route ?? selectedVehicle?.route ?? "Route";
+          const current = groups[key] ?? {
+            title: key,
+            subtitle: record.isSpecial ? record.travelReason ?? "Special trip" : "Standard route",
+            trips: 0,
+            revenue: 0,
+            latestTimestamp: record.timestamp,
+          };
+
+          groups[key] = {
+            ...current,
+            trips: current.trips + 1,
+            revenue: current.revenue + Number(record.amountClaimed ?? record.amount ?? 0),
+            latestTimestamp:
+              new Date(record.timestamp) > new Date(current.latestTimestamp)
+                ? record.timestamp
+                : current.latestTimestamp,
+          };
+
+          return groups;
+        }, {}),
+      )
+        .sort((left, right) => new Date(right.latestTimestamp) - new Date(left.latestTimestamp))
+        .map((route) => ({
+          title: route.title,
+          subtitle: route.subtitle,
+          meta: `${route.trips} trips / ${formatMoney(route.revenue)}`,
+        })),
+    [selectedVehicle?.route, vehicleIncomeRecords],
+  );
+  const serviceHistory = useMemo(
+    () =>
+      vehicleDefects
+        .filter((defect) => defect.status === "resolved")
+        .sort(
+          (left, right) =>
+            (Date.parse(right.resolvedAt ?? right.updatedAt ?? right.reportedAt ?? "") || 0) -
+            (Date.parse(left.resolvedAt ?? left.updatedAt ?? left.reportedAt ?? "") || 0),
+        )
+        .slice(0, 4),
+    [vehicleDefects],
+  );
+  const suitabilityHighlights = useMemo(
+    () => [
+      selectedVehicle?.canDoRouteService ? "Route service ready" : "Route service off",
+      selectedVehicle?.canDoSpecialTrips ? "Special trips ready" : "Special trips not set",
+      selectedVehicle?.canDoContracts ? "Contracts ready" : "Contracts not set",
+    ],
+    [
+      selectedVehicle?.canDoContracts,
+      selectedVehicle?.canDoRouteService,
+      selectedVehicle?.canDoSpecialTrips,
+    ],
+  );
 
   useEffect(() => {
     if (selectedVehicle && canManageVehicles) {
@@ -6856,6 +9034,15 @@ function FleetPanel({
     if (activeFilter === "archived") {
       return "No archived vehicles are available yet.";
     }
+    if (readinessFilter === "route-service") {
+      return "No vehicles in this view are marked ready for route service.";
+    }
+    if (readinessFilter === "special-trips") {
+      return "No vehicles in this view are marked ready for special trips.";
+    }
+    if (readinessFilter === "contracts") {
+      return "No vehicles in this view are marked ready for contracts.";
+    }
     return "No active vehicles are available in this view.";
   })();
 
@@ -6883,13 +9070,40 @@ function FleetPanel({
     }
   };
 
+  const buildBlankVehicleDraft = () => {
+    const baseDraft = createVehicleDraft(null, snapshot.profile.serviceIntervalKm);
+    const defaultRoute = vehicleRouteOptions[0] ?? null;
+
+    return defaultRoute
+      ? {
+          ...baseDraft,
+          route: defaultRoute.name,
+          currentRouteId: defaultRoute.id,
+        }
+      : baseDraft;
+  };
+
   const handleNewVehicle = () => {
-    setVehicleDraft(createVehicleDraft(null, snapshot.profile.serviceIntervalKm));
+    setVehicleDraft(buildBlankVehicleDraft());
   };
 
   const handleAddVehicle = () => {
     handleNewVehicle();
     vehicleFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const handleAddRoute = () => {
+    setRouteDraft(createRouteDraft());
+    routeFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const handleRouteSubmit = (event) => {
+    event.preventDefault();
+    const response = onSaveRoute(routeDraft);
+    pushFeedback(response);
+    if (response?.ok) {
+      setRouteDraft(createRouteDraft());
+    }
   };
 
   const handleViewProfile = (vehicleId) => {
@@ -6945,16 +9159,16 @@ function FleetPanel({
         </div>
       )}
 
-      {activeRole === "Admin" && !canEditFleetUpdates && (
+      {PRIVILEGED_ROLES.has(activeRole) && !canEditFleetUpdates && (
         <article className="overview-board">
           <div className="overview-board-head">
-            <p className="eyebrow">Admin access</p>
-            <h3>Fleet edits are locked</h3>
+            <p className="eyebrow">Management access</p>
+            <h3>Fleet & Operations edits are locked</h3>
           </div>
           <p className="panel-note">
-            A manager must ask the owner for approval, then grant admin access before you can
-            update saved vehicle profiles, edit reported problems, archive vehicles, or mark
-            repairs as fixed.
+            The owner can enable Fleet & Operations rights in Settings. Until then this management
+            account cannot update saved vehicle profiles, edit reported problems, archive vehicles,
+            or mark repairs as fixed.
           </p>
           <div className="finance-form-meta">
             <span className="status-chip" data-tone={fleetAccessStatus.tone}>
@@ -6964,7 +9178,7 @@ function FleetPanel({
         </article>
       )}
 
-      <Panel eyebrow="Fleet summary" title="Fleet overview" icon={Car}>
+      <Panel eyebrow="Fleet & Operations summary" title="Fleet & Operations overview" icon={Car}>
         <div className="fleet-counter-grid">
           <article className="overview-board fleet-health-card" data-tone="success">
             <p className="eyebrow">Fleet health</p>
@@ -6984,35 +9198,62 @@ function FleetPanel({
         </div>
 
         {!isDriver && (
-          <div className="finance-sub-switch fleet-toolbar">
-            {canManageVehicles && (
-              <button
-                type="button"
-                className="finance-sub-pill finance-sub-pill-action"
-                disabled={activeRole === "Admin" && !canEditFleetUpdates}
-                onClick={handleAddVehicle}
-              >
-                <Car size={14} />
-                Add vehicle
-              </button>
-            )}
-            {[
-              ["attention", "Attention"],
-              ["critical", "Critical"],
-              ["healthy", "Healthy"],
-              ["all", "All"],
-              ["archived", `Archived ${fleetHealth.archived}`],
-            ].map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                className={activeFilter === value ? "finance-sub-pill active" : "finance-sub-pill"}
-                onClick={() => setActiveFilter(value)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <>
+            <div className="finance-sub-switch fleet-toolbar">
+              {canManageVehicles && (
+                <>
+                  <button
+                    type="button"
+                    className="finance-sub-pill finance-sub-pill-action"
+                    disabled={!canEditFleetUpdates}
+                    onClick={handleAddVehicle}
+                  >
+                    <Car size={14} />
+                    Add vehicle
+                  </button>
+                  <button
+                    type="button"
+                    className="finance-sub-pill finance-sub-pill-action"
+                    disabled={!canEditFleetUpdates}
+                    onClick={handleAddRoute}
+                  >
+                    <FileText size={14} />
+                    Add route
+                  </button>
+                </>
+              )}
+              {[
+                ["attention", "Attention"],
+                ["critical", "Critical"],
+                ["healthy", "Healthy"],
+                ["all", "All"],
+                ["archived", `Archived ${fleetHealth.archived}`],
+              ].map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={activeFilter === value ? "finance-sub-pill active" : "finance-sub-pill"}
+                  onClick={() => setActiveFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="finance-sub-switch">
+              {getVehicleReadinessOptions(readinessCounts).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={
+                    readinessFilter === value ? "finance-sub-pill active" : "finance-sub-pill"
+                  }
+                  onClick={() => setReadinessFilter(value)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </>
         )}
 
         {isDriver && linkedVehicles.length > 1 && (
@@ -7039,7 +9280,7 @@ function FleetPanel({
           {filteredVehicles.length === 0 && (
             <article className="overview-board">
               <div className="overview-board-head">
-                <p className="eyebrow">{isDriver ? "Linked vehicles" : "Fleet view"}</p>
+                <p className="eyebrow">{isDriver ? "Linked vehicles" : "Fleet & Operations view"}</p>
                 <h3>No vehicles in this view</h3>
               </div>
               <p className="panel-note">{fleetListMessage}</p>
@@ -7082,6 +9323,26 @@ function FleetPanel({
                   <InfoPair label="Service" value={`${vehicle.serviceDueKm.toLocaleString()} km`} />
                   <InfoPair label="Documents" value={`${vehicle.minimumDocumentDays} days`} />
                 </div>
+                <div className="finance-form-meta">
+                  <span
+                    className="status-chip"
+                    data-tone={vehicle.canDoRouteService ? "success" : "neutral"}
+                  >
+                    {vehicle.canDoRouteService ? "Route service" : "Route service off"}
+                  </span>
+                  <span
+                    className="status-chip"
+                    data-tone={vehicle.canDoSpecialTrips ? "info" : "neutral"}
+                  >
+                    {vehicle.canDoSpecialTrips ? "Special trips" : "Special trips off"}
+                  </span>
+                  <span
+                    className="status-chip"
+                    data-tone={vehicle.canDoContracts ? "info" : "neutral"}
+                  >
+                    {vehicle.canDoContracts ? "Contracts" : "Contracts off"}
+                  </span>
+                </div>
               </button>
 
               {canViewVehicleProfile && (
@@ -7109,7 +9370,7 @@ function FleetPanel({
               title={
                 selectedVehicle
                   ? `${selectedVehicle.registration} / ${selectedVehicle.route}`
-                  : "Fleet onboarding"
+                  : "Fleet & Operations onboarding"
               }
               icon={Activity}
             >
@@ -7186,7 +9447,7 @@ function FleetPanel({
               ) : (
                 <article className="overview-board">
                   <div className="overview-board-head">
-                    <p className="eyebrow">Fleet setup</p>
+                    <p className="eyebrow">Fleet & Operations setup</p>
                     <h3>Create the first vehicle</h3>
                   </div>
                   <p className="panel-note">
@@ -7258,16 +9519,45 @@ function FleetPanel({
                     </label>
                     <label className="finance-field">
                       <span>Route</span>
-                      <input
-                        type="text"
-                        value={vehicleDraft.route}
-                        onChange={(event) =>
-                          setVehicleDraft((current) => ({
-                            ...current,
-                            route: event.target.value,
-                          }))
-                        }
-                      />
+                      {vehicleRouteOptions.length > 0 ? (
+                        <select
+                          value={vehicleDraft.currentRouteId ?? ""}
+                          onChange={(event) =>
+                            setVehicleDraft((current) => {
+                              const nextRoute =
+                                vehicleRouteOptions.find(
+                                  (route) => route.id === event.target.value,
+                                ) ?? null;
+
+                              return {
+                                ...current,
+                                currentRouteId: event.target.value || null,
+                                route: nextRoute?.name ?? "",
+                              };
+                            })
+                          }
+                        >
+                          <option value="">Select a route</option>
+                          {vehicleRouteOptions.map((route) => (
+                            <option key={route.id} value={route.id}>
+                              {route.code ? `${route.code} / ` : ""}
+                              {route.name}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          value={vehicleDraft.route}
+                          onChange={(event) =>
+                            setVehicleDraft((current) => ({
+                              ...current,
+                              route: event.target.value,
+                              currentRouteId: buildRouteReferenceId(event.target.value),
+                            }))
+                          }
+                        />
+                      )}
                     </label>
                     <label className="finance-field">
                       <span>Assigned driver</span>
@@ -7360,14 +9650,14 @@ function FleetPanel({
                     <button
                       type="submit"
                       className="action-button primary"
-                      disabled={activeRole === "Admin" && !canEditFleetUpdates}
+                      disabled={!canEditFleetUpdates}
                     >
                       {vehicleDraft.id ? "Save vehicle" : "Create vehicle"}
                     </button>
                     <button
                       type="button"
                       className="action-button"
-                      disabled={activeRole === "Admin" && !canEditFleetUpdates}
+                      disabled={!canEditFleetUpdates}
                       onClick={handleAddVehicle}
                     >
                       Add vehicle
@@ -7394,75 +9684,290 @@ function FleetPanel({
             </Panel>
           </div>
 
+          {canManageVehicles && (
+            <Panel eyebrow="Route setup" title="Create route" icon={FileText}>
+              <div className="compact-feed">
+                {(snapshot.routes ?? []).slice(0, 4).map((route) => (
+                  <CompactFeedItem
+                    key={route.id}
+                    title={`${route.code} / ${route.name}`}
+                    subtitle={ROUTE_TYPE_OPTIONS.find((option) => option.value === route.type)?.label ?? route.type}
+                    tone={route.isActive ? "success" : "info"}
+                    meta={`${route.primaryOrigin} to ${route.primaryDestination}`}
+                  />
+                ))}
+                {(snapshot.routes ?? []).length === 0 && (
+                  <CompactFeedItem
+                    title="No routes saved yet"
+                    subtitle="Create the first reusable route record"
+                    tone="info"
+                    meta="Route master data"
+                  />
+                )}
+              </div>
+              <form ref={routeFormRef} className="finance-form" onSubmit={handleRouteSubmit}>
+                <div className="finance-form-grid">
+                  <label className="finance-field finance-field-wide">
+                    <span>Route name</span>
+                    <input
+                      type="text"
+                      value={routeDraft.name}
+                      onChange={(event) =>
+                        setRouteDraft((current) => ({
+                          ...current,
+                          name: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="finance-field">
+                    <span>Route code</span>
+                    <input
+                      type="text"
+                      value={routeDraft.code}
+                      onChange={(event) =>
+                        setRouteDraft((current) => ({
+                          ...current,
+                          code: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="finance-field">
+                    <span>Route type</span>
+                    <select
+                      value={routeDraft.type}
+                      onChange={(event) =>
+                        setRouteDraft((current) => ({
+                          ...current,
+                          type: event.target.value,
+                        }))
+                      }
+                    >
+                      {ROUTE_TYPE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="finance-field">
+                    <span>Primary origin</span>
+                    <input
+                      type="text"
+                      value={routeDraft.primaryOrigin}
+                      onChange={(event) =>
+                        setRouteDraft((current) => ({
+                          ...current,
+                          primaryOrigin: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="finance-field">
+                    <span>Primary destination</span>
+                    <input
+                      type="text"
+                      value={routeDraft.primaryDestination}
+                      onChange={(event) =>
+                        setRouteDraft((current) => ({
+                          ...current,
+                          primaryDestination: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="finance-field">
+                    <span>Route status</span>
+                    <select
+                      value={routeDraft.isActive ? "active" : "inactive"}
+                      onChange={(event) =>
+                        setRouteDraft((current) => ({
+                          ...current,
+                          isActive: event.target.value === "active",
+                        }))
+                      }
+                    >
+                      <option value="active">Active</option>
+                      <option value="inactive">Inactive</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="finance-form-actions">
+                  <button
+                    type="submit"
+                    className="action-button primary"
+                    disabled={!canEditFleetUpdates}
+                  >
+                    Create route
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button"
+                    onClick={() => setRouteDraft(createRouteDraft())}
+                  >
+                    Clear form
+                  </button>
+                </div>
+                <p className="finance-form-note" data-tone="info">
+                  Use the route name to describe the full movement path if needed, for example{" "}
+                  <code>A -&gt; B -&gt; C</code>. TaxiFlow will keep this as a reusable route
+                  record.
+                </p>
+              </form>
+            </Panel>
+          )}
+
           {selectedVehicle && canViewVehicleProfile && (
             <div className="overview-board-grid">
               <article className="overview-board">
                 <div className="overview-board-head">
-                  <p className="eyebrow">Income summary</p>
-                  <h3>Income and route history</h3>
+                  <p className="eyebrow">Vehicle profile shell</p>
+                  <h3>Identity & Capability</h3>
                 </div>
                 <div className="queue-stats">
-                  <InfoPair label="Total income" value={formatMoney(revenueOutline.totalRevenue)} />
+                  <InfoPair label="Registration" value={selectedVehicle.registration} />
+                  <InfoPair label="Model" value={selectedVehicle.model} />
+                  <InfoPair label="Current driver" value={selectedVehicle.assignedDriver} />
+                  <InfoPair label="Last known driver" value={lastKnownDriver} />
+                  <InfoPair label="Current route" value={selectedVehicle.route} />
+                  <InfoPair
+                    label="Seat capacity"
+                    value={
+                      Number.isFinite(Number(selectedVehicle.seatCapacity))
+                        ? `${selectedVehicle.seatCapacity}`
+                        : "Not set"
+                    }
+                  />
+                  <InfoPair
+                    label="Route record"
+                    value={currentRouteRecord?.code ?? selectedVehicle.currentRouteId ?? "Not linked"}
+                  />
+                  <InfoPair
+                    label="Current odometer"
+                    value={`${selectedVehicle.currentOdometer.toLocaleString()} km`}
+                  />
+                </div>
+                <div className="finance-form-meta">
+                  <span
+                    className="status-chip"
+                    data-tone={selectedVehicle.canDoRouteService ? "success" : "neutral"}
+                  >
+                    {selectedVehicle.canDoRouteService ? "Route service" : "Route service off"}
+                  </span>
+                  <span
+                    className="status-chip"
+                    data-tone={selectedVehicle.canDoSpecialTrips ? "info" : "neutral"}
+                  >
+                    {selectedVehicle.canDoSpecialTrips ? "Special trips" : "Special trips off"}
+                  </span>
+                  <span
+                    className="status-chip"
+                    data-tone={selectedVehicle.canDoContracts ? "info" : "neutral"}
+                  >
+                    {selectedVehicle.canDoContracts ? "Contracts" : "Contracts off"}
+                  </span>
+                </div>
+              </article>
+
+              <article className="overview-board">
+                <div className="overview-board-head">
+                  <p className="eyebrow">Vehicle profile shell</p>
+                  <h3>Financial Contribution</h3>
+                </div>
+                <div className="queue-stats">
+                  <InfoPair
+                    label="Captured income"
+                    value={formatMoney(revenueOutline.totalRevenue)}
+                  />
+                  <InfoPair
+                    label="Settled income"
+                    value={formatMoney(selectedVehicle.verifiedRevenue ?? 0)}
+                  />
+                  <InfoPair
+                    label="Route income"
+                    value={formatMoney(revenueOutline.standardRevenue)}
+                  />
+                  <InfoPair
+                    label="Extra trip income"
+                    value={formatMoney(revenueOutline.specialRevenue)}
+                  />
+                  <InfoPair
+                    label="Vehicle costs"
+                    value={formatMoney(selectedVehicle.assetExpenseTotal ?? 0)}
+                  />
                   <InfoPair label="Daily routes" value={`${revenueOutline.shiftCount}`} />
                   <InfoPair label="Extra trips" value={`${revenueOutline.specialTripCount}`} />
-                  <InfoPair label="Extra trip income" value={formatMoney(revenueOutline.specialRevenue)} />
+                  <InfoPair
+                    label="Money left after costs"
+                    value={formatMoney(selectedVehicle.netYield ?? 0)}
+                  />
+                  <InfoPair
+                    label="Latest money activity"
+                    value={
+                      latestFinanceActivity
+                        ? latestFinanceActivity.type === "expense"
+                          ? formatExpenseMeta(latestFinanceActivity)
+                          : latestFinanceActivity.isSpecial
+                            ? formatTripLogMeta(latestFinanceActivity)
+                            : formatDailyTripMeta(latestFinanceActivity)
+                        : "No finance activity yet"
+                    }
+                  />
                 </div>
-                <div className="finance-ledger">
-                  {vehicleIncomeRecords.slice(0, 4).map((record) => (
-                    <article key={record.id} className="ledger-row">
-                      <div className="ledger-copy">
-                        <strong>
-                          {record.isSpecial
-                            ? formatTripRoute(record)
-                            : record.route ?? selectedVehicle.route}
-                        </strong>
-                        <span>
-                          {record.isSpecial
-                            ? formatTripLogMeta(record)
-                            : formatDailyTripMeta(record)}
-                        </span>
-                      </div>
-                      <div className="ledger-meta">
-                        <span className="status-chip" data-tone={getTransactionTone(record)}>
-                          {record.isSpecial ? "extra trip" : "route"}
-                        </span>
-                        <strong>{formatMoney(record.amountClaimed ?? record.amount)}</strong>
-                      </div>
-                    </article>
-                  ))}
-                </div>
+                {vehicleIncomeRecords.length === 0 && (
+                  <p className="panel-note">
+                    Financial contribution details will fill in here once this vehicle has verified
+                    income or expense activity.
+                  </p>
+                )}
               </article>
 
               <article className="overview-board">
                 <div className="overview-board-head">
-                  <p className="eyebrow">Route history</p>
-                  <h3>Recent routes and income</h3>
+                  <p className="eyebrow">Vehicle profile shell</p>
+                  <h3>Passenger Contribution</h3>
                 </div>
-                <div className="compact-feed">
-                  {routeHistory.map((route, index) => (
-                    <CompactFeedItem
-                      key={`${route.title}-${index}`}
-                      title={route.title}
-                      subtitle={`${route.trips} recorded trips`}
-                      tone={route.subtitle === "Special trip" ? "info" : "success"}
-                      meta={formatMoney(route.revenue)}
-                    />
-                  ))}
-                  {routeHistory.length === 0 && (
-                    <CompactFeedItem
-                      title="No route history yet"
-                      subtitle="No trips recorded yet"
-                      tone="info"
-                      meta={selectedVehicle.route}
-                    />
-                  )}
+                <div className="queue-stats">
+                  <InfoPair
+                    label="Passengers moved"
+                    value={`${passengerContribution.totalPassengers}`}
+                  />
+                  <InfoPair label="Trips logged" value={`${passengerContribution.totalTrips}`} />
+                  <InfoPair
+                    label="Days captured"
+                    value={`${passengerContribution.capturedDays}`}
+                  />
+                  <InfoPair
+                    label="Last capture"
+                    value={
+                      passengerContribution.lastCapturedAt
+                        ? formatStamp(passengerContribution.lastCapturedAt)
+                        : "No passenger log yet"
+                    }
+                  />
                 </div>
+                {passengerContribution.totalTrips === 0 && (
+                  <p className="panel-note">
+                    Passenger contribution will appear here after daily route logs are captured for
+                    this vehicle.
+                  </p>
+                )}
               </article>
 
               <article className="overview-board">
                 <div className="overview-board-head">
-                  <p className="eyebrow">Driver and vehicle history</p>
-                  <h3>Drivers and vehicle condition</h3>
+                  <p className="eyebrow">Vehicle profile shell</p>
+                  <h3>Driver History</h3>
+                </div>
+                <div className="queue-stats">
+                  <InfoPair label="Current driver" value={selectedVehicle.assignedDriver} />
+                  <InfoPair label="Last known driver" value={lastKnownDriver} />
+                  <InfoPair label="Driver events" value={`${driverHistory.length}`} />
+                  <InfoPair
+                    label="Latest driver activity"
+                    value={driverHistory[0]?.meta ?? "No driver-linked activity yet"}
+                  />
                 </div>
                 <div className="compact-feed">
                   {driverHistory.map((entry, index) => (
@@ -7474,6 +9979,112 @@ function FleetPanel({
                       meta={selectedVehicle.registration}
                     />
                   ))}
+                  {driverHistory.length === 0 && (
+                    <CompactFeedItem
+                      title="No driver history yet"
+                      subtitle="Driver-linked actions will appear here"
+                      tone="info"
+                      meta={selectedVehicle.assignedDriver}
+                    />
+                  )}
+                </div>
+              </article>
+
+              <article className="overview-board">
+                <div className="overview-board-head">
+                  <p className="eyebrow">Vehicle profile shell</p>
+                  <h3>Route & Movement History</h3>
+                </div>
+                <div className="queue-stats">
+                  <InfoPair label="Current route" value={selectedVehicle.route} />
+                  <InfoPair
+                    label="Route type"
+                    value={currentRouteRecord?.type ?? "route_service"}
+                  />
+                  <InfoPair
+                    label="Primary origin"
+                    value={currentRouteRecord?.primaryOrigin ?? "Not set"}
+                  />
+                  <InfoPair
+                    label="Primary destination"
+                    value={currentRouteRecord?.primaryDestination ?? "Not set"}
+                  />
+                  <InfoPair
+                    label="Points on route"
+                    value={`${routeMovementPoints.length}`}
+                  />
+                  <InfoPair
+                    label="Routes operated"
+                    value={`${operatedRoutes.length}`}
+                  />
+                </div>
+                <div className="compact-feed">
+                  {operatedRoutes.map((route, index) => (
+                    <CompactFeedItem
+                      key={`${route.title}-${index}`}
+                      title={route.title}
+                      subtitle={route.subtitle}
+                      tone={route.subtitle === "Standard route" ? "success" : "info"}
+                      meta={route.meta}
+                    />
+                  ))}
+                  {routeMovementPoints.slice(0, 4).map((point) => (
+                    <CompactFeedItem
+                      key={point.id}
+                      title={`${point.sequence}. ${point.label}`}
+                      subtitle={`Stop type: ${point.stopType}`}
+                      tone={point.stopType === "checkpoint" ? "info" : "success"}
+                      meta={currentRouteRecord?.code ?? selectedVehicle.currentRouteId ?? "Route"}
+                    />
+                  ))}
+                  {operatedRoutes.length === 0 && routeMovementPoints.length === 0 && (
+                    <CompactFeedItem
+                      title="No route history yet"
+                      subtitle="Trips and route point movement will appear here"
+                      tone="info"
+                      meta={selectedVehicle.route}
+                    />
+                  )}
+                </div>
+              </article>
+
+              <article className="overview-board">
+                <div className="overview-board-head">
+                  <p className="eyebrow">Vehicle profile shell</p>
+                  <h3>Service & Compliance</h3>
+                </div>
+                <div className="queue-stats">
+                  <InfoPair
+                    label="Last service"
+                    value={`${selectedVehicle.lastServiceOdo.toLocaleString()} km`}
+                  />
+                  <InfoPair
+                    label="Service interval"
+                    value={`${selectedVehicle.serviceIntervalKm.toLocaleString()} km`}
+                  />
+                  <InfoPair
+                    label="Next service target"
+                    value={`${selectedVehicle.nextServiceAt.toLocaleString()} km`}
+                  />
+                  <InfoPair
+                    label="Permit expiry"
+                    value={selectedVehicle.permitExpiryDate ? formatDateOnly(selectedVehicle.permitExpiryDate) : "Not set"}
+                  />
+                  <InfoPair
+                    label="Disc expiry"
+                    value={selectedVehicle.discExpiryDate ? formatDateOnly(selectedVehicle.discExpiryDate) : "Not set"}
+                  />
+                </div>
+                <div className="compact-feed">
+                  {serviceHistory.map((defect) => (
+                    <CompactFeedItem
+                      key={defect.id}
+                      title={`Repair / ${defect.category}`}
+                      subtitle={defect.detail}
+                      tone="success"
+                      meta={`${formatMoney(defect.repairCost ?? 0)} / ${defect.resolvedAtLabel ?? "Resolved"}`}
+                    />
+                  ))}
                   {healthHighlights.map((entry, index) => (
                     <CompactFeedItem
                       key={`${entry.title}-${index}`}
@@ -7483,7 +10094,47 @@ function FleetPanel({
                       meta={entry.meta}
                     />
                   ))}
+                  {vehicleDocuments.slice(0, 3).map((document) => (
+                    <CompactFeedItem
+                      key={document.id}
+                      title={document.document}
+                      subtitle={document.stage}
+                      tone={getDocumentTone(document.daysLeft)}
+                      meta={`${document.daysLeft} days`}
+                    />
+                  ))}
                 </div>
+              </article>
+
+              <article className="overview-board">
+                <div className="overview-board-head">
+                  <p className="eyebrow">Vehicle profile shell</p>
+                  <h3>Availability & Suitability</h3>
+                </div>
+                <div className="queue-stats">
+                  <InfoPair label="Status" value={selectedVehicle.status ?? "active"} />
+                  <InfoPair label="Assigned driver" value={selectedVehicle.assignedDriver} />
+                  <InfoPair
+                    label="Open defects"
+                    value={`${selectedVehicle.defectsOpen ?? 0}`}
+                  />
+                  <InfoPair
+                    label="Document runway"
+                    value={`${selectedVehicle.minimumDocumentDays ?? 0} days`}
+                  />
+                </div>
+                <div className="finance-form-meta">
+                  {suitabilityHighlights.map((item) => (
+                    <span key={item} className="status-chip" data-tone="info">
+                      {item}
+                    </span>
+                  ))}
+                </div>
+                <p className="panel-note">
+                  Current suitability is based on the saved vehicle status, linked driver,
+                  document time left, open problems, and capability flags. Live availability
+                  windows are not captured yet.
+                </p>
               </article>
             </div>
           )}
@@ -7605,7 +10256,7 @@ function FleetPanel({
                   <button
                     type="submit"
                     className="action-button primary"
-                    disabled={activeRole === "Admin" && !canEditFleetUpdates}
+                    disabled={PRIVILEGED_ROLES.has(activeRole) && !canEditFleetUpdates}
                   >
                     {defectDraft.id ? "Update problem" : "Report problem"}
                   </button>
@@ -7779,6 +10430,7 @@ function CompliancePanel({ snapshot }) {
 }
 
 function SettingsPanel({
+  activeRole,
   snapshot,
   backendMode,
   backendModeLabel,
@@ -7788,6 +10440,8 @@ function SettingsPanel({
   isLocalAuth,
   onChangeBackendMode,
   onFactoryReset,
+  onResolvePasswordResetRequest,
+  onResetUserPassword,
   onSaveUserAccess,
 }) {
   const users = useMemo(() => getAppUsers(snapshot), [snapshot]);
@@ -7806,15 +10460,111 @@ function SettingsPanel({
 
   const selectedUser = users.find((user) => user.email === selectedUserEmail) ?? users[0] ?? null;
   const isEditingSignedInOwner = selectedUser?.email === normalizedCurrentUserEmail;
-  const selectedUserEnabledModules = SETTINGS_ASSIGNABLE_MODULES.filter(
+  const selectedUserVisibleModules = Object.keys(MODULE_VIEW_ACCESS).filter(
     (moduleKey) => selectedUser?.moduleAccess?.[moduleKey],
   );
+  const passwordResetRequests = useMemo(() => {
+    const usersByEmail = new Map(users.map((user) => [normalizeEmailAddress(user.email), user]));
+
+    return [...(snapshot.passwordResetRequests ?? [])]
+      .map((request) => {
+        const normalizedEmail = normalizeEmailAddress(request.email);
+        const matchedUser = usersByEmail.get(normalizedEmail) ?? null;
+        const linkedEmailNotice = getPasswordResetEmailNotice(snapshot.emailOutbox ?? [], request.id);
+        const status =
+          String(request.status ?? "pending").trim().toLowerCase() === "resolved"
+            ? "resolved"
+            : "pending";
+        const notificationChannelStatus =
+          String(request.notificationStatus ?? "sent").trim().toLowerCase() === "sent"
+            ? "sent"
+            : "missing";
+        const emailChannelStatus = linkedEmailNotice
+          ? String(linkedEmailNotice.status ?? "queued").trim().toLowerCase() === "actioned"
+            ? "actioned"
+            : "queued"
+          : "missing";
+
+        return {
+          ...request,
+          email: normalizedEmail,
+          accountName: request.accountName ?? matchedUser?.name ?? normalizedEmail,
+          accountRoleLabel: matchedUser?.role ?? request.accountRole ?? "Unmapped account",
+          requestedAtLabel: formatStamp(request.requestedAt),
+          managementRecipientsLabel: Array.isArray(request.managementRecipients)
+            ? request.managementRecipients.join(", ")
+            : "No management recipients",
+          status,
+          statusLabel: status === "resolved" ? "Handled" : "Pending",
+          statusTone: status === "resolved" ? "success" : "warning",
+          notificationChannelLabel:
+            notificationChannelStatus === "sent" ? "In-app sent" : "In-app retry needed",
+          notificationChannelTone:
+            notificationChannelStatus === "sent" ? "success" : "warning",
+          emailChannelLabel:
+            emailChannelStatus === "queued"
+              ? "Email queued"
+              : emailChannelStatus === "actioned"
+                ? "Email handled"
+                : "Email retry needed",
+          emailChannelTone:
+            emailChannelStatus === "queued"
+              ? "info"
+              : emailChannelStatus === "actioned"
+                ? "success"
+                : "warning",
+          userExists: Boolean(matchedUser),
+        };
+      })
+      .sort((left, right) => new Date(right.requestedAt) - new Date(left.requestedAt));
+  }, [snapshot.emailOutbox, snapshot.passwordResetRequests, users]);
+  const emailOutbox = useMemo(
+    () =>
+      [...(snapshot.emailOutbox ?? [])]
+        .map((entry) => {
+          const status =
+            String(entry.status ?? "queued").trim().toLowerCase() === "actioned"
+              ? "actioned"
+              : "queued";
+
+          return {
+            ...entry,
+            createdAtLabel: formatStamp(entry.createdAt ?? entry.actionedAt),
+            recipientsLabel: Array.isArray(entry.recipients)
+              ? entry.recipients.join(", ")
+              : "No recipients",
+            previewText: String(entry.preview ?? entry.body ?? "").trim() || "No email text prepared.",
+            status,
+            statusLabel: status === "actioned" ? "Handled" : "Queued",
+            statusTone: status === "actioned" ? "success" : "info",
+          };
+        })
+        .sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt)),
+    [snapshot.emailOutbox],
+  );
+  const pendingPasswordResetCount = passwordResetRequests.filter(
+    (request) => request.status === "pending",
+  ).length;
+  const queuedEmailCount = emailOutbox.filter((entry) => entry.status === "queued").length;
+  const canManageUserAccess = activeRole === "Owner";
+  const canResetPasswords = PASSWORD_RESET_ROLES.has(activeRole);
+  const canResetSelectedUserPassword =
+    Boolean(selectedUser) &&
+    String(draft.nextAccessPassword ?? "").trim() &&
+    (canManageUserAccess ? !isEditingSignedInOwner : selectedUser?.role !== "Owner");
 
   useEffect(() => {
     if (selectedUser) {
       setDraft(createUserAccessDraft(selectedUser));
     }
   }, [selectedUser]);
+
+  const pushFeedback = (response) => {
+    setFeedback({
+      tone: response?.ok ? "success" : "danger",
+      message: response?.message ?? response?.error,
+    });
+  };
 
   const handleRoleChange = (nextRole) => {
     setDraft((current) => {
@@ -7839,12 +10589,17 @@ function SettingsPanel({
 
   const handleSubmit = (event) => {
     event.preventDefault();
-    const response = onSaveUserAccess(draft);
+    pushFeedback(onSaveUserAccess(draft));
+  };
 
-    setFeedback({
-      tone: response.ok ? "success" : "danger",
-      message: response.message ?? response.error,
-    });
+  const handlePasswordResetSubmit = (event) => {
+    event.preventDefault();
+    pushFeedback(
+      onResetUserPassword({
+        email: selectedUser?.email,
+        nextAccessPassword: draft.nextAccessPassword,
+      }),
+    );
   };
 
   const handleFactoryResetSubmit = async (event) => {
@@ -7872,22 +10627,26 @@ function SettingsPanel({
       )}
 
       <div className="two-up">
-        <Panel eyebrow="User access" title="Roles and rights" icon={Settings2}>
+        <Panel
+          eyebrow={canManageUserAccess ? "User access" : "Password support"}
+          title={canManageUserAccess ? "Roles and rights" : "User accounts"}
+          icon={Settings2}
+        >
           <div className="finance-form-meta">
             <span className="status-chip" data-tone="info">
               {users.length} mapped users
             </span>
             {isLocalAuth && (
               <span className="status-chip" data-tone="warning">
-                Local password: {LOCAL_AUTH_PASSWORD}
+                Default local password: {LOCAL_AUTH_PASSWORD}
               </span>
             )}
           </div>
           <div className="list-stack">
             {users.map((user) => {
-              const visibleRights = SETTINGS_ASSIGNABLE_MODULES.filter(
-                (moduleKey) => user.moduleAccess[moduleKey],
-              );
+              const visibleModuleCount = Object.keys(MODULE_VIEW_ACCESS).filter(
+                (moduleKey) => user.moduleAccess?.[moduleKey],
+              ).length;
 
               return (
                 <article key={user.email} className="person-row">
@@ -7900,9 +10659,7 @@ function SettingsPanel({
                       {user.role}
                     </span>
                     <span className="status-chip" data-tone="navy">
-                      {visibleRights.length > 0
-                        ? `${visibleRights.length + 1} modules`
-                        : "Overview only"}
+                      {`${visibleModuleCount} module${visibleModuleCount === 1 ? "" : "s"}`}
                     </span>
                     <button
                       type="button"
@@ -7922,100 +10679,191 @@ function SettingsPanel({
           </div>
         </Panel>
 
-        <Panel eyebrow="Owner control" title="Edit selected user" icon={Lock}>
+        <Panel
+          eyebrow={canManageUserAccess ? "Owner control" : "Management control"}
+          title={canManageUserAccess ? "Edit selected user" : "Reset selected password"}
+          icon={Lock}
+        >
           {selectedUser ? (
-            <form className="finance-form" onSubmit={handleSubmit}>
-              <div className="queue-stats">
-                <InfoPair label="Name" value={selectedUser.name} />
-                <InfoPair label="Email" value={selectedUser.email} />
-                <InfoPair
-                  label="Driver link"
-                  value={selectedUser.staffId ? selectedUser.staffId : "Not linked"}
-                />
-                <InfoPair
-                  label="Current rights"
-                  value={
-                    selectedUserEnabledModules.length > 0
-                      ? selectedUserEnabledModules
-                          .map((moduleKey) => MODULE_VIEW_ACCESS[moduleKey].label)
-                          .join(", ")
-                      : "Overview only"
+            canManageUserAccess ? (
+              <form className="finance-form" onSubmit={handleSubmit}>
+                <div className="queue-stats">
+                  <InfoPair label="Name" value={selectedUser.name} />
+                  <InfoPair label="Email" value={selectedUser.email} />
+                  <InfoPair
+                    label="Driver link"
+                    value={selectedUser.staffId ? selectedUser.staffId : "Not linked"}
+                  />
+                  <InfoPair
+                    label="Current rights"
+                    value={
+                      selectedUserVisibleModules.length > 0
+                        ? selectedUserVisibleModules
+                            .map((moduleKey) => MODULE_VIEW_ACCESS[moduleKey].label)
+                            .join(", ")
+                        : "Overview only"
+                    }
+                  />
+                </div>
+
+                <label className="finance-field">
+                  <span>Role</span>
+                  <select
+                    value={draft.role}
+                    disabled={isEditingSignedInOwner}
+                    onChange={(event) => handleRoleChange(event.target.value)}
+                  >
+                    {ROLES.map((role) => (
+                      <option key={role} value={role} disabled={!canAssignRoleToUser(role, selectedUser)}>
+                        {role}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="overview-board">
+                  <div className="overview-board-head">
+                    <p className="eyebrow">Module rights</p>
+                    <h3>Access by role</h3>
+                  </div>
+                  <p className="panel-note">
+                    Overview stays on for every user. Management keeps Settings for password resets,
+                    and the owner turns Money, Fleet & Operations, and Drivers on only when needed.
+                  </p>
+                  <div className="finance-sub-switch">
+                    {SETTINGS_ASSIGNABLE_MODULES.map((moduleKey) => {
+                      const moduleConfig = MODULE_VIEW_ACCESS[moduleKey];
+                      const allowedByRole = canAssignModuleToRole(draft.role, moduleKey);
+                      const active = Boolean(draft.moduleAccess[moduleKey]);
+
+                      return (
+                        <button
+                          key={moduleKey}
+                          type="button"
+                          className={active ? "finance-sub-pill active" : "finance-sub-pill"}
+                          disabled={!allowedByRole || isEditingSignedInOwner || draft.role === "Owner"}
+                          onClick={() => toggleModuleAccess(moduleKey)}
+                        >
+                          {moduleConfig.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <label className="finance-field">
+                  <span>Reset local password</span>
+                  <input
+                    autoComplete="new-password"
+                    type="password"
+                    placeholder="Leave blank to keep the current password"
+                    value={draft.nextAccessPassword}
+                    disabled={isEditingSignedInOwner}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        nextAccessPassword: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+
+                <div className="finance-form-actions">
+                  <button type="submit" className="action-button primary" disabled={isEditingSignedInOwner}>
+                    Save access
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button"
+                    onClick={() => setDraft(createUserAccessDraft(selectedUser))}
+                  >
+                    Reset
+                  </button>
+                </div>
+
+                <p
+                  className="finance-form-note"
+                  data-tone={
+                    isEditingSignedInOwner || !canAssignRoleToUser(draft.role, selectedUser)
+                      ? "warning"
+                      : "info"
                   }
-                />
-              </div>
-
-              <label className="finance-field">
-                <span>Role</span>
-                <select
-                  value={draft.role}
-                  disabled={isEditingSignedInOwner}
-                  onChange={(event) => handleRoleChange(event.target.value)}
                 >
-                  {ROLES.map((role) => (
-                    <option key={role} value={role} disabled={!canAssignRoleToUser(role, selectedUser)}>
-                      {role}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <div className="overview-board">
-                <div className="overview-board-head">
-                  <p className="eyebrow">Module rights</p>
-                  <h3>Access by role</h3>
-                </div>
-                <p className="panel-note">
-                  Overview stays on for every user. Settings stays owner-only.
+                  {isEditingSignedInOwner
+                    ? "The signed-in owner account stays locked while it is in use."
+                    : !canAssignRoleToUser(draft.role, selectedUser)
+                      ? "Link this account to a driver profile before assigning the Driver role."
+                      : draft.nextAccessPassword
+                        ? isLocalAuth
+                          ? "Saving now will reset this account password and close any waiting reset request for this email."
+                          : "Saving here records the reset request as handled. Update the matching Supabase password separately."
+                      : "Changing a role resets optional feature access to that role's default. Management starts with Overview and Settings only until the owner enables more modules."}
                 </p>
-                <div className="finance-sub-switch">
-                  {SETTINGS_ASSIGNABLE_MODULES.map((moduleKey) => {
-                    const moduleConfig = MODULE_VIEW_ACCESS[moduleKey];
-                    const allowedByRole = canAssignModuleToRole(draft.role, moduleKey);
-                    const active = Boolean(draft.moduleAccess[moduleKey]);
-
-                    return (
-                      <button
-                        key={moduleKey}
-                        type="button"
-                        className={active ? "finance-sub-pill active" : "finance-sub-pill"}
-                        disabled={!allowedByRole || isEditingSignedInOwner || draft.role === "Owner"}
-                        onClick={() => toggleModuleAccess(moduleKey)}
-                      >
-                        {moduleConfig.label}
-                      </button>
-                    );
-                  })}
+              </form>
+            ) : (
+              <form className="finance-form" onSubmit={handlePasswordResetSubmit}>
+                <div className="queue-stats">
+                  <InfoPair label="Name" value={selectedUser.name} />
+                  <InfoPair label="Email" value={selectedUser.email} />
+                  <InfoPair label="Role" value={selectedUser.role} />
+                  <InfoPair
+                    label="Current feature access"
+                    value={
+                      selectedUserVisibleModules.length > 0
+                        ? selectedUserVisibleModules
+                            .map((moduleKey) => MODULE_VIEW_ACCESS[moduleKey].label)
+                            .join(", ")
+                        : "Overview only"
+                    }
+                  />
                 </div>
-              </div>
 
-              <div className="finance-form-actions">
-                <button type="submit" className="action-button primary" disabled={isEditingSignedInOwner}>
-                  Save access
-                </button>
-                <button
-                  type="button"
-                  className="action-button"
-                  onClick={() => setDraft(createUserAccessDraft(selectedUser))}
+                <label className="finance-field">
+                  <span>New password</span>
+                  <input
+                    autoComplete="new-password"
+                    type="password"
+                    placeholder="Enter the replacement password"
+                    value={draft.nextAccessPassword}
+                    disabled={!canResetPasswords || selectedUser.role === "Owner"}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        nextAccessPassword: event.target.value,
+                      }))
+                    }
+                  />
+                </label>
+
+                <div className="finance-form-actions">
+                  <button
+                    type="submit"
+                    className="action-button primary"
+                    disabled={!canResetSelectedUserPassword}
+                  >
+                    Reset password
+                  </button>
+                  <button
+                    type="button"
+                    className="action-button"
+                    onClick={() => setDraft(createUserAccessDraft(selectedUser))}
+                  >
+                    Clear
+                  </button>
+                </div>
+
+                <p
+                  className="finance-form-note"
+                  data-tone={selectedUser.role === "Owner" ? "warning" : "info"}
                 >
-                  Reset
-                </button>
-              </div>
-
-              <p
-                className="finance-form-note"
-                data-tone={
-                  isEditingSignedInOwner || !canAssignRoleToUser(draft.role, selectedUser)
-                    ? "warning"
-                    : "info"
-                }
-              >
-                {isEditingSignedInOwner
-                  ? "The signed-in owner account stays locked while it is in use."
-                  : !canAssignRoleToUser(draft.role, selectedUser)
-                    ? "Link this account to a driver profile before assigning the Driver role."
-                    : "Changing a role resets module rights to that role's default access. You can then switch individual modules on or off."}
-              </p>
-            </form>
+                  {selectedUser.role === "Owner"
+                    ? "Only the owner can reset another owner password."
+                    : isLocalAuth
+                      ? "Management can reset passwords here. The owner controls every other feature in Settings."
+                      : "Management can log the reset here. The owner controls every other feature in Settings, and the matching Supabase password must still be updated separately in live mode."}
+                </p>
+              </form>
+            )
           ) : (
             <p className="panel-note">No user accounts are available in this workspace yet.</p>
           )}
@@ -8023,95 +10871,199 @@ function SettingsPanel({
       </div>
 
       <div className="two-up">
-        <Panel eyebrow="Workspace control" title="Data mode" icon={Settings2}>
-          <div className="queue-stats">
-            <InfoPair label="Current mode" value={backendModeLabel} />
-            <InfoPair
-              label="Storage"
-              value={
-                backendMode === "live"
-                  ? repository.liveModeSourceLabel
-                  : "Local training workspace"
-              }
-            />
+        <Panel eyebrow="Access support" title="Password reset requests" icon={AlertCircle}>
+          <div className="finance-form-meta">
+            <span className="status-chip" data-tone={pendingPasswordResetCount > 0 ? "warning" : "success"}>
+              {pendingPasswordResetCount} pending
+            </span>
+            <span className="status-chip" data-tone="info">
+              {passwordResetRequests.length} logged
+            </span>
           </div>
-          <div className="backend-mode-switch" role="group" aria-label="Data mode toggle">
-            <button
-              type="button"
-              className={backendMode === "mock" ? "role-pill compact active" : "role-pill compact"}
-              onClick={() => onChangeBackendMode("mock")}
-            >
-              Demo
-            </button>
-            <button
-              type="button"
-              className={backendMode === "live" ? "role-pill compact active" : "role-pill compact"}
-              onClick={() => onChangeBackendMode("live")}
-            >
-              Live
-            </button>
-          </div>
-          <p className="panel-note">{backendModeNote}</p>
+          {passwordResetRequests.length > 0 ? (
+            <div className="list-stack">
+              {passwordResetRequests.map((request) => (
+                <article key={request.id} className="person-row">
+                  <div className="person-copy">
+                    <h3>{request.accountName}</h3>
+                    <p>{request.email}</p>
+                    <p>
+                      {request.accountRoleLabel} / Requested {request.requestedAtLabel}
+                    </p>
+                    <p>Management: {request.managementRecipientsLabel}</p>
+                  </div>
+                  <div className="person-metrics">
+                    <span className="status-chip" data-tone={request.statusTone}>
+                      {request.statusLabel}
+                    </span>
+                    <span className="status-chip" data-tone={request.notificationChannelTone}>
+                      {request.notificationChannelLabel}
+                    </span>
+                    <span className="status-chip" data-tone={request.emailChannelTone}>
+                      {request.emailChannelLabel}
+                    </span>
+                    {request.userExists && (
+                      <button
+                        type="button"
+                        className="finance-sub-pill"
+                        onClick={() => setSelectedUserEmail(request.email)}
+                      >
+                        Open user
+                      </button>
+                    )}
+                    {request.status === "pending" && (
+                      <button
+                        type="button"
+                        className="finance-sub-pill"
+                        onClick={() => pushFeedback(onResolvePasswordResetRequest(request.id))}
+                      >
+                        Mark handled
+                      </button>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <p className="panel-note">
+              No password reset requests have been sent from the sign-in screen yet.
+            </p>
+          )}
           <p className="finance-form-note" data-tone="info">
-            Switching mode reloads the workspace with the selected data source.
+            Reset the account password in the selected user record, or mark the request handled if
+            management completed the reset outside TaxiFlow.
           </p>
         </Panel>
 
-        <Panel eyebrow="Owner control" title="Factory reset" icon={AlertTriangle}>
-          {factoryResetFeedback && (
-            <div className="finance-feedback" data-tone={factoryResetFeedback.tone}>
-              <span className="status-chip" data-tone={factoryResetFeedback.tone}>
-                {factoryResetFeedback.message}
-              </span>
+        <Panel eyebrow="Outgoing mail" title="Email outbox" icon={FileText}>
+          <div className="finance-form-meta">
+            <span className="status-chip" data-tone={queuedEmailCount > 0 ? "info" : "success"}>
+              {queuedEmailCount} queued
+            </span>
+            <span className="status-chip" data-tone="navy">
+              {emailOutbox.length} notices
+            </span>
+          </div>
+          {emailOutbox.length > 0 ? (
+            <div className="finance-ledger">
+              {emailOutbox.map((entry) => (
+                <article key={entry.id} className="ledger-row">
+                  <div className="ledger-copy">
+                    <strong>{entry.subject}</strong>
+                    <span>{entry.previewText}</span>
+                  </div>
+                  <div className="ledger-meta">
+                    <span className="status-chip" data-tone={entry.statusTone}>
+                      {entry.statusLabel}
+                    </span>
+                    <span>{entry.createdAtLabel}</span>
+                    <span>{entry.recipientsLabel}</span>
+                  </div>
+                </article>
+              ))}
             </div>
+          ) : (
+            <p className="panel-note">No email notices have been prepared yet.</p>
           )}
-          <form className="finance-form" onSubmit={handleFactoryResetSubmit}>
-            <div className="queue-stats">
-              <InfoPair
-                label="Reset target"
-                value={backendMode === "live" ? "Live workspace" : "Demo workspace"}
-              />
-              <InfoPair
-                label="Keeps after reset"
-                value="Owner sign-in and default factory setup"
-              />
-              <InfoPair
-                label="Clears"
-                value="Trips, expenses, fleet, users, documents, and history"
-              />
-              <InfoPair
-                label="Password check"
-                value={isLocalAuth ? "TaxiFlow local owner password" : "Signed-in owner password"}
-              />
-            </div>
-
-            <label className="finance-field">
-              <span>Owner password</span>
-              <input
-                autoComplete="current-password"
-                type="password"
-                value={factoryResetPassword}
-                onChange={(event) => setFactoryResetPassword(event.target.value)}
-              />
-            </label>
-
-            <div className="finance-form-actions">
-              <button
-                type="submit"
-                className="record-button danger"
-                disabled={factoryResetSubmitting || !factoryResetPassword.trim()}
-              >
-                {factoryResetSubmitting ? "Resetting..." : "Factory reset"}
-              </button>
-            </div>
-
-            <p className="finance-form-note" data-tone="danger">
-              This resets the active {backendMode === "live" ? "live" : "demo"} workspace to
-              factory defaults and removes all captured activity in that workspace.
-            </p>
-          </form>
+          <p className="finance-form-note" data-tone="info">
+            TaxiFlow keeps the management email notice here so the reset trail stays visible inside
+            the workspace.
+          </p>
         </Panel>
       </div>
+
+      {activeRole === "Owner" && (
+        <div className="two-up">
+          <Panel eyebrow="Workspace control" title="Data mode" icon={Settings2}>
+            <div className="queue-stats">
+              <InfoPair label="Current mode" value={backendModeLabel} />
+              <InfoPair
+                label="Storage"
+                value={
+                  backendMode === "live"
+                    ? repository.liveModeSourceLabel
+                    : "Local training workspace"
+                }
+              />
+            </div>
+            <div className="backend-mode-switch" role="group" aria-label="Data mode toggle">
+              <button
+                type="button"
+                className={backendMode === "mock" ? "role-pill compact active" : "role-pill compact"}
+                onClick={() => onChangeBackendMode("mock")}
+              >
+                Demo
+              </button>
+              <button
+                type="button"
+                className={backendMode === "live" ? "role-pill compact active" : "role-pill compact"}
+                onClick={() => onChangeBackendMode("live")}
+              >
+                Live
+              </button>
+            </div>
+            <p className="panel-note">{backendModeNote}</p>
+            <p className="finance-form-note" data-tone="info">
+              Switching mode reloads the workspace with the selected data source.
+            </p>
+          </Panel>
+
+          <Panel eyebrow="Owner control" title="Factory reset" icon={AlertTriangle}>
+            {factoryResetFeedback && (
+              <div className="finance-feedback" data-tone={factoryResetFeedback.tone}>
+                <span className="status-chip" data-tone={factoryResetFeedback.tone}>
+                  {factoryResetFeedback.message}
+                </span>
+              </div>
+            )}
+            <form className="finance-form" onSubmit={handleFactoryResetSubmit}>
+              <div className="queue-stats">
+                <InfoPair
+                  label="Reset target"
+                  value={backendMode === "live" ? "Live workspace" : "Demo workspace"}
+                />
+                <InfoPair
+                  label="Keeps after reset"
+                  value="Owner sign-in and default factory setup"
+                />
+                <InfoPair
+                  label="Clears"
+                  value="Trips, expenses, fleet, users, documents, and history"
+                />
+                <InfoPair
+                  label="Password check"
+                  value={isLocalAuth ? "TaxiFlow local owner password" : "Signed-in owner password"}
+                />
+              </div>
+
+              <label className="finance-field">
+                <span>Owner password</span>
+                <input
+                  autoComplete="current-password"
+                  type="password"
+                  value={factoryResetPassword}
+                  onChange={(event) => setFactoryResetPassword(event.target.value)}
+                />
+              </label>
+
+              <div className="finance-form-actions">
+                <button
+                  type="submit"
+                  className="record-button danger"
+                  disabled={factoryResetSubmitting || !factoryResetPassword.trim()}
+                >
+                  {factoryResetSubmitting ? "Resetting..." : "Factory reset"}
+                </button>
+              </div>
+
+              <p className="finance-form-note" data-tone="danger">
+                This resets the active {backendMode === "live" ? "live" : "demo"} workspace to
+                factory defaults and removes all captured activity in that workspace.
+              </p>
+            </form>
+          </Panel>
+        </div>
+      )}
     </div>
   );
 }
@@ -8159,9 +11111,15 @@ function DailyTripLogbookFields({ route, tripLogbook, onChange }) {
 
       {!hasPresetStops && (
         <p className="finance-form-note" data-tone="info">
-          Set the vehicle route in Fleet to prefill the two stops for this daily logbook.
+          Set the vehicle route in Fleet & Operations to prefill the two stops for this daily logbook.
         </p>
       )}
+
+      <p className="finance-form-note" data-tone="info">
+        Trip time and odometer details are optional. The driver can skip them and still save the
+        trip, and the duration and kilometre previews fill themselves in only when both values are
+        available.
+      </p>
 
       <div className="list-stack">
         {safeTripLogbook.map((entry, index) => (
@@ -8256,6 +11214,11 @@ function DailyTripLogbookFields({ route, tripLogbook, onChange }) {
                   }
                 />
               </label>
+
+              <TripLegOptionalFields
+                entry={entry}
+                onUpdate={(updates) => updateEntry(entry.id, updates)}
+              />
             </div>
 
             <div className="finance-form-actions">
@@ -8302,6 +11265,7 @@ function DailyTripLogbookFields({ route, tripLogbook, onChange }) {
 function DriversPanel({
   snapshot,
   activeRole,
+  currentUserRecord,
   permissionControls,
   onShortcutAction,
   shortcutIntent,
@@ -8313,10 +11277,23 @@ function DriversPanel({
   onSelectDriverVehicle,
 }) {
   const isDriver = activeRole === "Driver";
-  const canManageDrivers = PRIVILEGED_ROLES.has(activeRole);
-  const canEditDriverRecords = canEditModuleUpdates(activeRole, "drivers", permissionControls);
-  const canEditFinanceRecords = canEditModuleUpdates(activeRole, "finance", permissionControls);
-  const canUseFinanceCapture = activeRole === "Admin" ? canEditFinanceRecords : true;
+  const canEditDriverRecords = canEditModuleUpdates(
+    activeRole,
+    "drivers",
+    permissionControls,
+    currentUserRecord,
+  );
+  const canManageDrivers =
+    activeRole === "Owner" ||
+    (PRIVILEGED_ROLES.has(activeRole) && canEditDriverRecords);
+  const canEditFinanceRecords = canEditModuleUpdates(
+    activeRole,
+    "finance",
+    permissionControls,
+    currentUserRecord,
+  );
+  const canUseFinanceCapture = activeRole === "Driver" ? true : canEditFinanceRecords;
+  const autoCheckDriverExpenses = activeRole !== "Driver" && canEditFinanceRecords;
   const linkedVehicles = getDriverLinkedVehicles(snapshot);
   const allocatableDrivers = useMemo(
     () => snapshot.drivers.filter((driver) => driver.role === "Driver"),
@@ -8367,7 +11344,7 @@ function DriversPanel({
     ),
   );
   const [expenseDraft, setExpenseDraft] = useState(() =>
-    createExpenseDraft("asset", assignedVehicleId),
+    createExpenseDraft("asset", assignedVehicleId, snapshot.finance.expenseCatalog),
   );
   const [specialDraft, setSpecialDraft] = useState(() => createSpecialDraft(assignedVehicleId));
   const driverFormRef = useRef(null);
@@ -8410,6 +11387,34 @@ function DriversPanel({
     expenseKind: "asset",
     vehicleId: assignedVehicleId,
   });
+  const driverExpenseCategoryOptions = getExpenseCategoryOptions(
+    snapshot.finance.expenseCatalog,
+    expenseDraft.expenseKind,
+    expenseDraft.category,
+  );
+  const driverExpenseDescriptionOptions = getExpenseDescriptionOptions(
+    snapshot.finance.expenseCatalog,
+    expenseDraft.expenseKind,
+    expenseDraft.category,
+  );
+  const usesCustomDriverExpenseDescription =
+    expenseDraft.category === EXPENSE_OTHER_CATEGORY ||
+    expenseDraft.descriptionPreset === EXPENSE_CUSTOM_DESCRIPTION_VALUE ||
+    driverExpenseDescriptionOptions.length === 0;
+  const driverRouteOptions = useMemo(
+    () =>
+      [...(snapshot.routes ?? [])].sort((left, right) =>
+        String(left.name ?? "").localeCompare(String(right.name ?? "")),
+      ),
+    [snapshot.routes],
+  );
+  const selectedDriverRouteNames = useMemo(
+    () =>
+      driverRouteOptions
+        .filter((route) => driverDraft.routeIds.includes(route.id))
+        .map((route) => route.name),
+    [driverDraft.routeIds, driverRouteOptions],
+  );
 
   useEffect(() => {
     if (!assignedVehicleId) {
@@ -8549,7 +11554,9 @@ function DriversPanel({
     });
 
     if (response.ok) {
-      setExpenseDraft(createExpenseDraft("asset", assignedVehicleId));
+      setExpenseDraft(
+        createExpenseDraft("asset", assignedVehicleId, snapshot.finance.expenseCatalog),
+      );
       setDriverAction(null);
     }
   };
@@ -8604,15 +11611,15 @@ function DriversPanel({
         </div>
       )}
 
-      {activeRole === "Admin" && (!canEditFinanceRecords || !canEditDriverRecords) && (
+      {PRIVILEGED_ROLES.has(activeRole) && (!canEditFinanceRecords || !canEditDriverRecords) && (
         <article className="overview-board">
           <div className="overview-board-head">
-            <p className="eyebrow">Admin access</p>
+            <p className="eyebrow">Management access</p>
             <h3>Some edits are locked</h3>
           </div>
           <p className="panel-note">
-            The owner must approve the request first, and then the manager must grant admin access
-            before you can save daily takings, daily expenses, or change the driver roster here.
+            The owner can enable Money and Drivers rights in Settings. Until then this management
+            account cannot save daily takings, daily expenses, or change the driver roster here.
           </p>
         </article>
       )}
@@ -9036,30 +12043,64 @@ function DriversPanel({
                       </label>
                       <label className="finance-field">
                         <span>Category</span>
-                        <input
-                          type="text"
+                        <select
                           value={expenseDraft.category}
                           onChange={(event) =>
-                            setExpenseDraft((current) => ({
-                              ...current,
-                              category: event.target.value,
-                            }))
+                            setExpenseDraft((current) =>
+                              syncExpenseDraftCategory(
+                                current,
+                                snapshot.finance.expenseCatalog,
+                                event.target.value,
+                              ),
+                            )
                           }
-                        />
+                        >
+                          {driverExpenseCategoryOptions.map((option) => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
                       </label>
                       <label className="finance-field finance-field-wide">
                         <span>Description</span>
-                        <input
-                          type="text"
-                          placeholder="Fuel top-up, wash bay, rank fee"
-                          value={expenseDraft.description}
-                          onChange={(event) =>
-                            setExpenseDraft((current) => ({
-                              ...current,
-                              description: event.target.value,
-                            }))
-                          }
-                        />
+                        {usesCustomDriverExpenseDescription ? (
+                          <input
+                            type="text"
+                            placeholder={
+                              expenseDraft.category === EXPENSE_OTHER_CATEGORY
+                                ? "Provide the expense details"
+                                : "Fuel top-up, wash bay, rank fee"
+                            }
+                            value={expenseDraft.description}
+                            onChange={(event) =>
+                              setExpenseDraft((current) => ({
+                                ...current,
+                                description: event.target.value,
+                                descriptionPreset: EXPENSE_CUSTOM_DESCRIPTION_VALUE,
+                              }))
+                            }
+                          />
+                        ) : (
+                          <select
+                            value={expenseDraft.descriptionPreset}
+                            onChange={(event) =>
+                              setExpenseDraft((current) =>
+                                syncExpenseDraftDescriptionPreset(
+                                  current,
+                                  event.target.value,
+                                ),
+                              )
+                            }
+                          >
+                            {driverExpenseDescriptionOptions.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                            <option value={EXPENSE_CUSTOM_DESCRIPTION_VALUE}>Other details</option>
+                          </select>
+                        )}
                       </label>
                       <label className="finance-field">
                         <span>Expense date</span>
@@ -9123,9 +12164,17 @@ function DriversPanel({
                       </span>
                       <span
                         className="status-chip"
-                        data-tone={PRIVILEGED_ROLES.has(activeRole) ? "success" : "warning"}
+                        data-tone={expenseDraft.category === EXPENSE_OTHER_CATEGORY ? "warning" : "info"}
                       >
-                        Status starts as {PRIVILEGED_ROLES.has(activeRole) ? "checked" : "waiting"}
+                        {expenseDraft.category === EXPENSE_OTHER_CATEGORY
+                          ? "Other selected: description details are required"
+                          : `${driverExpenseCategoryOptions.length} category options`}
+                      </span>
+                      <span
+                        className="status-chip"
+                        data-tone={autoCheckDriverExpenses ? "success" : "warning"}
+                      >
+                        Status starts as {autoCheckDriverExpenses ? "checked" : "waiting"}
                       </span>
                     </div>
                     <div className="finance-form-actions">
@@ -9149,7 +12198,7 @@ function DriversPanel({
                       data-tone={expenseValidationError ? "danger" : "info"}
                     >
                       {expenseValidationError ??
-                        "Daily expense details are complete and ready to save."}
+                        "Choose a saved category and description, or use Other and type the full expense details."}
                     </p>
                   </form>
                 )}
@@ -9167,12 +12216,12 @@ function DriversPanel({
                   <h3>Add driver</h3>
                 </div>
                 <div className="finance-form-actions">
-                  <button
-                    type="button"
-                    className="action-button primary"
-                    disabled={activeRole === "Admin" && !canEditDriverRecords}
-                    onClick={handleAddDriver}
-                  >
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      disabled={!canManageDrivers}
+                      onClick={handleAddDriver}
+                    >
                     <Users size={16} />
                     Add driver
                   </button>
@@ -9193,18 +12242,40 @@ function DriversPanel({
                           }
                         />
                       </label>
-                      <label className="finance-field">
-                        <span>Route</span>
+                      <label className="finance-field finance-field-wide">
+                        <span>Email address</span>
                         <input
-                          type="text"
-                          value={driverDraft.route}
+                          type="email"
+                          value={driverDraft.email}
                           onChange={(event) =>
                             setDriverDraft((current) => ({
                               ...current,
-                              route: event.target.value,
+                              email: event.target.value,
                             }))
                           }
                         />
+                      </label>
+                      <label className="finance-field finance-field-wide">
+                        <span>Assigned routes</span>
+                        <select
+                          multiple
+                          size={Math.min(Math.max(driverRouteOptions.length, 3), 6)}
+                          value={driverDraft.routeIds}
+                          onChange={(event) =>
+                            setDriverDraft((current) => ({
+                              ...current,
+                              routeIds: Array.from(event.target.selectedOptions, (option) => option.value),
+                            }))
+                          }
+                        >
+                          {driverRouteOptions.map((route) => (
+                            <option key={route.id} value={route.id}>
+                              {route.code ? `${route.code} / ` : ""}
+                              {route.name}
+                              {route.isActive ? "" : " (Inactive)"}
+                            </option>
+                          ))}
+                        </select>
                       </label>
                       <label className="finance-field">
                         <span>Shift status</span>
@@ -9230,7 +12301,59 @@ function DriversPanel({
                         </select>
                       </label>
                       <label className="finance-field">
-                        <span>PrDP expiry</span>
+                        <span>Driver&apos;s license number</span>
+                        <input
+                          type="text"
+                          value={driverDraft.licenseNumber}
+                          onChange={(event) =>
+                            setDriverDraft((current) => ({
+                              ...current,
+                              licenseNumber: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>License code</span>
+                        <input
+                          type="text"
+                          value={driverDraft.licenseCode}
+                          onChange={(event) =>
+                            setDriverDraft((current) => ({
+                              ...current,
+                              licenseCode: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>License expiry</span>
+                        <input
+                          type="date"
+                          value={driverDraft.licenseExpiryDate}
+                          onChange={(event) =>
+                            setDriverDraft((current) => ({
+                              ...current,
+                              licenseExpiryDate: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>PDP / PrDP number</span>
+                        <input
+                          type="text"
+                          value={driverDraft.prdpNumber}
+                          onChange={(event) =>
+                            setDriverDraft((current) => ({
+                              ...current,
+                              prdpNumber: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>PDP / PrDP expiry</span>
                         <input
                           type="date"
                           value={driverDraft.prdpExpiryDate}
@@ -9242,12 +12365,37 @@ function DriversPanel({
                           }
                         />
                       </label>
+                      <label className="finance-field">
+                        <span>Password</span>
+                        <input
+                          autoComplete="new-password"
+                          type="password"
+                          value={driverDraft.accessPassword}
+                          onChange={(event) =>
+                            setDriverDraft((current) => ({
+                              ...current,
+                              accessPassword: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                    </div>
+                    <div className="finance-form-meta">
+                      <span className="status-chip" data-tone="info">
+                        Routes {selectedDriverRouteNames.length}
+                      </span>
+                      <span
+                        className="status-chip"
+                        data-tone={driverDraft.accessPassword ? "success" : "warning"}
+                      >
+                        {driverDraft.accessPassword ? "Password set" : "Password required"}
+                      </span>
                     </div>
                     <div className="finance-form-actions">
                       <button
                         type="submit"
                         className="action-button primary"
-                        disabled={activeRole === "Admin" && !canEditDriverRecords}
+                        disabled={!canManageDrivers}
                       >
                         Save driver
                       </button>
@@ -9262,9 +12410,15 @@ function DriversPanel({
                         Cancel
                       </button>
                     </div>
-                    <p className="finance-form-note" data-tone="info">
-                      Add the driver here, then use shift allocation below to place the driver on
-                      a vehicle.
+                    <p
+                      className="finance-form-note"
+                      data-tone={driverRouteOptions.length === 0 ? "warning" : "info"}
+                    >
+                      {driverRouteOptions.length === 0
+                        ? "Add a route in Fleet & Operations first, then return here to assign the driver."
+                        : hasSupabaseConfig && Boolean(supabase)
+                          ? "Use Ctrl or Command to select more than one route, then use shift allocation below to place the driver on a vehicle. In live mode, issue the same password on the driver's Supabase sign-in account."
+                          : "Use Ctrl or Command to select more than one route, then use shift allocation below to place the driver on a vehicle. The saved password works for local TaxiFlow sign-in."}
                     </p>
                   </form>
                 )}
@@ -9334,7 +12488,7 @@ function DriversPanel({
                     <button
                       type="submit"
                       className="action-button primary"
-                      disabled={!selectedAllocationDriver || (activeRole === "Admin" && !canEditDriverRecords)}
+                      disabled={!selectedAllocationDriver || !canManageDrivers}
                     >
                       Save allocation
                     </button>
@@ -9358,9 +12512,19 @@ function DriversPanel({
                 <article key={driver.staffId ?? driver.name} className="person-row">
                   <div className="person-copy">
                     <h3>{driver.name}</h3>
-                    <p>
-                      {driver.role} / {driver.route}
-                    </p>
+                    <p>{driver.role} / {getDriverRouteSummary(driver)}</p>
+                    {driver.email && <p>{driver.email}</p>}
+                    {(driver.licenseNumber || driver.prdpNumber) && (
+                      <p>
+                        {[
+                          driver.licenseNumber ? `Licence ${driver.licenseNumber}` : null,
+                          driver.licenseCode ? `Code ${driver.licenseCode}` : null,
+                          driver.prdpNumber ? `PrDP ${driver.prdpNumber}` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" / ")}
+                      </p>
+                    )}
                   </div>
                   <div className="person-metrics">
                     <span
@@ -9377,6 +12541,12 @@ function DriversPanel({
                     </span>
                     <span
                       className="status-chip"
+                      data-tone={driver.licenseDays && driver.licenseDays <= 30 ? "danger" : "info"}
+                    >
+                      {driver.licenseDays ? `${driver.licenseDays} days licence` : "Licence not set"}
+                    </span>
+                    <span
+                      className="status-chip"
                       data-tone={driver.prdpDays && driver.prdpDays <= 30 ? "danger" : "info"}
                     >
                       {driver.prdpDays ? `${driver.prdpDays} days PrDP` : driver.shiftStatus}
@@ -9387,7 +12557,7 @@ function DriversPanel({
                       <button
                         type="button"
                         className="record-button"
-                        disabled={activeRole === "Admin" && !canEditDriverRecords}
+                        disabled={!canManageDrivers}
                         onClick={() => handleOpenAllocation(driver)}
                       >
                         {driverVehicleMap.has(driver.staffId) ? "Change vehicle" : "Assign vehicle"}
@@ -9441,13 +12611,17 @@ function SignInShell({
   error,
   submitting,
   onChange,
+  onRequestPasswordReset,
   onSubmit,
+  passwordResetFeedback,
 }) {
+  const [showForgotPasswordHelp, setShowForgotPasswordHelp] = useState(false);
+
   return (
     <div className="auth-shell">
       <div className="auth-card">
         <div className="brand-lockup auth-brand">
-          <img className="brand-logo auth-logo" src="/taxiflow-favicon.png" alt="TaxiFlow logo" />
+          <img className="brand-logo auth-logo" src="/taxiflow-logo.png" alt="TaxiFlow logo" />
         </div>
         <div className="auth-copy">
           <p className="eyebrow">Secure access</p>
@@ -9488,11 +12662,52 @@ function SignInShell({
             <button type="submit" className="action-button primary" disabled={submitting}>
               {submitting ? "Signing in..." : "Sign in"}
             </button>
+            <button
+              type="button"
+              className="action-button"
+              aria-controls="auth-recovery-note"
+              aria-expanded={showForgotPasswordHelp}
+              onClick={() => setShowForgotPasswordHelp((current) => !current)}
+            >
+              Forgot password?
+            </button>
           </div>
+          {showForgotPasswordHelp && (
+            <div id="auth-recovery-note" className="backend-mode-panel">
+              <div className="backend-mode-head">
+                <Lock size={16} />
+                <div>
+                  <strong>Password reset support</strong>
+                </div>
+              </div>
+              <p className="backend-mode-note">
+                Management will reset the password for this account. TaxiFlow sends both the
+                in-app management notice in Settings and the management email queue, and a repeat
+                request rebuilds any missing channel.
+              </p>
+              <div className="backend-mode-actions">
+                <button
+                  type="button"
+                  className="action-button"
+                  onClick={onRequestPasswordReset}
+                  disabled={submitting || !String(email ?? "").trim()}
+                >
+                  Send reset request
+                </button>
+              </div>
+              <p
+                className="finance-form-note"
+                data-tone={passwordResetFeedback?.tone ?? "warning"}
+              >
+                {passwordResetFeedback?.message ??
+                  "Only management can recreate TaxiFlow access. They will reset the password after TaxiFlow sends the in-app and email notices."}
+              </p>
+            </div>
+          )}
           <p className="finance-form-note" data-tone={error ? "danger" : "info"}>
             {error ??
               (isLocalAuth
-                ? "Use one of the configured TaxiFlow accounts. Local setup mode routes you by designation."
+                ? "Use the password assigned to your TaxiFlow account. Older local accounts still use the default TaxiFlow password."
                 : "Use the Supabase account issued for your TaxiFlow role. Access is routed by designation.")}
           </p>
         </form>

@@ -40,12 +40,39 @@ const signOut = async (page) => {
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
 };
 
+const moduleButton = (page, label) =>
+  page.locator("button.module-button").filter({ hasText: label }).first();
+
 const openMoneyModule = async (page) => {
-  await page
-    .getByRole("navigation", { name: "Primary views" })
-    .getByRole("button", { name: /Money/ })
-    .click();
+  await moduleButton(page, "Money").click();
   await expect(page.getByRole("heading", { name: "Daily trip entry" })).toBeVisible();
+};
+
+const openSettingsModule = async (page) => {
+  await moduleButton(page, "Settings").click();
+  await expect(page.getByRole("heading", { name: "Roles and rights" })).toBeVisible();
+};
+
+const grantOwnerModules = async (page, email, modules) => {
+  await signIn(page, "owner@taxiflow.local");
+  await openSettingsModule(page);
+
+  const userRow = page.locator("article.person-row").filter({
+    hasText: email,
+  });
+  await userRow.getByRole("button", { name: "Manage" }).click();
+
+  const accessForm = page.locator("form.finance-form").filter({
+    has: page.getByRole("button", { name: "Save access" }),
+  });
+
+  for (const moduleLabel of modules) {
+    await accessForm.getByRole("button", { name: moduleLabel }).click();
+  }
+
+  await accessForm.getByRole("button", { name: "Save access" }).click();
+  await expect(page.getByText(/updated as/i)).toBeVisible();
+  await signOut(page);
 };
 
 const openBankingModule = async (page) => {
@@ -113,6 +140,9 @@ test("driver daily trip update is visible to owner, manager, and admin", async (
   ).toBeVisible();
   await signOut(page);
 
+  await grantOwnerModules(page, "manager@taxiflow.local", ["Money"]);
+  await grantOwnerModules(page, "admin@taxiflow.local", ["Money"]);
+
   for (const account of managementAccounts) {
     await signIn(page, account.email);
     await expect(page.getByText(account.role).first()).toBeVisible();
@@ -155,6 +185,9 @@ test("admin records cash hand-in, manager verifies it, and the dashboard total i
     page.getByText("Trip saved, added to the daily total, and waiting for admin cash hand-in."),
   ).toBeVisible();
   await signOut(page);
+
+  await grantOwnerModules(page, "manager@taxiflow.local", ["Money"]);
+  await grantOwnerModules(page, "admin@taxiflow.local", ["Money"]);
 
   await signIn(page, "admin@taxiflow.local");
   await openBankingModule(page);

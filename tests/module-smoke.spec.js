@@ -17,6 +17,11 @@ const driverAccount = {
   role: "Driver",
 };
 
+const driverTwoAccount = {
+  email: "driver.two@taxiflow.local",
+  role: "Driver",
+};
+
 const attachRuntimeCollectors = (page) => {
   const consoleErrors = [];
   const pageErrors = [];
@@ -40,11 +45,11 @@ const attachRuntimeCollectors = (page) => {
 const moduleButton = (page, label) =>
   page.locator("button.module-button").filter({ hasText: label }).first();
 
-const signIn = async (page, email) => {
+const signIn = async (page, email, password = PASSWORD) => {
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
   await page.getByLabel("Email").fill(email);
-  await page.getByLabel("Password").fill(PASSWORD);
+  await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible({ timeout: 30_000 });
 };
@@ -306,6 +311,78 @@ test("owner settings rights allow admin to add a driver", async ({ page }) => {
 
   await expect(page.getByText("Access Test Driver added to the driver roster.")).toBeVisible();
   await signOut(page);
+  assertNoRuntimeErrors();
+});
+
+test("saved driver.two account replaces the sample driver and persists after reload", async ({
+  page,
+}) => {
+  const assertNoRuntimeErrors = attachRuntimeCollectors(page);
+  const replacementDriverName = "Andile Hlatshwayo";
+  const replacementPassword = "Andile123";
+
+  await signIn(page, ownerAccount.email);
+  await openModule(page, "Settings", "Roles and rights");
+
+  const adminRow = page.locator("article.person-row").filter({
+    hasText: "admin@taxiflow.local",
+  });
+  await adminRow.getByRole("button", { name: "Manage" }).click();
+  const accessForm = page.locator("form.finance-form").filter({
+    has: page.getByRole("button", { name: "Save access" }),
+  });
+  await accessForm.getByRole("button", { name: "Drivers" }).click();
+  await accessForm.getByRole("button", { name: "Save access" }).click();
+  await expect(page.getByText(/updated as Admin\./i)).toBeVisible();
+  await signOut(page);
+
+  await signIn(page, "admin@taxiflow.local");
+  await openModule(page, "Drivers", "Terminal preview");
+
+  const addDriverButton = page.getByRole("button", { name: "Add driver" }).first();
+  await expect(addDriverButton).toBeEnabled();
+  await addDriverButton.click();
+
+  const addDriverForm = page.locator("form.finance-form").filter({
+    has: page.getByRole("button", { name: "Save driver" }),
+  });
+  await addDriverForm.getByLabel("Full name").fill(replacementDriverName);
+  await addDriverForm.getByLabel("Email address").fill(driverTwoAccount.email);
+  await addDriverForm.getByLabel("Assigned routes").selectOption({ index: 0 });
+  await addDriverForm.getByLabel("Password").fill(replacementPassword);
+  await addDriverForm.getByRole("button", { name: "Save driver" }).click();
+
+  await expect(
+    page.getByText(`${replacementDriverName} updated in the driver roster.`),
+  ).toBeVisible();
+  await expect(
+    page.locator("article.person-row").filter({
+      hasText: replacementDriverName,
+    }),
+  ).toContainText(driverTwoAccount.email);
+  await expect(
+    page.locator("article.person-row").filter({
+      hasText: "Thabo Ndlovu",
+    }),
+  ).toHaveCount(0);
+
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+  await openModule(page, "Drivers", "Terminal preview");
+  await expect(
+    page.locator("article.person-row").filter({
+      hasText: replacementDriverName,
+    }),
+  ).toContainText(driverTwoAccount.email);
+
+  await signOut(page);
+  await signIn(page, driverTwoAccount.email, replacementPassword);
+  await expect(page.getByRole("heading", { name: replacementDriverName }).first()).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Sign out" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: replacementDriverName }).first()).toBeVisible();
+  await signOut(page);
+
   assertNoRuntimeErrors();
 });
 

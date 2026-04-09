@@ -66,7 +66,7 @@ export const mockSnapshot = {
     },
     {
       id: "rec-1143",
-      driver: "Thabo Ndlovu",
+      driver: "Andile Hlatshwayo",
       route: "CBD to Tembisa",
       vehicle: "JHB 931 GP",
       submittedAt: "07:32",
@@ -786,7 +786,7 @@ export const mockSnapshot = {
       action: "Book licensing office slot and secure roadworthy paperwork.",
     },
     {
-      subject: "Thabo Ndlovu",
+      subject: "Andile Hlatshwayo",
       document: "PrDP",
       daysLeft: 24,
       stage: "30-day critical",
@@ -837,7 +837,7 @@ export const mockSnapshot = {
     },
     {
       staffId: "drv-02",
-      name: "Thabo Ndlovu",
+      name: "Andile Hlatshwayo",
       route: "CBD to Tembisa",
       shiftStatus: "Needs review",
       avgShiftRevenue: 4680,

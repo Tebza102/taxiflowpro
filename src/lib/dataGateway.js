@@ -5,6 +5,8 @@ const DATA_MODE_STORAGE_KEY = "taxiflow-data-mode-v2";
 const DEMO_SNAPSHOT_STORAGE_KEY = "taxiflow-demo-snapshot-v1";
 const LIVE_SNAPSHOT_STORAGE_KEY = "taxiflow-live-snapshot-v1";
 const LIVE_PENDING_SNAPSHOT_STORAGE_KEY = "taxiflow-live-pending-snapshot-v1";
+const DEMO_SNAPSHOT_BACKUP_STORAGE_KEY = "taxiflow-demo-snapshot-backup-v1";
+const LIVE_SNAPSHOT_BACKUP_STORAGE_KEY = "taxiflow-live-snapshot-backup-v1";
 const LIVE_WORKSPACE_KEY = "taxiflow-live";
 
 const normalizeBackendMode = (value) =>
@@ -41,6 +43,57 @@ const normalizeVehicleCapabilityFields = (vehicle = {}) => {
       vehicle.currentRouteId ??
       vehicle.current_route_id ??
       normalizeRouteReference(vehicle.route),
+  };
+};
+
+const normalizeDailyCashUpIdToken = (value) =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const buildDailyCashUpId = (entry = {}, index = 0) => {
+  const explicitId = String(entry.id ?? "").trim();
+
+  if (explicitId) {
+    return explicitId;
+  }
+
+  const idParts = [
+    normalizeDailyCashUpIdToken(entry.driverStaffId ?? entry.driver_staff_id),
+    normalizeDailyCashUpIdToken(entry.workDate ?? entry.work_date),
+    normalizeDailyCashUpIdToken(entry.checkedAt ?? entry.updatedAt ?? entry.createdAt),
+  ].filter(Boolean);
+
+  return idParts.length > 0 ? `cashup-${idParts.join("-")}` : `cashup-${index + 1}`;
+};
+
+const normalizeDailyCashUpRecord = (entry = {}, index = 0) => {
+  const driverStaffId = String(entry.driverStaffId ?? entry.driver_staff_id ?? "").trim();
+  const driverName = String(entry.driverName ?? entry.driver_name ?? "").trim();
+  const workDate = String(entry.workDate ?? entry.work_date ?? "").trim();
+  const status = String(entry.status ?? "pending").trim().toLowerCase();
+  const normalizedStatus = ["pending", "counted", "verified", "banked"].includes(status)
+    ? status
+    : "pending";
+  const actualCashReceived = Number(entry.actualCashReceived);
+
+  return {
+    ...entry,
+    id: buildDailyCashUpId(entry, index),
+    driverStaffId: driverStaffId || null,
+    driverName: driverName || null,
+    workDate: workDate || null,
+    incomeRecordIds: Array.isArray(entry.incomeRecordIds) ? entry.incomeRecordIds : [],
+    expenseRecordIds: Array.isArray(entry.expenseRecordIds) ? entry.expenseRecordIds : [],
+    status: normalizedStatus,
+    actualCashReceived: Number.isFinite(actualCashReceived) ? actualCashReceived : null,
+    createdAt: entry.createdAt ?? null,
+    updatedAt: entry.updatedAt ?? null,
+    countedAt: entry.countedAt ?? null,
+    verifiedAt: entry.verifiedAt ?? null,
+    bankedAt: entry.bankedAt ?? null,
   };
 };
 
@@ -462,6 +515,7 @@ const createSnapshotShape = ({
   },
   defects: [],
   auditTrail: [],
+  dailyCashUps: [],
   passwordResetRequests: [],
   emailOutbox: [],
 });
@@ -569,6 +623,9 @@ const normalizeSnapshotShape = (snapshot, defaults = createSnapshotShape()) => {
     auditTrail: Array.isArray(snapshot.auditTrail)
       ? snapshot.auditTrail
       : cloneSnapshot(defaults.auditTrail),
+    dailyCashUps: Array.isArray(snapshot.dailyCashUps)
+      ? snapshot.dailyCashUps.map((entry, index) => normalizeDailyCashUpRecord(entry, index))
+      : cloneSnapshot(defaults.dailyCashUps),
     passwordResetRequests: Array.isArray(snapshot.passwordResetRequests)
       ? snapshot.passwordResetRequests
       : cloneSnapshot(defaults.passwordResetRequests),
@@ -616,6 +673,51 @@ const createTrainingSnapshot = () =>
     assignedRoute: "No training route assigned",
   });
 
+const getBackupStorageKey = (storageKey) => {
+  if (storageKey === LIVE_SNAPSHOT_STORAGE_KEY) {
+    return LIVE_SNAPSHOT_BACKUP_STORAGE_KEY;
+  }
+
+  if (storageKey === DEMO_SNAPSHOT_STORAGE_KEY) {
+    return DEMO_SNAPSHOT_BACKUP_STORAGE_KEY;
+  }
+
+  return null;
+};
+
+const hasMeaningfulWorkspaceData = (snapshot) => {
+  if (!snapshot || typeof snapshot !== "object") {
+    return false;
+  }
+
+  return [
+    snapshot.financeTransactions,
+    snapshot.deposits,
+    snapshot.routes,
+    snapshot.vehicles,
+    snapshot.drivers,
+    snapshot.defects,
+    snapshot.auditTrail,
+    snapshot.dailyCashUps,
+    snapshot.passwordResetRequests,
+    snapshot.emailOutbox,
+    snapshot.appUsers,
+  ].some((collection) => Array.isArray(collection) && collection.length > 0);
+};
+
+const selectRetainedSnapshot = (candidates = [], defaults = null) => {
+  const availableCandidates = candidates.filter((candidate) => candidate != null);
+  const meaningfulCandidate = availableCandidates.find((candidate) =>
+    hasMeaningfulWorkspaceData(candidate),
+  );
+
+  if (meaningfulCandidate) {
+    return meaningfulCandidate;
+  }
+
+  return availableCandidates[0] ?? defaults;
+};
+
 const readStoredMode = () => {
   if (typeof window === "undefined") {
     return null;
@@ -662,6 +764,12 @@ const persistStoredSnapshot = (storageKey, snapshot) => {
 
   try {
     window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
+    const backupStorageKey = getBackupStorageKey(storageKey);
+
+    if (backupStorageKey && hasMeaningfulWorkspaceData(snapshot)) {
+      window.localStorage.setItem(backupStorageKey, JSON.stringify(snapshot));
+    }
+
     return true;
   } catch (error) {
     logHandledWarning(`Unable to save the workspace snapshot in local storage (${storageKey}).`, error);
@@ -715,18 +823,21 @@ const getSupabaseSession = async () => {
 const loadSupabaseLiveSnapshot = async () => {
   const session = await getSupabaseSession();
   const cachedSnapshot = readStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY);
+  const backupSnapshot = readStoredSnapshot(LIVE_SNAPSHOT_BACKUP_STORAGE_KEY);
   const pendingSnapshot = readPendingLiveSnapshot();
   const liveDefaults = createLiveSnapshot();
 
   if (!session) {
     const fallbackSnapshot = normalizeSnapshotShape(
-      pendingSnapshot ?? cachedSnapshot,
+      selectRetainedSnapshot([pendingSnapshot, cachedSnapshot, backupSnapshot], liveDefaults),
       liveDefaults,
     );
     const warning = pendingSnapshot
       ? "Live session unavailable. Showing unsynced live changes until they can be saved."
       : cachedSnapshot
         ? "Live session unavailable. Showing the last available local workspace."
+        : backupSnapshot
+          ? "Live session unavailable. Restored the last retained local workspace backup."
         : "Live session unavailable. Showing a fresh live workspace.";
 
     logHandledWarning(warning);
@@ -735,7 +846,10 @@ const loadSupabaseLiveSnapshot = async () => {
 
   try {
     if (pendingSnapshot) {
-      const nextSnapshot = normalizeSnapshotShape(pendingSnapshot, liveDefaults);
+      const nextSnapshot = normalizeSnapshotShape(
+        selectRetainedSnapshot([pendingSnapshot, cachedSnapshot, backupSnapshot], liveDefaults),
+        liveDefaults,
+      );
       persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, nextSnapshot);
       const persistResult = await persistSupabaseLiveSnapshot(nextSnapshot, session.user.id);
 
@@ -753,7 +867,10 @@ const loadSupabaseLiveSnapshot = async () => {
       .maybeSingle();
 
     if (error) {
-      const fallbackSnapshot = normalizeSnapshotShape(cachedSnapshot, liveDefaults);
+      const fallbackSnapshot = normalizeSnapshotShape(
+        selectRetainedSnapshot([cachedSnapshot, backupSnapshot], liveDefaults),
+        liveDefaults,
+      );
       const warning =
         "Unable to load the latest live workspace. Showing the last available local workspace.";
 
@@ -766,16 +883,18 @@ const loadSupabaseLiveSnapshot = async () => {
     }
 
     const nextSnapshot = normalizeSnapshotShape(
-      data?.snapshot ?? cachedSnapshot ?? liveDefaults,
+      selectRetainedSnapshot([data?.snapshot, cachedSnapshot, backupSnapshot], liveDefaults),
       liveDefaults,
     );
     persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, nextSnapshot);
 
     let warning = null;
     let handledError = null;
-    if (!data?.snapshot) {
+    if (!hasMeaningfulWorkspaceData(data?.snapshot) && hasMeaningfulWorkspaceData(nextSnapshot)) {
       const persistResult = await persistSupabaseLiveSnapshot(nextSnapshot, session.user.id);
-      warning = persistResult.warning;
+      warning =
+        persistResult.warning ??
+        "Recovered the last retained live workspace instead of replacing it with a blank workspace.";
       handledError = persistResult.error;
     }
 
@@ -785,7 +904,10 @@ const loadSupabaseLiveSnapshot = async () => {
       error: handledError,
     });
   } catch (error) {
-    const fallbackSnapshot = normalizeSnapshotShape(cachedSnapshot, liveDefaults);
+    const fallbackSnapshot = normalizeSnapshotShape(
+      selectRetainedSnapshot([cachedSnapshot, backupSnapshot], liveDefaults),
+      liveDefaults,
+    );
     const warning =
       "Unable to load the latest live workspace. Showing the last available local workspace.";
 
@@ -865,8 +987,12 @@ export const repository = {
       normalizedMode === "live" ? createLiveSnapshot() : createTrainingSnapshot();
     const storageKey =
       normalizedMode === "live" ? LIVE_SNAPSHOT_STORAGE_KEY : DEMO_SNAPSHOT_STORAGE_KEY;
+    const backupStorageKey = getBackupStorageKey(storageKey);
 
     clearStoredSnapshot(storageKey);
+    if (backupStorageKey) {
+      clearStoredSnapshot(backupStorageKey);
+    }
     if (normalizedMode === "live") {
       clearPendingLiveSnapshot();
     }
@@ -886,6 +1012,7 @@ export const repository = {
   resetLiveSnapshot() {
     const nextSnapshot = createLiveSnapshot();
     clearStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY);
+    clearStoredSnapshot(LIVE_SNAPSHOT_BACKUP_STORAGE_KEY);
     clearPendingLiveSnapshot();
     persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, nextSnapshot);
 
@@ -902,7 +1029,17 @@ export const repository = {
       return createStructuredResult(null, { ok: true, warning: null });
     }
 
-    const nextSnapshot = normalizeSnapshotShape(pendingSnapshot, createLiveSnapshot());
+    const nextSnapshot = normalizeSnapshotShape(
+      selectRetainedSnapshot(
+        [
+          pendingSnapshot,
+          readStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY),
+          readStoredSnapshot(LIVE_SNAPSHOT_BACKUP_STORAGE_KEY),
+        ],
+        createLiveSnapshot(),
+      ),
+      createLiveSnapshot(),
+    );
     return persistSupabaseLiveSnapshot(nextSnapshot);
   },
   async persistSnapshot(snapshot, mode = activeBackendMode) {
@@ -952,8 +1089,9 @@ export const repository = {
     try {
       if (activeBackendMode !== "live") {
         const storedDemoSnapshot = readStoredSnapshot(DEMO_SNAPSHOT_STORAGE_KEY);
+        const backupDemoSnapshot = readStoredSnapshot(DEMO_SNAPSHOT_BACKUP_STORAGE_KEY);
         const nextSnapshot = normalizeSnapshotShape(
-          storedDemoSnapshot ?? mockSnapshot,
+          selectRetainedSnapshot([storedDemoSnapshot, backupDemoSnapshot, mockSnapshot], mockSnapshot),
           createTrainingSnapshot(),
         );
         return attachStructuredResult(nextSnapshot, { ok: true, warning: null });
@@ -964,7 +1102,11 @@ export const repository = {
       }
 
       const storedLiveSnapshot = readStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY);
-      const liveSnapshot = normalizeSnapshotShape(storedLiveSnapshot, createLiveSnapshot());
+      const backupLiveSnapshot = readStoredSnapshot(LIVE_SNAPSHOT_BACKUP_STORAGE_KEY);
+      const liveSnapshot = normalizeSnapshotShape(
+        selectRetainedSnapshot([storedLiveSnapshot, backupLiveSnapshot], createLiveSnapshot()),
+        createLiveSnapshot(),
+      );
 
       persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, liveSnapshot);
       return attachStructuredResult(liveSnapshot, { ok: true, warning: null });
@@ -972,11 +1114,24 @@ export const repository = {
       const fallbackSnapshot =
         activeBackendMode === "live"
           ? normalizeSnapshotShape(
-              readStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY),
+              selectRetainedSnapshot(
+                [
+                  readStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY),
+                  readStoredSnapshot(LIVE_SNAPSHOT_BACKUP_STORAGE_KEY),
+                ],
+                createLiveSnapshot(),
+              ),
               createLiveSnapshot(),
             )
           : normalizeSnapshotShape(
-              readStoredSnapshot(DEMO_SNAPSHOT_STORAGE_KEY) ?? mockSnapshot,
+              selectRetainedSnapshot(
+                [
+                  readStoredSnapshot(DEMO_SNAPSHOT_STORAGE_KEY),
+                  readStoredSnapshot(DEMO_SNAPSHOT_BACKUP_STORAGE_KEY),
+                  mockSnapshot,
+                ],
+                mockSnapshot,
+              ),
               createTrainingSnapshot(),
             );
       const warning =

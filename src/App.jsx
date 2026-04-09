@@ -59,16 +59,10 @@ const AUTH_ACCOUNT_DIRECTORY = {
     role: "Manager",
     actorId: "mgr-01",
   },
-  "driver.one@taxiflow.local": {
-    name: "Sizwe Mokoena",
-    role: "Driver",
-    actorId: "drv-01",
-  },
-  "driver.two@taxiflow.local": {
-    name: "Thabo Ndlovu",
-    role: "Driver",
-    actorId: "drv-02",
-  },
+};
+const DEFAULT_DRIVER_ACCOUNT_EMAIL_BY_STAFF_ID = {
+  "drv-01": "driver.one@taxiflow.local",
+  "drv-02": "driver.two@taxiflow.local",
 };
 const LOCAL_AUTH_STORAGE_KEY = "taxiflow-auth-session-v1";
 const LOCAL_AUTH_PASSWORD = "TaxiFlow.123";
@@ -252,6 +246,7 @@ const getQueueTone = (entry) => {
 
 const canRecordCashHandoverForRole = (role) => ["Owner", "Admin"].includes(role);
 const canVerifyCashCheckForRole = (role) => ["Owner", "Manager"].includes(role);
+const canFinishDepositForRole = (role) => ["Owner", "Manager"].includes(role);
 const getVehicleReadinessOptions = (counts = {}) => [
   ["all", "All readiness"],
   ["route-service", `Route service ${counts.routeService ?? 0}`],
@@ -584,9 +579,19 @@ const normalizeAppUser = (user = {}) => {
 
 const buildDefaultAppUsers = (snapshot) => {
   const users = [];
-  const usedEmails = new Set();
+  const storedUsers = Array.isArray(snapshot?.appUsers) ? snapshot.appUsers.map(normalizeAppUser) : [];
+  const usedEmails = new Set(storedUsers.map((user) => normalizeEmailAddress(user.email)).filter(Boolean));
   const accountByActorId = new Map(
     Object.entries(AUTH_ACCOUNT_DIRECTORY).map(([email, account]) => [account.actorId, { email, ...account }]),
+  );
+  const storedUsersByStaffId = new Map(
+    storedUsers.flatMap((user) => {
+      const keys = [user.staffId, user.actorId]
+        .map((value) => String(value ?? "").trim())
+        .filter(Boolean);
+
+      return keys.map((key) => [key, user]);
+    }),
   );
 
   const pushUser = (user) => {
@@ -615,21 +620,26 @@ const buildDefaultAppUsers = (snapshot) => {
 
   (snapshot?.drivers ?? []).forEach((driver) => {
     const mappedAccount = accountByActorId.get(driver.staffId);
+    const storedUser = storedUsersByStaffId.get(String(driver.staffId ?? "").trim()) ?? null;
+    const defaultDriverEmail =
+      DEFAULT_DRIVER_ACCOUNT_EMAIL_BY_STAFF_ID[String(driver.staffId ?? "").trim()] ?? null;
     const email =
       normalizeEmailAddress(driver.email) ||
+      normalizeEmailAddress(storedUser?.email) ||
       mappedAccount?.email ||
+      (defaultDriverEmail && !usedEmails.has(defaultDriverEmail) ? defaultDriverEmail : null) ||
       createGeneratedLocalEmail(driver.name, usedEmails);
 
     pushUser({
       email,
-      name: driver.name,
-      role: normalizeRole(driver.role) ?? "Driver",
-      actorId: mappedAccount?.actorId ?? driver.staffId,
+      name: storedUser?.name ?? driver.name,
+      role: normalizeRole(driver.role) ?? mappedAccount?.role ?? storedUser?.role ?? "Driver",
+      actorId: storedUser?.actorId ?? mappedAccount?.actorId ?? driver.staffId,
       staffId: driver.staffId,
-      accessPassword: driver.accessPassword ?? null,
-      createdAt: driver.createdAt ?? null,
-      createdBy: driver.createdBy ?? null,
-      createdByRole: driver.createdByRole ?? null,
+      accessPassword: driver.accessPassword ?? storedUser?.accessPassword ?? null,
+      createdAt: driver.createdAt ?? storedUser?.createdAt ?? null,
+      createdBy: driver.createdBy ?? storedUser?.createdBy ?? null,
+      createdByRole: driver.createdByRole ?? storedUser?.createdByRole ?? null,
     });
   });
 
@@ -779,9 +789,8 @@ const readStoredLocalAuthSession = () => {
 
   try {
     const email = window.localStorage.getItem(LOCAL_AUTH_STORAGE_KEY);
-    const account = AUTH_ACCOUNT_DIRECTORY[String(email ?? "").trim().toLowerCase()] ?? null;
 
-    return email ? createLocalAuthSession(email, account) : null;
+    return email ? createLocalAuthSession(String(email).trim().toLowerCase()) : null;
   } catch {
     return null;
   }
@@ -1707,7 +1716,7 @@ const syncStandardDraftTripLogbook = (draft) => {
   return {
     ...draft,
     tripLogbook: nextTripLogbook,
-    amountClaimed: totals.totalAmount > 0 ? String(totals.totalAmount) : "",
+    amountClaimed: String(totals.totalAmount),
   };
 };
 
@@ -1780,7 +1789,7 @@ const formatDailyTripMeta = (record) =>
     getDailyTripTripCount(record) > 0
       ? `${getDailyTripTripCount(record)} ${getDailyTripTripCount(record) === 1 ? "trip" : "trips"}`
       : null,
-    getDailyTripPassengerTotal(record) > 0
+    Number.isFinite(getDailyTripPassengerTotal(record))
       ? `${getDailyTripPassengerTotal(record).toLocaleString()} passengers`
       : null,
   ]
@@ -1831,6 +1840,606 @@ const formatShortcutLabel = (shortcut) =>
       "View vehicle status": "View vehicle details",
     }[shortcut]
   ) ?? shortcut;
+
+const createEmptyDriverDayCashSummary = (workDate = toDateInputValue()) => ({
+  workDate,
+  workDateLabel: formatDateOnly(workDate),
+  driverStaffId: null,
+  driverName: null,
+  entryCount: 0,
+  incomeCount: 0,
+  expenseCount: 0,
+  totalIncome: 0,
+  totalExpenses: 0,
+  cashExpenses: 0,
+  nonCashExpenses: 0,
+  expectedCashIn: 0,
+  netAfterExpenses: 0,
+  entries: [],
+  incomeRecords: [],
+  expenseRecords: [],
+  cashUpRecord: null,
+});
+
+const getFinanceRecordWorkDate = (record = {}) => {
+  const candidate =
+    record.type === "expense"
+      ? String(record.expenseDate ?? "").trim()
+      : String(record.tripDate ?? "").trim();
+
+  return candidate || toDateInputValue(record.timestamp ?? new Date());
+};
+
+const getFinanceRecordDriverStaffId = (record = {}) => {
+  const normalizedDriverStaffId = String(
+    record.driverStaffId ??
+      record.driver_staff_id ??
+      (record.createdByRole === "Driver" ? record.createdBy : ""),
+  ).trim();
+
+  return normalizedDriverStaffId || null;
+};
+
+const getFinanceRecordDriverName = (record = {}) => {
+  const normalizedDriverName = String(record.driverName ?? record.driver_name ?? "").trim();
+
+  return normalizedDriverName || null;
+};
+
+const normalizeCashUpIdToken = (value) =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const getDailyCashUpStableId = (entry = {}, fallback = "cashup") => {
+  const explicitId = String(entry.id ?? "").trim();
+
+  if (explicitId) {
+    return explicitId;
+  }
+
+  const idParts = [
+    normalizeCashUpIdToken(entry.driverStaffId ?? entry.driver_staff_id),
+    normalizeCashUpIdToken(entry.workDate ?? entry.work_date),
+    normalizeCashUpIdToken(entry.checkedAt ?? entry.updatedAt ?? entry.createdAt),
+  ].filter(Boolean);
+
+  return idParts.length > 0 ? `cashup-${idParts.join("-")}` : fallback;
+};
+
+const buildDriverCashLedgerEntry = (record = {}) => {
+  const isIncome = record.type === "income";
+  const amount = Number(
+    isIncome ? record.amountClaimed ?? record.amount ?? 0 : record.amount ?? 0,
+  );
+  const safeAmount = Number.isFinite(amount) ? amount : 0;
+  const cashDelta = isIncome ? safeAmount : record.cashExpense ? -safeAmount : 0;
+  const amountLabel =
+    safeAmount === 0
+      ? formatMoney(0)
+      : `${safeAmount > 0 && isIncome ? "+" : "-"}${formatMoney(Math.abs(safeAmount))}`;
+
+  return {
+    id: record.id ?? createRecordId("cash-entry"),
+    record,
+    entryType: isIncome ? "income" : "expense",
+    title: isIncome
+      ? record.incomeKind === "special"
+        ? `Extra trip / ${formatTripRoute(record)}`
+        : `Daily trip / ${record.vehicle ?? "Vehicle"}`
+      : formatExpenseHeadline(record),
+    subtitle: isIncome
+      ? record.incomeKind === "special"
+        ? formatTripLogMeta(record)
+        : formatDailyTripMeta(record)
+      : formatExpenseMeta(record),
+    amount: isIncome ? safeAmount : -safeAmount,
+    amountLabel,
+    cashDelta,
+    cashDeltaLabel:
+      cashDelta === 0
+        ? "No cash change"
+        : `${cashDelta > 0 ? "+" : "-"}${formatMoney(Math.abs(cashDelta))} cash`,
+    statusLabel: formatTransactionStatus(record.status ?? "pending"),
+    ledgerLabel: isIncome
+      ? "Income"
+      : record.cashExpense
+        ? "Cash expense"
+        : "Expense",
+    tone: isIncome ? "success" : record.cashExpense ? "warning" : "info",
+    timestampLabel: formatStamp(record.timestamp),
+  };
+};
+
+const resolveDriverWorkDate = (source, driverStaffId) => {
+  if (!driverStaffId) {
+    return toDateInputValue();
+  }
+
+  const relevantTransactions = [...(source?.financeTransactions ?? [])]
+    .filter(
+      (record) =>
+        ["income", "expense"].includes(record?.type) &&
+        getFinanceRecordDriverStaffId(record) === driverStaffId &&
+        record.status !== "banked",
+    )
+    .sort((left, right) => new Date(right.timestamp) - new Date(left.timestamp));
+  const latestCashUp =
+    [...(source?.dailyCashUps ?? [])]
+      .filter((entry) => String(entry.driverStaffId ?? "").trim() === driverStaffId)
+      .sort(
+        (left, right) =>
+          new Date(right.checkedAt ?? right.updatedAt ?? right.createdAt ?? 0) -
+          new Date(left.checkedAt ?? left.updatedAt ?? left.createdAt ?? 0),
+      )[0] ?? null;
+  const latestTransactionWorkDate = relevantTransactions[0]
+    ? getFinanceRecordWorkDate(relevantTransactions[0])
+    : null;
+  const latestCashUpWorkDate = String(latestCashUp?.workDate ?? "").trim();
+
+  if (latestTransactionWorkDate) {
+    return latestTransactionWorkDate;
+  }
+
+  if (latestCashUpWorkDate) {
+    return latestCashUpWorkDate;
+  }
+
+  return toDateInputValue();
+};
+
+const buildDriverDayCashSummary = (source, { driverStaffId, workDate = null } = {}) => {
+  const resolvedWorkDate = workDate ?? resolveDriverWorkDate(source, driverStaffId);
+
+  if (!driverStaffId) {
+    return createEmptyDriverDayCashSummary(resolvedWorkDate);
+  }
+
+  const dayTransactions = [...(source?.financeTransactions ?? [])]
+    .filter(
+      (record) =>
+        ["income", "expense"].includes(record?.type) &&
+        getFinanceRecordDriverStaffId(record) === driverStaffId &&
+        getFinanceRecordWorkDate(record) === resolvedWorkDate,
+    )
+    .sort((left, right) => new Date(right.timestamp) - new Date(left.timestamp));
+  const incomeRecords = dayTransactions.filter((record) => record.type === "income");
+  const expenseRecords = dayTransactions.filter((record) => record.type === "expense");
+  const totalIncome = sumBy(incomeRecords, (record) => record.amountClaimed ?? record.amount);
+  const totalExpenses = sumBy(expenseRecords, (record) => record.amount);
+  const cashExpenses = sumBy(
+    expenseRecords.filter((record) => record.cashExpense),
+    (record) => record.amount,
+  );
+  const cashUpRecord =
+    [...(source?.dailyCashUps ?? [])]
+      .filter(
+        (entry) =>
+          String(entry.driverStaffId ?? "").trim() === driverStaffId &&
+          String(entry.workDate ?? "").trim() === resolvedWorkDate,
+      )
+      .sort(
+        (left, right) =>
+          new Date(right.checkedAt ?? right.updatedAt ?? right.createdAt ?? 0) -
+          new Date(left.checkedAt ?? left.updatedAt ?? left.createdAt ?? 0),
+      )[0] ?? null;
+  const resolvedDriverName =
+    getFinanceRecordDriverName(dayTransactions[0]) ||
+    String(cashUpRecord?.driverName ?? "").trim() ||
+    null;
+
+  return {
+    workDate: resolvedWorkDate,
+    workDateLabel: formatDateOnly(resolvedWorkDate),
+    driverStaffId,
+    driverName: resolvedDriverName,
+    entryCount: dayTransactions.length,
+    incomeCount: incomeRecords.length,
+    expenseCount: expenseRecords.length,
+    totalIncome,
+    totalExpenses,
+    cashExpenses,
+    nonCashExpenses: totalExpenses - cashExpenses,
+    expectedCashIn: totalIncome - cashExpenses,
+    netAfterExpenses: totalIncome - totalExpenses,
+    entries: dayTransactions.map((record) => buildDriverCashLedgerEntry(record)),
+    incomeRecords,
+    expenseRecords,
+    cashUpRecord,
+  };
+};
+
+const normalizeCashUpWorkflowStatus = (status) => {
+  const normalized = String(status ?? "").trim().toLowerCase();
+
+  return ["pending", "counted", "verified", "banked"].includes(normalized)
+    ? normalized
+    : null;
+};
+
+const getFinanceRecordCashUpCoverageKey = (record = {}) => {
+  const driverStaffId = String(getFinanceRecordDriverStaffId(record) ?? "").trim();
+  const workDate = String(getFinanceRecordWorkDate(record) ?? "").trim();
+
+  return driverStaffId && workDate ? `${driverStaffId}::${workDate}` : null;
+};
+
+const getCashUpCoverageKey = (entry = {}) => {
+  const driverStaffId = String(entry.driverStaffId ?? "").trim();
+  const workDate = String(entry.workDate ?? "").trim();
+
+  return driverStaffId && workDate ? `${driverStaffId}::${workDate}` : null;
+};
+
+const buildCashUpTransactionIds = (summary) => [
+  ...(summary?.incomeRecords ?? []).map((record) => record.id),
+  ...(summary?.expenseRecords ?? []).map((record) => record.id),
+].filter(Boolean);
+
+const syncTransactionsForDriverCashUp = (transactions = [], summary, updater) => {
+  const linkedRecordIds = new Set(buildCashUpTransactionIds(summary));
+
+  if (linkedRecordIds.size === 0) {
+    return transactions;
+  }
+
+  return transactions.map((record) =>
+    linkedRecordIds.has(record.id) ? updater(record) : record,
+  );
+};
+
+const isDriverCreatedFinanceRecord = (record = {}) => record.createdByRole === "Driver";
+
+const buildDriverCashUpAnalytics = (summary) => {
+  const standardIncomeRecords = (summary?.incomeRecords ?? [])
+    .filter((record) => record.incomeKind === "standard")
+    .sort((left, right) => new Date(left.timestamp) - new Date(right.timestamp));
+  const tripEntries = standardIncomeRecords.flatMap((record) =>
+    Array.isArray(record.tripLogbook) ? record.tripLogbook : [],
+  );
+  const firstStandardRecord = standardIncomeRecords[0] ?? null;
+  const lastStandardRecord = standardIncomeRecords[standardIncomeRecords.length - 1] ?? null;
+
+  return calculateDailyAnalytics({
+    trips: tripEntries,
+    expenses: summary?.expenseRecords ?? [],
+    totalTakingsExpected: summary?.totalIncome ?? 0,
+    dayStartOdometer: firstStandardRecord?.openingOdo ?? null,
+    dayEndOdometer: lastStandardRecord?.closingOdo ?? null,
+  });
+};
+
+const getDriverCashUpGapKm = (source, summary) =>
+  sumBy(
+    (summary?.incomeRecords ?? []).filter((record) => record.incomeKind === "standard"),
+    (record) => {
+      const expectedOpening = getExpectedOpeningOdo(
+        source?.financeTransactions ?? [],
+        source?.vehicles ?? [],
+        record.vehicleId,
+        record.id,
+      );
+
+      return Math.abs(Number(record.openingOdo ?? 0) - Number(expectedOpening ?? 0));
+    },
+  );
+
+const getDriverCashUpWorkflowStatus = (entry, summary) => {
+  const explicitStatus = normalizeCashUpWorkflowStatus(entry?.status);
+  const linkedStatuses = [
+    ...(summary?.incomeRecords ?? []).map((record) =>
+      normalizeCashUpWorkflowStatus(record.status),
+    ),
+    ...(summary?.expenseRecords ?? []).map((record) =>
+      normalizeCashUpWorkflowStatus(record.status),
+    ),
+  ].filter(Boolean);
+
+  if (linkedStatuses.length === 0) {
+    return explicitStatus ?? "pending";
+  }
+
+  if (linkedStatuses.every((status) => status === "banked")) {
+    return "banked";
+  }
+  if (linkedStatuses.some((status) => status === "pending")) {
+    return "pending";
+  }
+  if (linkedStatuses.some((status) => status === "counted")) {
+    return "counted";
+  }
+  if (linkedStatuses.some((status) => status === "verified")) {
+    return "verified";
+  }
+
+  return explicitStatus ?? "pending";
+};
+
+const getDriverCashUpWorkflow = (summary, workflowStatus) => {
+  if (!summary || summary.entryCount === 0) {
+    return {
+      label: "No activity",
+      tone: "info",
+    };
+  }
+
+  if (summary.incomeCount === 0) {
+    return {
+      label: "Heads up only",
+      tone: "info",
+    };
+  }
+
+  if (workflowStatus === "banked") {
+    return {
+      label: "Deposited",
+      tone: "navy",
+    };
+  }
+
+  if (workflowStatus === "pending") {
+    return {
+      label: "Waiting for admin hand-in",
+      tone: "warning",
+    };
+  }
+
+  if (workflowStatus === "counted") {
+    return {
+      label: "Waiting for manager check",
+      tone: "info",
+    };
+  }
+
+  if (workflowStatus === "verified") {
+    return {
+      label: "Manager checked",
+      tone: "success",
+    };
+  }
+
+  return {
+    label: "Heads up sent",
+    tone: "info",
+  };
+};
+
+const buildDriverCashUpQueueEntry = (source, entry = {}) => {
+  const summary = buildDriverDayCashSummary(source, {
+    driverStaffId: String(entry.driverStaffId ?? "").trim(),
+    workDate: String(entry.workDate ?? "").trim() || null,
+  });
+  const workflowStatus = getDriverCashUpWorkflowStatus(entry, summary);
+  const workflow = getDriverCashUpWorkflow(summary, workflowStatus);
+  const counted = Number(entry.actualCashReceived);
+  const safeCounted = Number.isFinite(counted) ? counted : 0;
+  const gapKm = getDriverCashUpGapKm(source, summary);
+  const shortage = Number.isFinite(counted)
+    ? Math.max(Number(summary.expectedCashIn ?? 0) - counted, 0)
+    : 0;
+
+  return {
+    ...entry,
+    ...summary,
+    id: getDailyCashUpStableId(entry),
+    queueType: "cash-up",
+    driver: summary.driverName || String(entry.driverName ?? "").trim() || "Driver",
+    driverName: summary.driverName || String(entry.driverName ?? "").trim() || "Driver",
+    vehicle: String(entry.vehicle ?? "").trim() || null,
+    route: String(entry.route ?? "").trim() || null,
+    claimed: Number(summary.expectedCashIn ?? 0),
+    counted: safeCounted,
+    actualCashReceived: Number.isFinite(counted) ? counted : null,
+    shortage,
+    gapKm,
+    checkedAtLabel: formatStamp(entry.checkedAt ?? entry.updatedAt ?? entry.createdAt),
+    submittedAt: formatTime(entry.checkedAt ?? entry.updatedAt ?? entry.createdAt),
+    workflowStatus,
+    workflowLabel: workflow.label,
+    workflowTone: workflow.tone,
+    status: deriveQueueStatus({ status: workflowStatus }, shortage, gapKm),
+    dayAnalytics: buildDriverCashUpAnalytics(summary),
+  };
+};
+
+const buildDriverCashUpQueue = (source) =>
+  [...(source?.dailyCashUps ?? [])]
+    .map((entry) => buildDriverCashUpQueueEntry(source, entry))
+    .sort(
+      (left, right) =>
+        new Date(right.checkedAt ?? right.updatedAt ?? right.createdAt ?? 0) -
+        new Date(left.checkedAt ?? left.updatedAt ?? left.createdAt ?? 0),
+    );
+
+const buildRecordChangeLabel = (label, previousValue, nextValue) =>
+  previousValue === nextValue ? null : `${label} ${previousValue} to ${nextValue}`;
+
+const formatRecordMoneyChange = (value) => formatMoney(Number(value ?? 0));
+
+const formatRecordCountChange = (value) => `${Number(value ?? 0).toLocaleString()}`;
+
+const formatRecordDistanceChange = (value) => `${Number(value ?? 0).toLocaleString()} km`;
+
+const formatRecordTextChange = (value, fallback = "Not set") => {
+  const normalized = String(value ?? "").trim();
+  return normalized || fallback;
+};
+
+const formatRecordPaymentChange = (value) => (value ? "Cash" : "Non-cash");
+
+const buildFinanceRecordChangeSummary = (previousRecord = {}, nextRecord = {}) => {
+  const changes = [];
+
+  if (nextRecord?.type === "income" && nextRecord?.incomeKind === "standard") {
+    changes.push(
+      buildRecordChangeLabel(
+        "Takings",
+        formatRecordMoneyChange(previousRecord.amountClaimed ?? previousRecord.amount),
+        formatRecordMoneyChange(nextRecord.amountClaimed ?? nextRecord.amount),
+      ),
+    );
+    changes.push(
+      buildRecordChangeLabel(
+        "Passengers",
+        formatRecordCountChange(getDailyTripPassengerTotal(previousRecord)),
+        formatRecordCountChange(getDailyTripPassengerTotal(nextRecord)),
+      ),
+    );
+    changes.push(
+      buildRecordChangeLabel(
+        "Trips",
+        formatRecordCountChange(getDailyTripTripCount(previousRecord)),
+        formatRecordCountChange(getDailyTripTripCount(nextRecord)),
+      ),
+    );
+    changes.push(
+      buildRecordChangeLabel(
+        "Opening odo",
+        formatRecordDistanceChange(previousRecord.openingOdo),
+        formatRecordDistanceChange(nextRecord.openingOdo),
+      ),
+    );
+    changes.push(
+      buildRecordChangeLabel(
+        "Closing odo",
+        formatRecordDistanceChange(previousRecord.closingOdo),
+        formatRecordDistanceChange(nextRecord.closingOdo),
+      ),
+    );
+  }
+
+  if (nextRecord?.type === "income" && nextRecord?.incomeKind === "special") {
+    changes.push(
+      buildRecordChangeLabel(
+        "Takings",
+        formatRecordMoneyChange(previousRecord.amount),
+        formatRecordMoneyChange(nextRecord.amount),
+      ),
+    );
+    changes.push(
+      buildRecordChangeLabel(
+        "Route",
+        formatTripRoute(previousRecord),
+        formatTripRoute(nextRecord),
+      ),
+    );
+    changes.push(
+      buildRecordChangeLabel(
+        "Reason",
+        formatRecordTextChange(previousRecord.travelReason),
+        formatRecordTextChange(nextRecord.travelReason),
+      ),
+    );
+    changes.push(
+      buildRecordChangeLabel(
+        "Business km",
+        formatRecordDistanceChange(getBusinessKmValue(previousRecord)),
+        formatRecordDistanceChange(getBusinessKmValue(nextRecord)),
+      ),
+    );
+  }
+
+  if (nextRecord?.type === "expense") {
+    changes.push(
+      buildRecordChangeLabel(
+        "Amount",
+        formatRecordMoneyChange(previousRecord.amount),
+        formatRecordMoneyChange(nextRecord.amount),
+      ),
+    );
+    changes.push(
+      buildRecordChangeLabel(
+        "Category",
+        formatRecordTextChange(previousRecord.category),
+        formatRecordTextChange(nextRecord.category),
+      ),
+    );
+    changes.push(
+      buildRecordChangeLabel(
+        "Description",
+        formatRecordTextChange(previousRecord.description),
+        formatRecordTextChange(nextRecord.description),
+      ),
+    );
+    changes.push(
+      buildRecordChangeLabel(
+        "Payment",
+        formatRecordPaymentChange(previousRecord.cashExpense),
+        formatRecordPaymentChange(nextRecord.cashExpense),
+      ),
+    );
+  }
+
+  return changes.filter(Boolean).join(" / ") || "No tracked values changed.";
+};
+
+const buildDriverRecordEditTracking = ({
+  existingRecord,
+  nextRecord,
+  reason,
+  timestamp,
+  actorId,
+  actorRole,
+}) => {
+  const existingHistory = Array.isArray(existingRecord?.editHistory) ? existingRecord.editHistory : [];
+  const normalizedReason = String(reason ?? "").trim();
+
+  if (!normalizedReason) {
+    return {
+      editEntry: null,
+      trackingFields: {
+        editHistory: existingHistory,
+        lastEditReason: existingRecord?.lastEditReason ?? null,
+        lastEditSummary: existingRecord?.lastEditSummary ?? null,
+        lastEditedAt: existingRecord?.lastEditedAt ?? null,
+        lastEditedBy: existingRecord?.lastEditedBy ?? null,
+        lastEditedByRole: existingRecord?.lastEditedByRole ?? null,
+      },
+    };
+  }
+
+  const editEntry = {
+    id: createRecordId("edit"),
+    timestamp,
+    reason: normalizedReason,
+    summary: buildFinanceRecordChangeSummary(existingRecord, nextRecord),
+    actorId,
+    actorRole,
+  };
+
+  return {
+    editEntry,
+    trackingFields: {
+      editHistory: [editEntry, ...existingHistory],
+      lastEditReason: editEntry.reason,
+      lastEditSummary: editEntry.summary,
+      lastEditedAt: timestamp,
+      lastEditedBy: actorId,
+      lastEditedByRole: actorRole,
+    },
+  };
+};
+
+const getRecordLastEditNote = (record = {}) => {
+  const reason = String(record.lastEditReason ?? "").trim();
+
+  if (!reason) {
+    return null;
+  }
+
+  const parts = [`Driver edit note: ${reason}`];
+
+  if (String(record.lastEditSummary ?? "").trim()) {
+    parts.push(record.lastEditSummary);
+  }
+  if (record.lastEditedAt) {
+    parts.push(formatStamp(record.lastEditedAt));
+  }
+
+  return parts.join(" / ");
+};
 
 const createAuditEvent = ({
   id,
@@ -2434,13 +3043,6 @@ const deriveSnapshot = (source) => {
   const verifiedIncome = transactions.filter(
     (record) => record.type === "income" && record.status === "verified",
   );
-  const countedIncome = transactions.filter(
-    (record) =>
-      record.type === "income" &&
-      ["counted", "verified", "banked"].includes(record.status) &&
-      record.actualCashReceived != null,
-  );
-  const activeCountedIncome = countedIncome.filter((record) => record.status !== "banked");
   const settledIncome = transactions.filter(
     (record) =>
       record.type === "income" &&
@@ -2455,13 +3057,6 @@ const deriveSnapshot = (source) => {
   const operationalExpenses = allExpenses.filter(
     (record) => record.expenseKind === "operational",
   );
-  const bankableCash =
-    sumBy(verifiedIncome, getIncomeCashValue) -
-    sumBy(
-      verifiedExpenses.filter((record) => record.cashExpense),
-      (record) => record.amount,
-    );
-
   const enrichedVehicles = baseVehicles.map((vehicle) => {
     const vehicleIncome = settledIncome.filter((record) => record.vehicleId === vehicle.id);
     const vehicleExpenses = assetExpenses.filter(
@@ -2488,10 +3083,32 @@ const deriveSnapshot = (source) => {
       getExpectedOpeningOdo(transactions, enrichedVehicles, vehicle.id),
     ]),
   );
+  const driverSummarySource = {
+    ...source,
+    vehicles: enrichedVehicles,
+    financeTransactions: transactions,
+    dailyCashUps: Array.isArray(source.dailyCashUps) ? source.dailyCashUps : [],
+  };
+  const driverCashUpQueue = buildDriverCashUpQueue(driverSummarySource);
+  const driverCashUpCoverageKeys = new Set(
+    driverCashUpQueue.map((entry) => getCashUpCoverageKey(entry)).filter(Boolean),
+  );
+  const activeDriverCashVerificationQueue = driverCashUpQueue.filter(
+    (entry) => entry.incomeCount > 0 && entry.workflowStatus !== "banked",
+  );
+  const standaloneVerificationQueue = activeIncomeBatch
+    .filter((record) => {
+      const coverageKey = getFinanceRecordCashUpCoverageKey(record);
 
-  const verificationQueue = activeIncomeBatch
+      if (isDriverCreatedFinanceRecord(record)) {
+        return false;
+      }
+
+      return !(coverageKey && driverCashUpCoverageKeys.has(coverageKey));
+    })
     .map((record) => {
       const assignedDriver =
+        getFinanceRecordDriverName(record) ??
         enrichedVehicles.find((vehicle) => vehicle.id === record.vehicleId)?.assignedDriver ??
         drivers.find((driver) => driver.staffId === resolvedDriverId)?.name ??
         source.driverTerminal?.activeDriver ??
@@ -2512,6 +3129,7 @@ const deriveSnapshot = (source) => {
 
       return {
         id: record.id,
+        queueType: "income",
         driver: assignedDriver,
         route:
           record.incomeKind === "special"
@@ -2527,9 +3145,53 @@ const deriveSnapshot = (source) => {
         shortage,
         gapKm,
         status: deriveQueueStatus(record, shortage, gapKm),
+        workflowStatus: normalizeCashUpWorkflowStatus(record.status) ?? "pending",
       };
-    })
-    .slice(0, 8);
+    });
+  const verificationQueue = [...activeDriverCashVerificationQueue, ...standaloneVerificationQueue].sort(
+    (left, right) =>
+      new Date(
+        right.verifiedAt ??
+          right.countedAt ??
+          right.checkedAt ??
+          right.updatedAt ??
+          right.timestamp ??
+          0,
+      ) -
+      new Date(
+        left.verifiedAt ??
+          left.countedAt ??
+          left.checkedAt ??
+          left.updatedAt ??
+          left.timestamp ??
+          0,
+      ),
+  );
+  const verifiedDriverCashUps = driverCashUpQueue.filter(
+    (entry) => entry.workflowStatus === "verified",
+  );
+  const verifiedDriverCashUpTransactionIds = new Set(
+    verifiedDriverCashUps.flatMap((entry) => buildCashUpTransactionIds(entry)),
+  );
+  const verifiedStandaloneIncome = verifiedIncome.filter(
+    (record) => !verifiedDriverCashUpTransactionIds.has(record.id),
+  );
+  const verifiedStandaloneCashExpenses = verifiedExpenses.filter(
+    (record) => record.cashExpense && !verifiedDriverCashUpTransactionIds.has(record.id),
+  );
+  const verifiedTakings =
+    sumBy(verifiedDriverCashUps, (entry) => entry.totalIncome) +
+    sumBy(verifiedStandaloneIncome, getIncomeCashValue);
+  const verifiedCashExpenses =
+    sumBy(verifiedDriverCashUps, (entry) => entry.cashExpenses) +
+    sumBy(verifiedStandaloneCashExpenses, (record) => record.amount);
+  const bankableCash =
+    sumBy(
+      verifiedDriverCashUps,
+      (entry) => entry.actualCashReceived ?? entry.expectedCashIn,
+    ) +
+    sumBy(verifiedStandaloneIncome, getIncomeCashValue) -
+    sumBy(verifiedStandaloneCashExpenses, (record) => record.amount);
 
   const standardIncome = activeIncomeBatch.filter(
     (record) => record.type === "income" && record.incomeKind === "standard",
@@ -2560,11 +3222,25 @@ const deriveSnapshot = (source) => {
         return groups;
       }, {}),
     );
-  const lockableTransactions = transactions.filter((record) => record.status === "verified");
+  const lockableVerificationQueue = verificationQueue.filter(
+    (entry) => entry.workflowStatus === "verified",
+  );
   const nextReference = buildDepositReference(deposits.length + 1);
   const batchReference =
-    lockableTransactions.length > 0 ? nextReference : deposits[0]?.reference ?? nextReference;
-  const latestVerifiedTimestamp = lockableTransactions[0]?.timestamp;
+    lockableVerificationQueue.length > 0 ? nextReference : deposits[0]?.reference ?? nextReference;
+  const latestVerifiedTimestamp =
+    lockableVerificationQueue
+      .map(
+        (entry) =>
+          entry.verifiedAt ??
+          entry.countedAt ??
+          entry.checkedAt ??
+          entry.updatedAt ??
+          entry.timestamp ??
+          null,
+      )
+      .filter(Boolean)
+      .sort((left, right) => new Date(right) - new Date(left))[0] ?? null;
   const serviceSchedule = enrichedVehicles
     .filter((vehicle) => vehicle.status !== "archived")
     .sort((left, right) => left.serviceDueKm - right.serviceDueKm)
@@ -2654,6 +3330,12 @@ const deriveSnapshot = (source) => {
   const linkedVehicleRecords = enrichedVehicles.filter(
     (vehicle) => vehicle.assignedDriverId === activeDriver?.staffId,
   );
+  const driverDayCashSummary = buildDriverDayCashSummary(driverSummarySource, {
+    driverStaffId: activeDriver?.staffId ?? null,
+  });
+  const pendingDriverCashUps = driverCashUpQueue.filter(
+    (entry) => entry.workflowStatus !== "banked",
+  );
   const assignedVehicle =
     linkedVehicleRecords.find((vehicle) => vehicle.id === resolvedVehicleId) ??
     linkedVehicleRecords[0] ??
@@ -2691,6 +3373,7 @@ const deriveSnapshot = (source) => {
       shortcuts: Array.from(
         new Set([...DRIVER_SHORTCUTS, ...(source.driverTerminal?.shortcuts ?? [])]),
       ),
+      dayCashSummary: driverDayCashSummary,
       linkedVehicleIds: linkedVehicleRecords.map((vehicle) => vehicle.id),
       linkedVehicles: linkedVehicleRecords.map((vehicle) => ({
         id: vehicle.id,
@@ -2707,20 +3390,21 @@ const deriveSnapshot = (source) => {
         (record) => record.amountClaimed ?? record.amount,
       ),
       todayCounted: sumBy(
-        activeCountedIncome,
-        (record) => record.actualCashReceived,
+        verificationQueue.filter((entry) =>
+          ["counted", "verified"].includes(entry.workflowStatus),
+        ),
+        (entry) => entry.counted,
       ),
       pendingCashInSafe: bankableCash,
-      verifiedToday: verifiedIncome.length,
-      shiftsAwaitingVerification: transactions.filter(
-        (record) =>
-          record.type === "income" && !["verified", "banked"].includes(record.status),
+      verifiedToday: verificationQueue.filter((entry) => entry.workflowStatus === "verified").length,
+      shiftsAwaitingVerification: verificationQueue.length,
+      pendingDriverCashUps,
+      expectedCashInHeadsUp: sumBy(pendingDriverCashUps, (entry) => entry.expectedCashIn),
+      handoversAwaitingAdmin: verificationQueue.filter(
+        (entry) => entry.workflowStatus === "pending",
       ).length,
-      handoversAwaitingAdmin: transactions.filter(
-        (record) => record.type === "income" && record.status === "pending",
-      ).length,
-      checksAwaitingManager: transactions.filter(
-        (record) => record.type === "income" && record.status === "counted",
+      checksAwaitingManager: verificationQueue.filter(
+        (entry) => entry.workflowStatus === "counted",
       ).length,
       globalFleetProfit:
         sumBy(settledIncome, getIncomeCashValue) - sumBy(settledExpenses, (record) => record.amount),
@@ -2750,21 +3434,18 @@ const deriveSnapshot = (source) => {
       bankingBatch: {
         ...source.finance?.bankingBatch,
         reference: batchReference,
-        verifiedTakings: sumBy(verifiedIncome, getIncomeCashValue),
-        cashExpenses: sumBy(
-          verifiedExpenses.filter((record) => record.cashExpense),
-          (record) => record.amount,
-        ),
+        verifiedTakings,
+        cashExpenses: verifiedCashExpenses,
         depositAmount: bankableCash,
         depositSlip: {
           generatedAt:
-            lockableTransactions.length > 0
+            lockableVerificationQueue.length > 0
               ? formatStamp(latestVerifiedTimestamp)
               : deposits[0]?.timestamp
                 ? formatStamp(deposits[0].timestamp)
                 : "Ready to lock",
           teller: source.finance?.bankingBatch?.depositSlip?.teller ?? "Bank teller pending",
-          recordsLocked: lockableTransactions.length,
+          recordsLocked: lockableVerificationQueue.length,
         },
       },
     },
@@ -2793,6 +3474,7 @@ const createStandardDraft = (vehicleId, openingOdo, route = "") =>
     openingOdo: openingOdo != null ? String(openingOdo) : "",
     closingOdo: "",
     amountClaimed: "",
+    editReason: "",
   });
 
 const getStandardDraftValidationError = (draft) => {
@@ -2839,12 +3521,14 @@ const getStandardDraftValidationError = (draft) => {
 
   const tripLogbook = Array.isArray(draft.tripLogbook) ? draft.tripLogbook : [];
   if (tripLogbook.length === 0) {
-    return "Add at least one passenger trip to the daily logbook.";
+    return "Add at least one trip to the daily logbook.";
   }
 
   for (const [index, entry] of tripLogbook.entries()) {
     const fromLocation = String(entry?.fromLocation ?? "").trim();
     const toLocation = String(entry?.toLocation ?? "").trim();
+    const passengerValue = String(entry?.passengerCount ?? "").trim();
+    const amountValue = String(entry?.amountCollected ?? "").trim();
     const passengerCount = Number(entry?.passengerCount);
     const amountCollected = Number(entry?.amountCollected);
 
@@ -2854,16 +3538,18 @@ const getStandardDraftValidationError = (draft) => {
     if (fromLocation.toLowerCase() === toLocation.toLowerCase()) {
       return `Trip ${index + 1} must use two different stops.`;
     }
-    if (!Number.isInteger(passengerCount) || passengerCount <= 0) {
+    if (!passengerValue) {
       return `Enter the passenger count for trip ${index + 1}.`;
     }
-    if (!Number.isFinite(amountCollected) || amountCollected <= 0) {
+    if (!Number.isInteger(passengerCount) || passengerCount < 0) {
+      return `Passenger count for trip ${index + 1} must be zero or more.`;
+    }
+    if (!amountValue) {
       return `Enter the amount collected for trip ${index + 1}.`;
     }
-  }
-
-  if (getDailyTripLogbookTotals(tripLogbook).totalAmount <= 0) {
-    return "The daily trip total must be greater than zero.";
+    if (!Number.isFinite(amountCollected) || amountCollected < 0) {
+      return `Amount collected for trip ${index + 1} must be zero or more.`;
+    }
   }
 
   return null;
@@ -2881,7 +3567,13 @@ const createSpecialDraft = (vehicleId) => ({
   fuelOilCost: "0",
   repairMaintenanceCost: "0",
   amount: "",
+  editReason: "",
 });
+
+const getDriverEditReasonError = (draft, label) =>
+  draft?.id && !String(draft?.editReason ?? "").trim()
+    ? `Add a note explaining why you are updating this ${label}.`
+    : null;
 
 const getSpecialDraftValidationError = (draft) => {
   if (!draft.vehicleId) {
@@ -2990,6 +3682,7 @@ const createExpenseDraft = (expenseKind, vehicleId, expenseCatalog = null) => {
     vehicleId: vehicleId ?? "",
     amount: "",
     cashExpense: true,
+    editReason: "",
   };
 };
 
@@ -4519,6 +5212,20 @@ function App() {
       const now = new Date().toISOString();
       const actorId = resolveCurrentActorId(current);
       const isUpdate = Boolean(existing);
+      const driverEditReason =
+        isUpdate && activeRole === "Driver" ? String(draft.editReason ?? "").trim() : "";
+      const driverStaffId =
+        activeRole === "Driver"
+          ? String(current.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null
+          : String(existing?.driverStaffId ?? "").trim() || null;
+      const driverName =
+        activeRole === "Driver"
+          ? String(
+              current.driverTerminal?.activeDriver ??
+                current.drivers.find((driver) => driver.staffId === driverStaffId)?.name ??
+                "",
+            ).trim() || null
+          : String(existing?.driverName ?? "").trim() || null;
 
       if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
         result = { ok: false, error: getModuleAccessErrorMessage("finance") };
@@ -4526,6 +5233,13 @@ function App() {
       }
       if (existing?.status === "banked") {
         result = { ok: false, error: "Deposited records can no longer be changed." };
+        return current;
+      }
+      if (isUpdate && activeRole === "Driver" && !driverEditReason) {
+        result = {
+          ok: false,
+          error: "Add a note explaining why you are updating this daily taking.",
+        };
         return current;
       }
       if (!vehicle) {
@@ -4554,7 +5268,7 @@ function App() {
       }
 
       if (tripLogbook.length === 0) {
-        result = { ok: false, error: "Add at least one passenger trip to the daily logbook." };
+        result = { ok: false, error: "Add at least one trip to the daily logbook." };
         return current;
       }
 
@@ -4563,6 +5277,8 @@ function App() {
         const normalizedEntry = createDailyTripLogEntry(draft.route ?? vehicle.route, entry);
         const fromLocation = String(normalizedEntry.fromLocation ?? "").trim();
         const toLocation = String(normalizedEntry.toLocation ?? "").trim();
+        const passengerValue = String(entry?.passengerCount ?? "").trim();
+        const amountValue = String(entry?.amountCollected ?? "").trim();
         const passengerCount = Number(entry?.passengerCount);
         const amountCollected = Number(entry?.amountCollected);
 
@@ -4574,12 +5290,26 @@ function App() {
           result = { ok: false, error: `Trip ${index + 1} must use two different stops.` };
           return current;
         }
-        if (!Number.isInteger(passengerCount) || passengerCount <= 0) {
+        if (!passengerValue) {
           result = { ok: false, error: `Enter the passenger count for trip ${index + 1}.` };
           return current;
         }
-        if (!Number.isFinite(amountCollected) || amountCollected <= 0) {
+        if (!Number.isInteger(passengerCount) || passengerCount < 0) {
+          result = {
+            ok: false,
+            error: `Passenger count for trip ${index + 1} must be zero or more.`,
+          };
+          return current;
+        }
+        if (!amountValue) {
           result = { ok: false, error: `Enter the amount collected for trip ${index + 1}.` };
+          return current;
+        }
+        if (!Number.isFinite(amountCollected) || amountCollected < 0) {
+          result = {
+            ok: false,
+            error: `Amount collected for trip ${index + 1} must be zero or more.`,
+          };
           return current;
         }
 
@@ -4599,10 +5329,6 @@ function App() {
 
       const tripLogTotals = getDailyTripLogbookTotals(normalizedTripLogbook);
       const amountClaimed = tripLogTotals.totalAmount;
-      if (amountClaimed <= 0) {
-        result = { ok: false, error: "The daily trip total must be greater than zero." };
-        return current;
-      }
 
       const expectedOpening = getExpectedOpeningOdo(
         current.financeTransactions ?? [],
@@ -4623,7 +5349,7 @@ function App() {
         dayEndOdometer: draft.dayEndOdometer ?? existing?.dayEndOdometer ?? closingOdo,
         notes: draft.notes ?? existing?.notes,
       });
-      const nextRecord = {
+      const baseNextRecord = {
         ...existing,
         id: draft.id ?? createRecordId("txn-inc"),
         type: "income",
@@ -4644,6 +5370,8 @@ function App() {
         amountClaimed,
         actualCashReceived: null,
         amount: amountClaimed,
+        driverStaffId,
+        driverName,
         discrepancy: openingOdo !== expectedOpening,
         isSpecial: false,
         status: "pending",
@@ -4658,6 +5386,18 @@ function App() {
         verifiedBy: null,
         verifiedByRole: null,
         depositId: null,
+      };
+      const driverEditTracking = buildDriverRecordEditTracking({
+        existingRecord: existing,
+        nextRecord: baseNextRecord,
+        reason: driverEditReason,
+        timestamp: now,
+        actorId,
+        actorRole: activeRole,
+      });
+      const nextRecord = {
+        ...baseNextRecord,
+        ...driverEditTracking.trackingFields,
       };
       const nextTransactions = draft.id
         ? current.financeTransactions.map((record) =>
@@ -4676,15 +5416,23 @@ function App() {
           title: `${isUpdate ? "Trip income updated" : "Trip income added"} / ${vehicle.registration}`,
           detail: `${vehicle.route} / ${tripLogTotals.tripCount} trips / ${tripLogTotals.totalPassengers} passengers / ${formatMoney(
             amountClaimed,
-          )}`,
+          )}${
+            driverEditTracking.editEntry
+              ? ` / Driver note: ${driverEditTracking.editEntry.reason} / ${driverEditTracking.editEntry.summary}`
+              : ""
+          }`,
         }),
       ]);
 
       result = {
         ok: true,
-        message: nextRecord.discrepancy
-          ? "Trip saved and added to the daily total, but the opening odometer does not match the last record."
-          : "Trip saved, added to the daily total, and waiting for admin cash hand-in.",
+        message: isUpdate
+          ? nextRecord.discrepancy
+            ? "Trip update saved and logged for owner review. The opening odometer still does not match the last record."
+            : "Trip update saved and logged for owner review."
+          : nextRecord.discrepancy
+            ? "Trip saved and added to the daily total, but the opening odometer does not match the last record."
+            : "Trip saved and added to the daily total. Use Checking to wrap up the day for cash-in.",
         nextOpeningOdo: closingOdo,
       };
 
@@ -4723,6 +5471,20 @@ function App() {
       const now = new Date().toISOString();
       const actorId = resolveCurrentActorId(current);
       const isUpdate = Boolean(existing);
+      const driverEditReason =
+        isUpdate && activeRole === "Driver" ? String(draft.editReason ?? "").trim() : "";
+      const driverStaffId =
+        activeRole === "Driver"
+          ? String(current.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null
+          : String(existing?.driverStaffId ?? "").trim() || null;
+      const driverName =
+        activeRole === "Driver"
+          ? String(
+              current.driverTerminal?.activeDriver ??
+                current.drivers.find((driver) => driver.staffId === driverStaffId)?.name ??
+                "",
+            ).trim() || null
+          : String(existing?.driverName ?? "").trim() || null;
 
       if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
         result = { ok: false, error: getModuleAccessErrorMessage("finance") };
@@ -4730,6 +5492,13 @@ function App() {
       }
       if (existing?.status === "banked") {
         result = { ok: false, error: "Deposited records can no longer be changed." };
+        return current;
+      }
+      if (isUpdate && activeRole === "Driver" && !driverEditReason) {
+        result = {
+          ok: false,
+          error: "Add a note explaining why you are updating this extra trip.",
+        };
         return current;
       }
       if (!vehicle) {
@@ -4774,7 +5543,7 @@ function App() {
         kmComputed: draft.kmComputed ?? existing?.kmComputed ?? businessKm,
         tripDurationMin: draft.tripDurationMin ?? existing?.tripDurationMin,
       });
-      const nextRecord = {
+      const baseNextRecord = {
         ...existing,
         id: draft.id ?? createRecordId("txn-sp"),
         type: "income",
@@ -4799,6 +5568,8 @@ function App() {
         amount,
         amountClaimed: amount,
         actualCashReceived: null,
+        driverStaffId,
+        driverName,
         discrepancy: false,
         isSpecial: true,
         status: "pending",
@@ -4813,6 +5584,18 @@ function App() {
         verifiedBy: null,
         verifiedByRole: null,
         depositId: null,
+      };
+      const driverEditTracking = buildDriverRecordEditTracking({
+        existingRecord: existing,
+        nextRecord: baseNextRecord,
+        reason: driverEditReason,
+        timestamp: now,
+        actorId,
+        actorRole: activeRole,
+      });
+      const nextRecord = {
+        ...baseNextRecord,
+        ...driverEditTracking.trackingFields,
       };
       const nextTransactions = draft.id
         ? current.financeTransactions.map((record) =>
@@ -4831,13 +5614,19 @@ function App() {
           }`,
           detail: `${formatTripRoute(nextRecord)} / ${travelReason} / ${businessKm.toLocaleString()} km / ${formatMoney(
             amount,
-          )}`,
+          )}${
+            driverEditTracking.editEntry
+              ? ` / Driver note: ${driverEditTracking.editEntry.reason} / ${driverEditTracking.editEntry.summary}`
+              : ""
+          }`,
         }),
       ]);
 
       result = {
         ok: true,
-        message: "Extra trip saved, added to the daily total, and waiting for admin cash hand-in.",
+        message: isUpdate
+          ? "Extra trip update saved and logged for owner review."
+          : "Extra trip saved and added to the daily total. Use Checking to wrap up the day for cash-in.",
       };
 
       return {
@@ -4874,6 +5663,20 @@ function App() {
       const reference = draft.reference?.trim() ?? "";
       const actorId = resolveCurrentActorId(current);
       const isUpdate = Boolean(existing);
+      const driverEditReason =
+        isUpdate && activeRole === "Driver" ? String(draft.editReason ?? "").trim() : "";
+      const driverStaffId =
+        activeRole === "Driver"
+          ? String(current.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null
+          : String(existing?.driverStaffId ?? "").trim() || null;
+      const driverName =
+        activeRole === "Driver"
+          ? String(
+              current.driverTerminal?.activeDriver ??
+                current.drivers.find((driver) => driver.staffId === driverStaffId)?.name ??
+                "",
+            ).trim() || null
+          : String(existing?.driverName ?? "").trim() || null;
 
       if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
         result = { ok: false, error: getModuleAccessErrorMessage("finance") };
@@ -4881,6 +5684,13 @@ function App() {
       }
       if (existing?.status === "banked") {
         result = { ok: false, error: "Deposited records can no longer be changed." };
+        return current;
+      }
+      if (isUpdate && activeRole === "Driver" && !driverEditReason) {
+        result = {
+          ok: false,
+          error: "Add a note explaining why you are updating this expense.",
+        };
         return current;
       }
       if (!draft.category?.trim()) {
@@ -4904,7 +5714,7 @@ function App() {
         return current;
       }
 
-      const nextRecord = {
+      const baseNextRecord = {
         ...existing,
         id: draft.id ?? createRecordId("txn-exp"),
         type: "expense",
@@ -4917,6 +5727,8 @@ function App() {
         vehicle: expenseKind === "asset" ? vehicle.registration : "General",
         amount,
         cashExpense: Boolean(draft.cashExpense),
+        driverStaffId,
+        driverName,
         status,
         timestamp: createTimestampFromDateInput(expenseDate, existing?.timestamp ?? now),
         createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
@@ -4926,6 +5738,18 @@ function App() {
         updatedBy: isUpdate ? actorId : null,
         updatedByRole: isUpdate ? activeRole : null,
         depositId: null,
+      };
+      const driverEditTracking = buildDriverRecordEditTracking({
+        existingRecord: existing,
+        nextRecord: baseNextRecord,
+        reason: driverEditReason,
+        timestamp: now,
+        actorId,
+        actorRole: activeRole,
+      });
+      const nextRecord = {
+        ...baseNextRecord,
+        ...driverEditTracking.trackingFields,
       };
       const nextTransactions = draft.id
         ? current.financeTransactions.map((record) =>
@@ -4942,14 +5766,19 @@ function App() {
           title: `${isUpdate ? "Expense updated" : "Expense added"} / ${nextRecord.category}`,
           detail: `${nextRecord.description} / ${formatMoney(amount)}${
             nextRecord.reference ? ` / Receipt ${nextRecord.reference}` : ""
+          }${
+            driverEditTracking.editEntry
+              ? ` / Driver note: ${driverEditTracking.editEntry.reason} / ${driverEditTracking.editEntry.summary}`
+              : ""
           }`,
         }),
       ]);
 
       result = {
         ok: true,
-        message:
-          status === "verified"
+        message: isUpdate && activeRole === "Driver"
+          ? "Expense update saved and logged for owner review."
+          : status === "verified"
             ? "Expense saved and checked."
             : "Expense saved and sent to a manager for review.",
       };
@@ -4962,6 +5791,135 @@ function App() {
     });
 
     return result;
+  };
+
+  const submitDriverCashUp = () => {
+    if (!snapshot) {
+      return { ok: false, error: "Unable to send the day checking." };
+    }
+    if (activeRole !== "Driver") {
+      return { ok: false, error: "Only a driver can wrap up the day with checking." };
+    }
+
+    const actorId = resolveCurrentActorId(snapshot);
+    const derived = deriveSnapshot(snapshot);
+    const driverStaffId =
+      String(derived.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null;
+    const daySummary = buildDriverDayCashSummary(derived, { driverStaffId });
+
+    if (daySummary.entryCount === 0) {
+      return {
+        ok: false,
+        error: "Save at least one income or expense entry before sending checking for the day.",
+      };
+    }
+
+    const timestamp = new Date().toISOString();
+    const existingCashUp =
+      (snapshot.dailyCashUps ?? []).find(
+        (entry) =>
+          String(entry.driverStaffId ?? "").trim() === driverStaffId &&
+          String(entry.workDate ?? "").trim() === daySummary.workDate,
+      ) ?? null;
+    if (existingCashUp?.status === "banked") {
+      return { ok: false, error: "Deposited day checkings can no longer be updated." };
+    }
+
+    const nextCashUp = {
+      ...existingCashUp,
+      id: getDailyCashUpStableId(
+        {
+          ...existingCashUp,
+          driverStaffId,
+          workDate: daySummary.workDate,
+          checkedAt: timestamp,
+          createdAt: existingCashUp?.createdAt ?? timestamp,
+        },
+        createRecordId("cashup"),
+      ),
+      driverStaffId,
+      driverName:
+        daySummary.driverName ??
+        derived.driverTerminal?.activeDriver ??
+        "Driver",
+      workDate: daySummary.workDate,
+      vehicleId: derived.driverTerminal?.assignedVehicleId ?? null,
+      vehicle: derived.driverTerminal?.assignedVehicle ?? null,
+      route: derived.driverTerminal?.assignedRoute ?? null,
+      incomeRecordIds: daySummary.incomeRecords.map((record) => record.id),
+      expenseRecordIds: daySummary.expenseRecords.map((record) => record.id),
+      totalIncome: daySummary.totalIncome,
+      totalExpenses: daySummary.totalExpenses,
+      cashExpenses: daySummary.cashExpenses,
+      expectedCashIn: daySummary.expectedCashIn,
+      entryCount: daySummary.entryCount,
+      status: "pending",
+      actualCashReceived: null,
+      checkedAt: timestamp,
+      checkedBy: actorId,
+      checkedByRole: activeRole,
+      createdAt: existingCashUp?.createdAt ?? timestamp,
+      updatedAt: existingCashUp ? timestamp : null,
+      countedAt: null,
+      countedBy: null,
+      countedByRole: null,
+      verifiedAt: null,
+      verifiedBy: null,
+      verifiedByRole: null,
+      depositId: null,
+      bankedAt: null,
+    };
+    const nextCashUps = existingCashUp
+      ? (snapshot.dailyCashUps ?? []).map((entry) =>
+          entry.id === existingCashUp.id ? nextCashUp : entry,
+        )
+      : [nextCashUp, ...(snapshot.dailyCashUps ?? [])];
+    const nextTransactions = syncTransactionsForDriverCashUp(
+      snapshot.financeTransactions ?? [],
+      daySummary,
+      (record) => ({
+        ...record,
+        status: "pending",
+        actualCashReceived: null,
+        countedAt: null,
+        countedBy: null,
+        countedByRole: null,
+        verifiedAt: null,
+        verifiedBy: null,
+        verifiedByRole: null,
+        depositId: null,
+        bankedAt: null,
+      }),
+    );
+    const nextAuditTrail = appendAuditTrail(snapshot.auditTrail, [
+      buildCurrentAuditEvent(snapshot, {
+        timestamp,
+        scope: "finance",
+        action: existingCashUp ? "update" : "create",
+        entityType: "driver-checking",
+        entityId: nextCashUp.id,
+        title: `${existingCashUp ? "Checking updated" : "Checking submitted"} / ${
+          nextCashUp.driverName
+        }`,
+        detail: `${nextCashUp.workDate} / ${formatMoney(nextCashUp.totalIncome)} income / ${formatMoney(
+          nextCashUp.totalExpenses,
+        )} expenses / ${formatMoney(nextCashUp.expectedCashIn)} expected cash in`,
+      }),
+    ]);
+
+    setSnapshot({
+      ...snapshot,
+      financeTransactions: nextTransactions,
+      dailyCashUps: nextCashUps,
+      auditTrail: nextAuditTrail,
+    });
+
+    return {
+      ok: true,
+      message: existingCashUp
+        ? "Checking updated. Management can now record one day hand-in from the latest total."
+        : "Checking sent. Management can now record one day hand-in for this shift.",
+    };
   };
 
   const saveExpensePreset = (draft) => {
@@ -5060,9 +6018,176 @@ function App() {
       }
 
       const amount = Number(actualCashReceived);
-      const target = current.financeTransactions.find((record) => record.id === transactionId);
       const now = new Date().toISOString();
       const actorId = resolveCurrentActorId(current);
+      const cashUpTarget =
+        (current.dailyCashUps ?? []).find(
+          (entry) => getDailyCashUpStableId(entry) === transactionId,
+        ) ?? null;
+
+      if (cashUpTarget) {
+        const derived = deriveSnapshot(current);
+        const daySummary = buildDriverDayCashSummary(derived, {
+          driverStaffId: String(cashUpTarget.driverStaffId ?? "").trim() || null,
+          workDate: String(cashUpTarget.workDate ?? "").trim() || null,
+        });
+        const workflowStatus = getDriverCashUpWorkflowStatus(cashUpTarget, daySummary);
+
+        if (workflowStatus === "banked") {
+          result = { ok: false, error: "Deposited day checkings can no longer be changed." };
+          return current;
+        }
+
+        if (workflowStatus === "pending") {
+          if (!canRecordCashHandoverForRole(activeRole)) {
+            result = {
+              ok: false,
+              error: "Administrator must record the day hand-in before manager verification.",
+            };
+            return current;
+          }
+          if (!Number.isFinite(amount) || amount < 0) {
+            result = {
+              ok: false,
+              error: "Enter the cash received before recording the day hand-in.",
+            };
+            return current;
+          }
+
+          const nextCashUp = {
+            ...cashUpTarget,
+            status: "counted",
+            actualCashReceived: amount,
+            countedAt: now,
+            countedBy: actorId,
+            countedByRole: activeRole,
+            verifiedAt: null,
+            verifiedBy: null,
+            verifiedByRole: null,
+          };
+          const nextTransactions = syncTransactionsForDriverCashUp(
+            current.financeTransactions ?? [],
+            daySummary,
+            (record) => ({
+              ...record,
+              status: "counted",
+              countedAt: now,
+              countedBy: actorId,
+              countedByRole: activeRole,
+              verifiedAt: null,
+              verifiedBy: null,
+              verifiedByRole: null,
+              depositId: null,
+              bankedAt: null,
+            }),
+          );
+          const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+            buildCurrentAuditEvent(current, {
+              timestamp: now,
+              scope: "finance",
+              action: "update",
+              entityType: "driver-checking",
+              entityId: transactionId,
+              title: `Day hand-in recorded / ${cashUpTarget.driverName ?? "Driver"}`,
+              detail: `${cashUpTarget.workDate} / ${formatMoney(amount)} handed in to admin`,
+            }),
+          ]);
+
+          result = {
+            ok: true,
+            message: "Day checking recorded and waiting for manager verification.",
+            shortage: Math.max(Number(daySummary.expectedCashIn ?? 0) - amount, 0),
+          };
+
+          return {
+            ...current,
+            dailyCashUps: (current.dailyCashUps ?? []).map((entry) =>
+              entry.id === transactionId ? nextCashUp : entry,
+            ),
+            financeTransactions: nextTransactions,
+            auditTrail: nextAuditTrail,
+          };
+        }
+
+        if (workflowStatus === "counted") {
+          if (!canVerifyCashCheckForRole(activeRole)) {
+            result = {
+              ok: false,
+              error: "Manager must verify the admin day checking before banking.",
+            };
+            return current;
+          }
+
+          const finalAmount =
+            Number.isFinite(amount) && amount >= 0
+              ? amount
+              : Number(cashUpTarget.actualCashReceived ?? NaN);
+          if (!Number.isFinite(finalAmount) || finalAmount < 0) {
+            result = {
+              ok: false,
+              error: "Administrator must record the day hand-in before manager verification.",
+            };
+            return current;
+          }
+
+          const nextCashUp = {
+            ...cashUpTarget,
+            status: "verified",
+            actualCashReceived: finalAmount,
+            verifiedAt: now,
+            verifiedBy: actorId,
+            verifiedByRole: activeRole,
+          };
+          const nextTransactions = syncTransactionsForDriverCashUp(
+            current.financeTransactions ?? [],
+            daySummary,
+            (record) => ({
+              ...record,
+              status: "verified",
+              verifiedAt: now,
+              verifiedBy: actorId,
+              verifiedByRole: activeRole,
+            }),
+          );
+          const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+            buildCurrentAuditEvent(current, {
+              timestamp: now,
+              scope: "finance",
+              action: "verify",
+              entityType: "driver-checking",
+              entityId: transactionId,
+              title: `Day checking verified / ${cashUpTarget.driverName ?? "Driver"}`,
+              detail: `${cashUpTarget.workDate} / ${formatMoney(finalAmount)} manager checked`,
+            }),
+          ]);
+
+          result = {
+            ok: true,
+            message: "Day checking verified and added to cash ready for banking.",
+            shortage: Math.max(Number(daySummary.expectedCashIn ?? 0) - finalAmount, 0),
+          };
+
+          return {
+            ...current,
+            dailyCashUps: (current.dailyCashUps ?? []).map((entry) =>
+              entry.id === transactionId ? nextCashUp : entry,
+            ),
+            financeTransactions: nextTransactions,
+            auditTrail: nextAuditTrail,
+          };
+        }
+
+        result = {
+          ok: false,
+          error:
+            workflowStatus === "verified"
+              ? "This day checking has already been verified."
+              : "This day checking is not ready for another cash action.",
+        };
+        return current;
+      }
+
+      const target = current.financeTransactions.find((record) => record.id === transactionId);
 
       if (!target || target.type !== "income") {
         result = { ok: false, error: "Income record not found." };
@@ -5267,15 +6392,39 @@ function App() {
         return current;
       }
 
-      const lockableTransactions = current.financeTransactions.filter(
-        (record) => record.status === "verified",
-      );
-
       if (!hasModuleUpdateAccess(current, "finance")) {
         result = { ok: false, error: getModuleAccessErrorMessage("finance") };
         return current;
       }
-      if (lockableTransactions.length === 0) {
+      if (!canFinishDepositForRole(activeRole)) {
+        result = {
+          ok: false,
+          error: "Only the manager or owner can finalise a verified deposit batch.",
+        };
+        return current;
+      }
+      const derived = deriveSnapshot(current);
+      const driverCashUpQueue = buildDriverCashUpQueue({
+        ...derived,
+        vehicles: derived.vehicles,
+        financeTransactions: derived.financeTransactions,
+        dailyCashUps: Array.isArray(current.dailyCashUps) ? current.dailyCashUps : [],
+      });
+      const verifiedDriverCashUps = driverCashUpQueue.filter(
+        (entry) => entry.workflowStatus === "verified",
+      );
+      const verifiedDriverCashUpIds = new Set(
+        verifiedDriverCashUps.map((entry) => entry.id).filter(Boolean),
+      );
+      const verifiedDriverCashUpTransactionIds = new Set(
+        verifiedDriverCashUps.flatMap((entry) => buildCashUpTransactionIds(entry)),
+      );
+      const standaloneVerifiedTransactions = (current.financeTransactions ?? []).filter(
+        (record) => record.status === "verified" && !verifiedDriverCashUpTransactionIds.has(record.id),
+      );
+      const recordsLocked = verifiedDriverCashUps.length + standaloneVerifiedTransactions.length;
+
+      if (recordsLocked === 0) {
         return current;
       }
 
@@ -5283,25 +6432,45 @@ function App() {
       const actorId = resolveCurrentActorId(current);
       const depositId = `dep-${now.getTime()}`;
       const reference = buildDepositReference((current.deposits?.length ?? 0) + 1, now);
-      const verifiedTakings = sumBy(
-        lockableTransactions.filter((record) => record.type === "income"),
-        getIncomeCashValue,
-      );
+      const verifiedTakings =
+        sumBy(verifiedDriverCashUps, (entry) => entry.totalIncome) +
+        sumBy(
+          standaloneVerifiedTransactions.filter((record) => record.type === "income"),
+          getIncomeCashValue,
+        );
       const cashExpenses = sumBy(
-        lockableTransactions.filter(
+        standaloneVerifiedTransactions.filter(
           (record) => record.type === "expense" && record.cashExpense,
         ),
         (record) => record.amount,
-      );
+      ) + sumBy(verifiedDriverCashUps, (entry) => entry.cashExpenses);
       const depositRecord = {
         depositId,
         reference,
         timestamp: now.toISOString(),
-        recordsLocked: lockableTransactions.length,
+        recordsLocked,
         verifiedTakings,
         cashExpenses,
-        depositAmount: verifiedTakings - cashExpenses,
-        transactionIds: lockableTransactions.map((record) => record.id),
+        depositAmount:
+          sumBy(
+            verifiedDriverCashUps,
+            (entry) => entry.actualCashReceived ?? entry.expectedCashIn,
+          ) +
+          sumBy(
+            standaloneVerifiedTransactions.filter((record) => record.type === "income"),
+            getIncomeCashValue,
+          ) -
+          sumBy(
+            standaloneVerifiedTransactions.filter(
+              (record) => record.type === "expense" && record.cashExpense,
+            ),
+            (record) => record.amount,
+          ),
+        transactionIds: [
+          ...verifiedDriverCashUpTransactionIds,
+          ...standaloneVerifiedTransactions.map((record) => record.id),
+        ],
+        cashUpIds: [...verifiedDriverCashUpIds],
         lockedBy: actorId,
         lockedByRole: activeRole,
       };
@@ -5314,23 +6483,31 @@ function App() {
           entityType: "deposit",
           entityId: depositId,
           title: `Deposit finished / ${reference}`,
-          detail: `${lockableTransactions.length} records / ${formatMoney(
-            depositRecord.depositAmount,
-          )}`,
+          detail: `${recordsLocked} records / ${formatMoney(depositRecord.depositAmount)}`,
         }),
       ]);
 
       result = {
         ok: true,
-        message: `${lockableTransactions.length} manager-checked records were added to ${reference}.`,
+        message: `${recordsLocked} manager-checked records were added to ${reference}.`,
         reference,
       };
 
       return {
         ...current,
         deposits: [depositRecord, ...(current.deposits ?? [])],
+        dailyCashUps: (current.dailyCashUps ?? []).map((entry) =>
+          verifiedDriverCashUpIds.has(entry.id)
+            ? {
+                ...entry,
+                status: "banked",
+                depositId,
+                bankedAt: timestamp,
+              }
+            : entry,
+        ),
         financeTransactions: current.financeTransactions.map((record) =>
-          record.status === "verified"
+          record.status === "verified" || verifiedDriverCashUpTransactionIds.has(record.id)
             ? {
                 ...record,
                 status: "banked",
@@ -5746,20 +6923,34 @@ function App() {
       const existingDriver =
         (current.drivers ?? []).find(
           (driver) => driver.staffId === String(draft.staffId ?? "").trim(),
-        ) ?? null;
+        ) ??
+        (current.drivers ?? []).find(
+          (driver) => normalizeEmailAddress(driver.email) === email,
+        ) ??
+        null;
       const currentUsers = getAppUsers(current);
+      const existingUserByEmail =
+        currentUsers.find((user) => normalizeEmailAddress(user.email) === email) ?? null;
+      const linkedDriverByUserEmail =
+        !existingDriver && existingUserByEmail?.staffId
+          ? (current.drivers ?? []).find((driver) => driver.staffId === existingUserByEmail.staffId) ??
+            null
+          : null;
+      const resolvedExistingDriver = existingDriver ?? linkedDriverByUserEmail;
       const existingUser =
         currentUsers.find(
           (user) =>
-            user.staffId === existingDriver?.staffId ||
-            normalizeEmailAddress(user.email) === normalizeEmailAddress(existingDriver?.email),
-        ) ?? null;
+            user.staffId === resolvedExistingDriver?.staffId ||
+            normalizeEmailAddress(user.email) === normalizeEmailAddress(resolvedExistingDriver?.email),
+        ) ??
+        existingUserByEmail ??
+        null;
 
       if (
         currentUsers.some(
           (user) =>
             normalizeEmailAddress(user.email) === email &&
-            user.staffId !== existingDriver?.staffId,
+            user.staffId !== resolvedExistingDriver?.staffId,
         )
       ) {
         result = {
@@ -5770,7 +6961,7 @@ function App() {
       }
 
       const accessPassword = String(draft.accessPassword ?? "").trim();
-      if (!existingDriver && !accessPassword) {
+      if (!resolvedExistingDriver && !accessPassword) {
         result = { ok: false, error: "Create a password for this driver before saving." };
         return current;
       }
@@ -5787,8 +6978,8 @@ function App() {
       const routeNames = selectedRoutes.map((route) => route.name);
       const primaryRoute = routeNames[0] ?? "";
       const nextDriver = {
-        ...existingDriver,
-        staffId: existingDriver?.staffId ?? (draft.staffId?.trim() || createRecordId("drv")),
+        ...resolvedExistingDriver,
+        staffId: resolvedExistingDriver?.staffId ?? (draft.staffId?.trim() || createRecordId("drv")),
         name: driverName,
         email,
         route: primaryRoute,
@@ -5796,21 +6987,21 @@ function App() {
         routeNames,
         primaryRouteId: selectedRouteIds[0] ?? null,
         shiftStatus: draft.shiftStatus ?? "Ready for dispatch",
-        avgShiftRevenue: existingDriver?.avgShiftRevenue ?? 0,
-        cashAccuracy: existingDriver?.cashAccuracy ?? 100,
+        avgShiftRevenue: resolvedExistingDriver?.avgShiftRevenue ?? 0,
+        cashAccuracy: resolvedExistingDriver?.cashAccuracy ?? 100,
         licenseNumber: String(draft.licenseNumber ?? "").trim() || null,
         licenseCode: String(draft.licenseCode ?? "").trim().toUpperCase() || null,
         licenseExpiryDate: draft.licenseExpiryDate || null,
         prdpNumber: String(draft.prdpNumber ?? "").trim() || null,
         prdpExpiryDate: draft.prdpExpiryDate || null,
-        accessPassword: accessPassword || existingDriver?.accessPassword || null,
+        accessPassword: accessPassword || resolvedExistingDriver?.accessPassword || null,
         role: "Driver",
-        createdAt: existingDriver?.createdAt ?? now,
-        createdBy: existingDriver?.createdBy ?? actorId,
-        createdByRole: existingDriver?.createdByRole ?? activeRole,
-        updatedAt: existingDriver ? now : null,
-        updatedBy: existingDriver ? actorId : null,
-        updatedByRole: existingDriver ? activeRole : null,
+        createdAt: resolvedExistingDriver?.createdAt ?? now,
+        createdBy: resolvedExistingDriver?.createdBy ?? actorId,
+        createdByRole: resolvedExistingDriver?.createdByRole ?? activeRole,
+        updatedAt: resolvedExistingDriver ? now : null,
+        updatedBy: resolvedExistingDriver ? actorId : null,
+        updatedByRole: resolvedExistingDriver ? activeRole : null,
       };
       const nextDriverUser = normalizeAppUser({
         ...existingUser,
@@ -5827,9 +7018,9 @@ function App() {
         updatedBy: existingUser ? actorId : null,
         updatedByRole: existingUser ? activeRole : null,
       });
-      const nextDrivers = existingDriver
+      const nextDrivers = resolvedExistingDriver
         ? (current.drivers ?? []).map((driver) =>
-            driver.staffId === existingDriver.staffId ? nextDriver : driver,
+            driver.staffId === resolvedExistingDriver.staffId ? nextDriver : driver,
           )
         : [nextDriver, ...(current.drivers ?? [])];
       const nextUsers = sortAppUsers(
@@ -5856,7 +7047,7 @@ function App() {
 
       result = {
         ok: true,
-        message: existingDriver
+        message: resolvedExistingDriver
           ? `${nextDriver.name} updated in the driver roster.`
           : `${nextDriver.name} added to the driver roster.`,
         staffId: nextDriver.staffId,
@@ -6398,6 +7589,7 @@ function App() {
               permissionControls={permissionControls}
               onNavigate={setActiveView}
               onShortcutAction={handleDriverShortcut}
+              onSubmitDriverCashUp={submitDriverCashUp}
               onSelectDriverVehicle={selectDriverVehicle}
               onRequestAdminModuleAccess={requestAdminModuleAccess}
               onReviewAdminModuleAccess={reviewAdminModuleAccess}
@@ -6445,6 +7637,7 @@ function App() {
               onSaveStandardIncome={saveStandardIncome}
               onSaveSpecialIncome={saveSpecialIncome}
               onSaveExpense={saveExpense}
+              onSubmitDriverCashUp={submitDriverCashUp}
               onSaveDriver={saveDriver}
               onAllocateDriverShift={allocateDriverShift}
               onSelectDriverVehicle={selectDriverVehicle}
@@ -6500,11 +7693,13 @@ function OverviewPanel({
   permissionControls,
   onNavigate,
   onShortcutAction,
+  onSubmitDriverCashUp,
   onSelectDriverVehicle,
   onRequestAdminModuleAccess,
   onReviewAdminModuleAccess,
   onSetAdminModuleAccess,
 }) {
+  const [driverCashFeedback, setDriverCashFeedback] = useState(null);
   const isDriver = activeRole === "Driver";
   const linkedVehicles = getDriverLinkedVehicles(snapshot);
   const linkedVehicleIds = new Set(linkedVehicles.map((vehicle) => vehicle.id));
@@ -6543,6 +7738,21 @@ function OverviewPanel({
     primary: entry.counted,
     secondary: entry.claimed,
   }));
+  const driverDayCashSummary =
+    snapshot.driverTerminal?.dayCashSummary ?? createEmptyDriverDayCashSummary();
+  const pendingDriverCashUps = snapshot.finance.pendingDriverCashUps ?? [];
+  const handleDriverCashUp = () => {
+    const response = onSubmitDriverCashUp?.();
+
+    if (!response) {
+      return;
+    }
+
+    setDriverCashFeedback({
+      tone: response.ok ? "success" : "danger",
+      message: response.message ?? response.error,
+    });
+  };
   const bankingSeries = [
     { label: "In", value: snapshot.finance.bankingBatch.verifiedTakings },
     { label: "Out", value: snapshot.finance.bankingBatch.cashExpenses },
@@ -6552,18 +7762,26 @@ function OverviewPanel({
   if (isDriver) {
     return (
       <div className="content-stack">
+        {driverCashFeedback && (
+          <div className="finance-feedback" data-tone={driverCashFeedback.tone}>
+            <span className="status-chip" data-tone={driverCashFeedback.tone}>
+              {driverCashFeedback.message}
+            </span>
+          </div>
+        )}
         <div className="analytics-grid overview-analytics">
           <InsightCard
-            title="Last shift"
-            metric={formatMoney(snapshot.driverTerminal.lastShift.revenue)}
-            meta={snapshot.driverTerminal.lastShift.status}
+            title="Expected cash in"
+            metric={formatMoney(driverDayCashSummary.expectedCashIn)}
+            meta={`${driverDayCashSummary.workDateLabel} / ${driverDayCashSummary.entryCount} entries`}
             icon={CheckSquare}
-            tone="success"
+            tone={driverDayCashSummary.expectedCashIn > 0 ? "success" : "info"}
           >
             <MiniBars
               items={[
-                { label: "Open", value: snapshot.driverTerminal.lastShift.openOdo },
-                { label: "Close", value: snapshot.driverTerminal.lastShift.closeOdo },
+                { label: "In", value: driverDayCashSummary.totalIncome },
+                { label: "Out", value: driverDayCashSummary.totalExpenses },
+                { label: "Cash", value: Math.abs(driverDayCashSummary.expectedCashIn) },
               ]}
               tone="success"
             />
@@ -6644,6 +7862,11 @@ function OverviewPanel({
           </article>
         )}
 
+        <DriverCashSummaryBoard
+          summary={driverDayCashSummary}
+          onSubmitCashUp={handleDriverCashUp}
+        />
+
         <div className="overview-board-grid">
           <article className="overview-board">
             <div className="overview-board-head">
@@ -6722,6 +7945,22 @@ function OverviewPanel({
         </InsightCard>
 
         <InsightCard
+          title="Expected cash in"
+          metric={formatMoney(snapshot.finance.expectedCashInHeadsUp)}
+          meta={`${pendingDriverCashUps.length} driver checking${pendingDriverCashUps.length === 1 ? "" : "s"}`}
+          icon={CheckSquare}
+          tone={pendingDriverCashUps.length > 0 ? "warning" : "success"}
+        >
+          <MiniBars
+            items={pendingDriverCashUps.slice(0, 4).map((entry, index) => ({
+              label: entry.driverName?.split(" ")[0] ?? `D${index + 1}`,
+              value: Math.abs(entry.expectedCashIn),
+            }))}
+            tone="warning"
+          />
+        </InsightCard>
+
+        <InsightCard
           title="Next bank deposit"
           metric={formatMoney(snapshot.finance.bankingBatch.depositAmount)}
           meta={snapshot.finance.bankingBatch.reference}
@@ -6765,6 +8004,37 @@ function OverviewPanel({
       </div>
 
       <div className="overview-board-grid">
+        <article className="overview-board">
+          <div className="overview-board-head">
+            <p className="eyebrow">Heads up</p>
+            <h3>Driver checking heads up</h3>
+          </div>
+          <div className="finance-ledger">
+            {pendingDriverCashUps.slice(0, 4).map((entry) => (
+              <article key={entry.id} className="ledger-row">
+                <div className="ledger-copy">
+                  <strong>{entry.driverName} / {entry.workDateLabel}</strong>
+                  <span>
+                    {entry.vehicle ?? "Vehicle pending"} / {entry.workflowLabel} / {entry.entryCount}{" "}
+                    entries
+                  </span>
+                </div>
+                <div className="ledger-meta">
+                  <span className="status-chip" data-tone={entry.workflowTone}>
+                    {entry.checkedAtLabel}
+                  </span>
+                  <strong>{formatMoney(entry.expectedCashIn)}</strong>
+                </div>
+              </article>
+            ))}
+            {pendingDriverCashUps.length === 0 && (
+              <p className="panel-note">
+                Drivers have not sent any day checking heads up yet.
+              </p>
+            )}
+          </div>
+        </article>
+
         <article className="overview-board">
           <div className="overview-board-head">
             <p className="eyebrow">Issues</p>
@@ -7096,15 +8366,10 @@ function FinancePanel({
   );
   const standardValidationError = getStandardDraftValidationError(standardDraft);
   const specialValidationError = getSpecialDraftValidationError(specialDraft);
-  const verificationRecords = incomeRecords
-    .filter((record) => record.status !== "banked")
-    .slice(0, 8);
-  const pendingVerificationCount = verificationRecords.filter(
-    (record) => record.status === "pending",
-  ).length;
+  const verificationRecords = snapshot.verificationQueue.slice(0, 8);
   const depositHistory = snapshot.deposits.slice(0, 3);
-  const lockableCount = snapshot.financeTransactions.filter(
-    (record) => record.status === "verified",
+  const lockableCount = snapshot.verificationQueue.filter(
+    (entry) => entry.workflowStatus === "verified",
   ).length;
   const canEditFinanceUpdates = canEditModuleUpdates(
     activeRole,
@@ -7114,6 +8379,7 @@ function FinancePanel({
   );
   const canRecordCashHandIn = canRecordCashHandoverForRole(activeRole);
   const canVerifyFinanceChecks = canVerifyCashCheckForRole(activeRole);
+  const canFinishDeposit = canFinishDepositForRole(activeRole) && canEditFinanceUpdates;
   const financeAccessStatus = getModuleAccessStatus(permissionControls.finance);
   const autoCheckFinanceEntries = activeRole !== "Driver" && canEditFinanceUpdates;
 
@@ -7904,6 +9170,9 @@ function FinancePanel({
                           ? formatTripLogMeta(record)
                           : formatDailyTripMeta(record)}
                       </span>
+                      {getRecordLastEditNote(record) && (
+                        <span>{getRecordLastEditNote(record)}</span>
+                      )}
                     </div>
                     <div className="ledger-meta">
                       <span className="status-chip" data-tone={getTransactionTone(record)}>
@@ -8333,6 +9602,9 @@ function FinancePanel({
                     <div className="ledger-copy">
                       <strong>{formatExpenseHeadline(record)}</strong>
                       <span>{formatExpenseMeta(record)}</span>
+                      {getRecordLastEditNote(record) && (
+                        <span>{getRecordLastEditNote(record)}</span>
+                      )}
                     </div>
                     <div className="ledger-meta">
                       <span className="status-chip" data-tone={getTransactionTone(record)}>
@@ -8413,8 +9685,8 @@ function FinancePanel({
               <h3>Admin hand-in and manager verification</h3>
             </div>
             <p className="panel-note">
-              Administrator records the cash handed in against the app total. Manager then verifies
-              the checking before the money moves into the ready-for-bank total.
+              Administrator records the driver day checking against the app total. Manager then
+              verifies the checking before the money moves into the ready-for-bank total.
             </p>
             <div className="finance-form-actions">
               <button
@@ -8468,14 +9740,15 @@ function FinancePanel({
                   </span>
                 </div>
                 <p className="panel-note">
-                  Cash ready for bank is manager-checked income minus checked cash expenses.
-                  Finishing the deposit includes {finance.bankingBatch.depositSlip.recordsLocked} records.
+                  Cash ready for bank uses manager-checked day hand-ins plus standalone verified
+                  income, less checked cash expenses. Finishing the deposit includes{" "}
+                  {finance.bankingBatch.depositSlip.recordsLocked} records.
                 </p>
                 <div className="finance-form-actions">
                   <button
                     type="button"
                     className="action-button primary"
-                    disabled={lockableCount === 0 || !canEditFinanceUpdates}
+                    disabled={lockableCount === 0 || !canFinishDeposit}
                     onClick={() => pushFeedback(onLockDeposit())}
                   >
                     Finish deposit
@@ -8486,7 +9759,7 @@ function FinancePanel({
 
             <Panel eyebrow="Deposit steps" title="Deposit history" icon={ArrowDownToLine}>
               <div className="flow-strip">
-                <FlowLane owner="Driver" title="Submit takings" tone="teal" />
+                <FlowLane owner="Driver" title="Send checking" tone="teal" />
                 <FlowLane owner="Admin" title="Record hand-in" tone="gold" />
                 <FlowLane owner="Manager" title="Verify checking" tone="navy" />
               </div>
@@ -8526,32 +9799,41 @@ function FinancePanel({
           <div ref={verificationQueueRef}>
             <Panel eyebrow="Cash queue" title="Hand-in and verification queue" icon={CheckSquare}>
               <div className="queue-grid">
-              {verificationRecords.map((record) => {
-                const entry = snapshot.verificationQueue.find((item) => item.id === record.id);
-                const queueEntry = entry ?? {
-                  claimed: Number(record.amountClaimed ?? record.amount ?? 0),
-                  counted: Number(record.actualCashReceived ?? 0),
-                  shortage: 0,
-                  gapKm: 0,
-                  status: "Manager checked",
-                  driver: "Driver",
-                };
+                {verificationRecords.map((record) => {
+                const isDriverCashUp = record.queueType === "cash-up";
+                const sourceRecord = isDriverCashUp
+                  ? null
+                  : incomeRecords.find((item) => item.id === record.id) ?? null;
+
+                if (!isDriverCashUp && !sourceRecord) {
+                  return null;
+                }
+
+                const queueEntry = record;
+                const workflowStatus =
+                  queueEntry.workflowStatus ??
+                  normalizeCashUpWorkflowStatus(sourceRecord?.status) ??
+                  "pending";
                 const canRecordHandIn =
-                  record.status === "pending" && canRecordCashHandIn;
+                  workflowStatus === "pending" && canRecordCashHandIn;
                 const canVerifyCheck =
-                  record.status === "counted" && canVerifyFinanceChecks;
+                  workflowStatus === "counted" && canVerifyFinanceChecks;
                 const canEditCashInput =
-                  canRecordHandIn || (activeRole === "Owner" && record.status === "counted");
+                  canRecordHandIn || (activeRole === "Owner" && workflowStatus === "counted");
                 const actionLabel = canRecordHandIn
                   ? "Record hand-in"
                   : canVerifyCheck
                     ? "Verify checking"
-                    : record.status === "pending"
+                    : workflowStatus === "pending"
                       ? "Waiting for admin hand-in"
-                      : record.status === "counted"
+                      : workflowStatus === "counted"
                         ? "Waiting for manager check"
                         : "Manager checked";
-                const dayAnalytics = !record.isSpecial ? record.dailyAnalytics ?? null : null;
+                const dayAnalytics = isDriverCashUp
+                  ? queueEntry.dayAnalytics ?? null
+                  : !sourceRecord.isSpecial
+                    ? sourceRecord.dailyAnalytics ?? null
+                    : null;
                 const hasDayAnalytics = Boolean(dayAnalytics);
                 const hasTripDurationAnalytics =
                   (dayAnalytics?.observedTripDurationCount ?? 0) > 0;
@@ -8563,15 +9845,22 @@ function FinancePanel({
                     <div className="queue-header">
                       <div>
                         <h3>
-                          {record.incomeKind === "special"
-                            ? `${record.vehicle} / ${formatTripRoute(record)}`
-                            : `${record.vehicle} / ${record.route}`}
+                          {isDriverCashUp
+                            ? `${queueEntry.vehicle ?? "Vehicle"} / ${queueEntry.workDateLabel}`
+                            : sourceRecord.incomeKind === "special"
+                              ? `${sourceRecord.vehicle} / ${formatTripRoute(sourceRecord)}`
+                              : `${sourceRecord.vehicle} / ${sourceRecord.route}`}
                         </h3>
                         <p>
-                          {queueEntry.driver} /{" "}
-                          {record.incomeKind === "special"
-                            ? formatTripLogMeta(record)
-                            : formatDailyTripMeta(record)}
+                          {isDriverCashUp
+                            ? `${queueEntry.driver} / ${queueEntry.route ?? "Day checking"} / ${
+                                queueEntry.entryCount
+                              } entries`
+                            : `${queueEntry.driver} / ${
+                                sourceRecord.incomeKind === "special"
+                                  ? formatTripLogMeta(sourceRecord)
+                                  : formatDailyTripMeta(sourceRecord)
+                              }`}
                         </p>
                       </div>
                       <span className="status-chip" data-tone={getQueueTone(queueEntry)}>
@@ -8580,28 +9869,50 @@ function FinancePanel({
                     </div>
 
                     <div className="queue-stats">
-                      <InfoPair label="Reported" value={formatMoney(queueEntry.claimed)} />
+                      <InfoPair
+                        label={isDriverCashUp ? "Expected cash in" : "Reported"}
+                        value={formatMoney(queueEntry.claimed)}
+                      />
                       <InfoPair label="Counted" value={formatMoney(queueEntry.counted)} />
                       <InfoPair label="Difference" value={formatMoney(queueEntry.shortage)} />
-                      {!record.isSpecial && (
-                        <InfoPair
-                          label="Passengers"
-                          value={`${getDailyTripPassengerTotal(record).toLocaleString()}`}
-                        />
-                      )}
-                      {!record.isSpecial && (
-                        <InfoPair label="Trips logged" value={`${getDailyTripTripCount(record)}`} />
-                      )}
-                      {record.isSpecial && (
+                      {isDriverCashUp ? (
+                        <>
+                          <InfoPair
+                            label="Income"
+                            value={formatMoney(queueEntry.totalIncome ?? 0)}
+                          />
+                          <InfoPair
+                            label="Cash expenses"
+                            value={formatMoney(queueEntry.cashExpenses ?? 0)}
+                          />
+                          <InfoPair
+                            label="Day entries"
+                            value={`${Number(queueEntry.entryCount ?? 0).toLocaleString()}`}
+                          />
+                        </>
+                      ) : !sourceRecord.isSpecial ? (
+                        <>
+                          <InfoPair
+                            label="Passengers"
+                            value={`${getDailyTripPassengerTotal(sourceRecord).toLocaleString()}`}
+                          />
+                          <InfoPair
+                            label="Trips logged"
+                            value={`${getDailyTripTripCount(sourceRecord)}`}
+                          />
+                        </>
+                      ) : (
                         <InfoPair
                           label="Business km"
-                          value={`${Number(record.businessKm ?? getBusinessKmValue(record)).toLocaleString()} km`}
+                          value={`${Number(
+                            sourceRecord.businessKm ?? getBusinessKmValue(sourceRecord),
+                          ).toLocaleString()} km`}
                         />
                       )}
                       <InfoPair label="Distance gap" value={`${queueEntry.gapKm} km`} />
                     </div>
 
-                    {!record.isSpecial && (
+                    {(isDriverCashUp || !sourceRecord.isSpecial) && (
                       <div className="content-stack">
                         <div className="overview-board-head">
                           <p className="eyebrow">Analytics</p>
@@ -8684,7 +9995,12 @@ function FinancePanel({
                         type="number"
                         min="0"
                         step="1"
-                        value={verificationInputs[record.id] ?? record.actualCashReceived ?? ""}
+                        value={
+                          verificationInputs[record.id] ??
+                          queueEntry.actualCashReceived ??
+                          sourceRecord?.actualCashReceived ??
+                          ""
+                        }
                         disabled={!canEditCashInput}
                         onChange={(event) =>
                           setVerificationInputs((current) => ({
@@ -8705,20 +10021,30 @@ function FinancePanel({
                       <button
                         type="button"
                         className="record-button"
-                        disabled={record.status === "banked" || !canEditFinanceUpdates}
-                        onClick={() => handleEditIncome(record)}
+                        disabled={
+                          isDriverCashUp || sourceRecord.status === "banked" || !canEditFinanceUpdates
+                        }
+                        onClick={() => !isDriverCashUp && handleEditIncome(sourceRecord)}
                       >
                         Edit entry
                       </button>
                       <button
                         type="button"
                         className="record-button danger"
-                        disabled={record.status === "banked" || !canEditFinanceUpdates}
-                        onClick={() => handleDelete(record.id)}
+                        disabled={
+                          isDriverCashUp || sourceRecord.status === "banked" || !canEditFinanceUpdates
+                        }
+                        onClick={() => !isDriverCashUp && handleDelete(sourceRecord.id)}
                       >
                         Delete entry
                       </button>
                     </div>
+                    {isDriverCashUp && (
+                      <p className="finance-form-note" data-tone="info">
+                        This hand-in covers the whole driver day. Update the trip or expense in the
+                        ledgers if the day total needs to change.
+                      </p>
+                    )}
                   </article>
                 );
               })}
@@ -11295,7 +12621,7 @@ function DailyTripLogbookFields({ route, tripLogbook, onChange }) {
                 <span>Passengers</span>
                 <input
                   type="number"
-                  min="1"
+                  min="0"
                   step="1"
                   value={entry.passengerCount}
                   onChange={(event) =>
@@ -11310,7 +12636,7 @@ function DailyTripLogbookFields({ route, tripLogbook, onChange }) {
                 <span>Amount collected</span>
                 <input
                   type="number"
-                  min="1"
+                  min="0"
                   step="1"
                   value={entry.amountCollected}
                   onChange={(event) =>
@@ -11378,6 +12704,7 @@ function DriversPanel({
   onSaveStandardIncome,
   onSaveSpecialIncome,
   onSaveExpense,
+  onSubmitDriverCashUp,
   onSaveDriver,
   onAllocateDriverShift,
   onSelectDriverVehicle,
@@ -11521,6 +12848,32 @@ function DriversPanel({
         .map((route) => route.name),
     [driverDraft.routeIds, driverRouteOptions],
   );
+  const driverDayCashSummary =
+    snapshot.driverTerminal?.dayCashSummary ?? createEmptyDriverDayCashSummary();
+  const driverOwnedFinanceRecords = useMemo(() => {
+    if (!isDriver) {
+      return [];
+    }
+
+    const activeDriverStaffId = String(snapshot.driverTerminal?.activeDriverId ?? "").trim();
+
+    return [...(snapshot.financeTransactions ?? [])]
+      .filter(
+        (record) =>
+          ["income", "expense"].includes(record?.type) &&
+          getFinanceRecordDriverStaffId(record) === activeDriverStaffId,
+      )
+      .sort((left, right) => new Date(right.timestamp) - new Date(left.timestamp));
+  }, [isDriver, snapshot.driverTerminal?.activeDriverId, snapshot.financeTransactions]);
+  const shiftEditReasonError = isDriver
+    ? getDriverEditReasonError(shiftDraft, "daily taking")
+    : null;
+  const specialEditReasonError = isDriver
+    ? getDriverEditReasonError(specialDraft, "extra trip")
+    : null;
+  const expenseEditReasonError = isDriver
+    ? getDriverEditReasonError(expenseDraft, "expense")
+    : null;
 
   useEffect(() => {
     if (!assignedVehicleId) {
@@ -11608,11 +12961,31 @@ function DriversPanel({
     onShortcutAction(shortcut);
   };
 
+  const resetDriverShiftDraft = (nextOpeningOdo = snapshot.finance.vehicleOpenings?.[assignedVehicleId]) => {
+    setShiftDraft(
+      createStandardDraft(
+        assignedVehicleId,
+        nextOpeningOdo,
+        assignedVehicleRoute,
+      ),
+    );
+  };
+
+  const resetDriverSpecialDraft = () => {
+    setSpecialDraft(createSpecialDraft(assignedVehicleId));
+  };
+
+  const resetDriverExpenseDraft = () => {
+    setExpenseDraft(
+      createExpenseDraft("asset", assignedVehicleId, snapshot.finance.expenseCatalog),
+    );
+  };
+
   const handleShiftSubmit = (event) => {
     event.preventDefault();
     const response = onSaveStandardIncome({
       ...shiftDraft,
-      vehicleId: assignedVehicleId,
+      vehicleId: shiftDraft.vehicleId || assignedVehicleId,
     });
 
     setFeedback({
@@ -11621,9 +12994,7 @@ function DriversPanel({
     });
 
     if (response.ok) {
-      setShiftDraft(
-        createStandardDraft(assignedVehicleId, response.nextOpeningOdo, assignedVehicleRoute),
-      );
+      resetDriverShiftDraft(response.nextOpeningOdo);
       setDriverAction(null);
     }
   };
@@ -11632,7 +13003,7 @@ function DriversPanel({
     event.preventDefault();
     const response = onSaveSpecialIncome({
       ...specialDraft,
-      vehicleId: assignedVehicleId,
+      vehicleId: specialDraft.vehicleId || assignedVehicleId,
     });
 
     setFeedback({
@@ -11641,7 +13012,7 @@ function DriversPanel({
     });
 
     if (response.ok) {
-      setSpecialDraft(createSpecialDraft(assignedVehicleId));
+      resetDriverSpecialDraft();
       setDriverAction(null);
     }
   };
@@ -11651,7 +13022,7 @@ function DriversPanel({
     const response = onSaveExpense({
       ...expenseDraft,
       expenseKind: "asset",
-      vehicleId: assignedVehicleId,
+      vehicleId: expenseDraft.vehicleId || assignedVehicleId,
     });
 
     setFeedback({
@@ -11660,11 +13031,100 @@ function DriversPanel({
     });
 
     if (response.ok) {
-      setExpenseDraft(
-        createExpenseDraft("asset", assignedVehicleId, snapshot.finance.expenseCatalog),
-      );
+      resetDriverExpenseDraft();
       setDriverAction(null);
     }
+  };
+
+  const handleEditDriverIncome = (record) => {
+    if (record.vehicleId && record.vehicleId !== assignedVehicleId) {
+      onSelectDriverVehicle(record.vehicleId);
+    }
+
+    if (record.incomeKind === "standard") {
+      const route =
+        record.route ??
+        snapshot.vehicles.find((vehicle) => vehicle.id === record.vehicleId)?.route ??
+        assignedVehicleRoute;
+
+      setShiftDraft(
+        syncStandardDraftTripLogbook({
+          id: record.id,
+          vehicleId: record.vehicleId ?? assignedVehicleId,
+          route,
+          tripDate: record.tripDate ?? toDateInputValue(record.timestamp),
+          timeIn: record.timeIn ?? toTimeInputValue(record.timestamp),
+          timeOut: record.timeOut ?? "",
+          tripLogbook: buildStandardTripLogbookDraft(
+            route,
+            record.tripLogbook,
+            record.amountClaimed ?? record.amount ?? "",
+            record.totalPassengers ?? "",
+          ),
+          openingOdo: String(record.openingOdo ?? ""),
+          closingOdo: String(record.closingOdo ?? ""),
+          amountClaimed: String(record.amountClaimed ?? record.amount ?? ""),
+          editReason: "",
+        }),
+      );
+      setDriverAction("shift");
+      return;
+    }
+
+    setSpecialDraft({
+      id: record.id,
+      vehicleId: record.vehicleId ?? assignedVehicleId,
+      tripDate: record.tripDate ?? toDateInputValue(record.timestamp),
+      openingOdo: String(record.openingOdo ?? ""),
+      closingOdo: String(record.closingOdo ?? ""),
+      fromLocation: record.fromLocation ?? "",
+      toLocation: record.toLocation ?? "",
+      travelReason: record.travelReason ?? record.description ?? "",
+      fuelOilCost: String(record.fuelOilCost ?? 0),
+      repairMaintenanceCost: String(record.repairMaintenanceCost ?? 0),
+      amount: String(record.amount ?? ""),
+      editReason: "",
+    });
+    setDriverAction("special");
+  };
+
+  const handleEditDriverExpense = (record) => {
+    if (record.vehicleId && record.vehicleId !== assignedVehicleId) {
+      onSelectDriverVehicle(record.vehicleId);
+    }
+
+    setExpenseDraft({
+      id: record.id,
+      expenseKind: "asset",
+      category: record.category ?? "",
+      description: record.description ?? "",
+      descriptionPreset: getExpenseDescriptionPresetValue(
+        snapshot.finance.expenseCatalog,
+        "asset",
+        record.category ?? "",
+        record.description ?? "",
+      ),
+      expenseDate: record.expenseDate ?? toDateInputValue(record.timestamp),
+      reference: record.reference ?? "",
+      vehicleId: record.vehicleId ?? assignedVehicleId,
+      amount: String(record.amount ?? ""),
+      cashExpense: Boolean(record.cashExpense),
+      editReason: "",
+    });
+    setDriverAction("expense");
+  };
+
+  const handleDriverCashUp = () => {
+    const response = onSubmitDriverCashUp?.();
+
+    if (!response) {
+      return;
+    }
+
+    setFeedback({
+      tone: response.ok ? "success" : "danger",
+      message: response.message ?? response.error,
+    });
   };
 
   const handleAddDriver = () => {
@@ -11800,6 +13260,77 @@ function DriversPanel({
               ))}
             </div>
 
+            <DriverCashSummaryBoard
+              summary={driverDayCashSummary}
+              onSubmitCashUp={handleDriverCashUp}
+            />
+
+            {isDriver && (
+              <article className="overview-board">
+                <div className="overview-board-head">
+                  <p className="eyebrow">Driver edits</p>
+                  <h3>My captured takings and expenses</h3>
+                </div>
+                <div className="finance-ledger">
+                  {driverOwnedFinanceRecords.slice(0, 6).map((record) => (
+                    <article key={record.id} className="ledger-row">
+                      <div className="ledger-copy">
+                        <strong>
+                          {record.type === "expense"
+                            ? formatExpenseHeadline(record)
+                            : record.incomeKind === "special"
+                              ? `${record.vehicle} / ${formatTripRoute(record)}`
+                              : `${record.vehicle} / ${record.route}`}
+                        </strong>
+                        <span>
+                          {record.type === "expense"
+                            ? formatExpenseMeta(record)
+                            : record.incomeKind === "special"
+                              ? formatTripLogMeta(record)
+                              : formatDailyTripMeta(record)}
+                        </span>
+                        {getRecordLastEditNote(record) && (
+                          <span>{getRecordLastEditNote(record)}</span>
+                        )}
+                      </div>
+                      <div className="ledger-meta">
+                        <span className="status-chip" data-tone={getTransactionTone(record)}>
+                          {formatTransactionStatus(record.status)}
+                        </span>
+                        <strong>
+                          {formatMoney(
+                            record.type === "expense"
+                              ? record.amount
+                              : record.amountClaimed ?? record.amount,
+                          )}
+                        </strong>
+                      </div>
+                      <div className="record-actions">
+                        <button
+                          type="button"
+                          className="record-button"
+                          disabled={record.status === "banked"}
+                          onClick={() =>
+                            record.type === "expense"
+                              ? handleEditDriverExpense(record)
+                              : handleEditDriverIncome(record)
+                          }
+                        >
+                          Edit
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+                {driverOwnedFinanceRecords.length === 0 && (
+                  <p className="panel-note">
+                    Your saved takings and expenses will appear here. Use Edit to correct them with
+                    a reason note for the owner.
+                  </p>
+                )}
+              </article>
+            )}
+
             {driverAction && (
               <div className="driver-action-panel">
                 <div className="overview-board-head">
@@ -11919,6 +13450,21 @@ function DriversPanel({
                         )
                       }
                     />
+                    {shiftDraft.id && (
+                      <label className="finance-field finance-field-wide">
+                        <span>Update reason</span>
+                        <textarea
+                          rows="3"
+                          value={shiftDraft.editReason}
+                          onChange={(event) =>
+                            setShiftDraft((current) => ({
+                              ...current,
+                              editReason: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                    )}
                     <div className="finance-form-meta">
                       <span className="status-chip" data-tone="info">
                         Expected opening{" "}
@@ -11945,24 +13491,34 @@ function DriversPanel({
                       <button
                         type="submit"
                         className="action-button primary"
-                        disabled={Boolean(shiftValidationError) || !canUseFinanceCapture}
+                        disabled={
+                          Boolean(shiftValidationError) ||
+                          Boolean(shiftEditReasonError) ||
+                          !canUseFinanceCapture
+                        }
                       >
-                        Save trip
+                        {shiftDraft.id ? "Update trip" : "Save trip"}
                       </button>
                       <button
                         type="button"
                         className="action-button"
-                        onClick={() => setDriverAction(null)}
+                        onClick={() => {
+                          resetDriverShiftDraft();
+                          setDriverAction(null);
+                        }}
                       >
-                        Cancel
+                        {shiftDraft.id ? "Cancel edit" : "Cancel"}
                       </button>
                     </div>
                     <p
                       className="finance-form-note"
-                      data-tone={shiftValidationError ? "danger" : "info"}
+                      data-tone={shiftValidationError || shiftEditReasonError ? "danger" : "info"}
                     >
-                      {shiftValidationError ??
-                        "Passenger trip logbook is complete and ready to save."}
+                      {shiftEditReasonError ??
+                        shiftValidationError ??
+                        (shiftDraft.id
+                          ? "Explain the correction before updating this taking. The owner will see the note in system activity history."
+                          : "Passenger trip logbook is complete and ready to save.")}
                     </p>
                   </form>
                 )}
@@ -12102,6 +13658,21 @@ function DriversPanel({
                           }
                         />
                       </label>
+                      {specialDraft.id && (
+                        <label className="finance-field finance-field-wide">
+                          <span>Update reason</span>
+                          <textarea
+                            rows="3"
+                            value={specialDraft.editReason}
+                            onChange={(event) =>
+                              setSpecialDraft((current) => ({
+                                ...current,
+                                editReason: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                      )}
                     </div>
                     <div className="finance-form-meta">
                       <span className="status-chip" data-tone="info">
@@ -12118,24 +13689,34 @@ function DriversPanel({
                       <button
                         type="submit"
                         className="action-button primary"
-                        disabled={!canUseFinanceCapture || Boolean(specialValidationError)}
+                        disabled={
+                          !canUseFinanceCapture ||
+                          Boolean(specialValidationError) ||
+                          Boolean(specialEditReasonError)
+                        }
                       >
-                        Save trip
+                        {specialDraft.id ? "Update trip" : "Save trip"}
                       </button>
                       <button
                         type="button"
                         className="action-button"
-                        onClick={() => setDriverAction(null)}
+                        onClick={() => {
+                          resetDriverSpecialDraft();
+                          setDriverAction(null);
+                        }}
                       >
-                        Cancel
+                        {specialDraft.id ? "Cancel edit" : "Cancel"}
                       </button>
                     </div>
                     <p
                       className="finance-form-note"
-                      data-tone={specialValidationError ? "danger" : "info"}
+                      data-tone={specialValidationError || specialEditReasonError ? "danger" : "info"}
                     >
-                      {specialValidationError ??
-                        "Extra trip logbook details are complete and ready to save."}
+                      {specialEditReasonError ??
+                        specialValidationError ??
+                        (specialDraft.id
+                          ? "Explain the correction before updating this extra trip. The owner will see the note in system activity history."
+                          : "Extra trip logbook details are complete and ready to save.")}
                     </p>
                   </form>
                 )}
@@ -12263,6 +13844,21 @@ function DriversPanel({
                           }
                         />
                       </label>
+                      {expenseDraft.id && (
+                        <label className="finance-field finance-field-wide">
+                          <span>Update reason</span>
+                          <textarea
+                            rows="3"
+                            value={expenseDraft.editReason}
+                            onChange={(event) =>
+                              setExpenseDraft((current) => ({
+                                ...current,
+                                editReason: event.target.value,
+                              }))
+                            }
+                          />
+                        </label>
+                      )}
                     </div>
                     <div className="finance-form-meta">
                       <span className="status-chip" data-tone="warning">
@@ -12287,24 +13883,34 @@ function DriversPanel({
                       <button
                         type="submit"
                         className="action-button primary"
-                        disabled={!canUseFinanceCapture || Boolean(expenseValidationError)}
+                        disabled={
+                          !canUseFinanceCapture ||
+                          Boolean(expenseValidationError) ||
+                          Boolean(expenseEditReasonError)
+                        }
                       >
-                        Save expense
+                        {expenseDraft.id ? "Update expense" : "Save expense"}
                       </button>
                       <button
                         type="button"
                         className="action-button"
-                        onClick={() => setDriverAction(null)}
+                        onClick={() => {
+                          resetDriverExpenseDraft();
+                          setDriverAction(null);
+                        }}
                       >
-                        Cancel
+                        {expenseDraft.id ? "Cancel edit" : "Cancel"}
                       </button>
                     </div>
                     <p
                       className="finance-form-note"
-                      data-tone={expenseValidationError ? "danger" : "info"}
+                      data-tone={expenseValidationError || expenseEditReasonError ? "danger" : "info"}
                     >
-                      {expenseValidationError ??
-                        "Choose a saved category and description, or use Other and type the full expense details."}
+                      {expenseEditReasonError ??
+                        expenseValidationError ??
+                        (expenseDraft.id
+                          ? "Explain the correction before updating this expense. The owner will see the note in system activity history."
+                          : "Choose a saved category and description, or use Other and type the full expense details.")}
                     </p>
                   </form>
                 )}
@@ -12844,6 +14450,87 @@ function AccessDeniedShell({ email, onSignOut }) {
         </div>
       </div>
     </div>
+  );
+}
+
+function DriverCashSummaryBoard({ summary, onSubmitCashUp }) {
+  const hasEntries = (summary?.entryCount ?? 0) > 0;
+  const expectedCashTone =
+    (summary?.expectedCashIn ?? 0) < 0
+      ? "danger"
+      : (summary?.expectedCashIn ?? 0) > 0
+        ? "success"
+        : "info";
+
+  return (
+    <article className="overview-board">
+      <div className="overview-board-head">
+        <p className="eyebrow">Driver cash view</p>
+        <h3>Day cash activity</h3>
+      </div>
+
+      <div className="queue-stats">
+        <InfoPair label="Work date" value={summary?.workDateLabel ?? formatDateOnly(new Date())} />
+        <InfoPair label="Income" value={formatMoney(summary?.totalIncome ?? 0)} />
+        <InfoPair label="Expenses" value={formatMoney(summary?.totalExpenses ?? 0)} />
+        <InfoPair label="Cash expenses" value={formatMoney(summary?.cashExpenses ?? 0)} />
+        <InfoPair label="Expected cash in" value={formatMoney(summary?.expectedCashIn ?? 0)} />
+      </div>
+
+      <div className="finance-form-meta">
+        <span className="status-chip" data-tone={expectedCashTone}>
+          {formatMoney(summary?.expectedCashIn ?? 0)} expected cash in
+        </span>
+        <span className="status-chip" data-tone={summary?.cashUpRecord ? "success" : "info"}>
+          {summary?.cashUpRecord
+            ? `Checking sent ${formatStamp(summary.cashUpRecord.checkedAt ?? summary.cashUpRecord.updatedAt ?? summary.cashUpRecord.createdAt)}`
+            : "Checking not sent yet"}
+        </span>
+        <span className="status-chip" data-tone="info">
+          {(summary?.entryCount ?? 0).toLocaleString()} activity entries
+        </span>
+      </div>
+
+      {hasEntries ? (
+        <div className="finance-ledger">
+          {(summary?.entries ?? []).slice(0, 5).map((entry) => (
+            <article key={entry.id} className="ledger-row">
+              <div className="ledger-copy">
+                <strong>{entry.title}</strong>
+                <span>{entry.subtitle}</span>
+              </div>
+              <div className="ledger-meta">
+                <span className="status-chip" data-tone={entry.tone}>
+                  {entry.ledgerLabel}
+                </span>
+                <strong>{entry.amountLabel}</strong>
+                <span>{entry.statusLabel}</span>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <p className="panel-note">
+          Save trip income or expense entries first to build the day cash activity view.
+        </p>
+      )}
+
+      <div className="finance-form-actions">
+        <button
+          type="button"
+          className="action-button primary"
+          disabled={!hasEntries || !onSubmitCashUp}
+          onClick={onSubmitCashUp}
+        >
+          Checking
+        </button>
+      </div>
+      <p className="finance-form-note" data-tone={hasEntries ? "info" : "warning"}>
+        {hasEntries
+          ? "Checking wraps up the current day and sends management one day hand-in total."
+          : "No income or expense activity is ready for day checking yet."}
+      </p>
+    </article>
   );
 }
 

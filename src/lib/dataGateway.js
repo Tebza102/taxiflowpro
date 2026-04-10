@@ -1,5 +1,6 @@
 import { mockSnapshot } from "../data/mockData";
 import { configuredBackendMode, hasSupabaseConfig, supabase } from "./supabaseClient";
+import { normalizeTripFinanceTransactions } from "./tripHistory";
 
 const DATA_MODE_STORAGE_KEY = "taxiflow-data-mode-v2";
 const DEMO_SNAPSHOT_STORAGE_KEY = "taxiflow-demo-snapshot-v1";
@@ -525,6 +526,27 @@ const normalizeSnapshotShape = (snapshot, defaults = createSnapshotShape()) => {
     return cloneSnapshot(defaults);
   }
 
+  const normalizedRoutes = collectRouteMasterRecords(snapshot, cloneSnapshot(defaults.routes ?? []));
+  const normalizedVehicles = Array.isArray(snapshot.vehicles)
+    ? snapshot.vehicles.map((vehicle) => normalizeVehicleCapabilityFields(vehicle))
+    : cloneSnapshot(defaults.vehicles);
+  const normalizedDrivers = Array.isArray(snapshot.drivers)
+    ? snapshot.drivers
+    : cloneSnapshot(defaults.drivers);
+  const normalizedFinanceTransactions = Array.isArray(snapshot.financeTransactions)
+    ? normalizeTripFinanceTransactions(snapshot.financeTransactions, {
+        source: {
+          ...snapshot,
+          routes: normalizedRoutes,
+          vehicles: normalizedVehicles,
+          drivers: normalizedDrivers,
+        },
+        routes: normalizedRoutes,
+        vehicles: normalizedVehicles,
+        drivers: normalizedDrivers,
+      })
+    : cloneSnapshot(defaults.financeTransactions);
+
   return {
     ...cloneSnapshot(defaults),
     ...snapshot,
@@ -586,22 +608,18 @@ const normalizeSnapshotShape = (snapshot, defaults = createSnapshotShape()) => {
         },
       },
     },
-    financeTransactions: Array.isArray(snapshot.financeTransactions)
-      ? snapshot.financeTransactions
-      : cloneSnapshot(defaults.financeTransactions),
+    financeTransactions: normalizedFinanceTransactions,
     deposits: Array.isArray(snapshot.deposits) ? snapshot.deposits : cloneSnapshot(defaults.deposits),
     appUsers: Array.isArray(snapshot.appUsers) ? snapshot.appUsers : cloneSnapshot(defaults.appUsers),
-    routes: collectRouteMasterRecords(snapshot, cloneSnapshot(defaults.routes ?? [])),
-    vehicles: Array.isArray(snapshot.vehicles)
-      ? snapshot.vehicles.map((vehicle) => normalizeVehicleCapabilityFields(vehicle))
-      : cloneSnapshot(defaults.vehicles),
+    routes: normalizedRoutes,
+    vehicles: normalizedVehicles,
     serviceSchedule: Array.isArray(snapshot.serviceSchedule)
       ? snapshot.serviceSchedule
       : cloneSnapshot(defaults.serviceSchedule),
     documents: Array.isArray(snapshot.documents)
       ? snapshot.documents
       : cloneSnapshot(defaults.documents),
-    drivers: Array.isArray(snapshot.drivers) ? snapshot.drivers : cloneSnapshot(defaults.drivers),
+    drivers: normalizedDrivers,
     driverTerminal: {
       ...cloneSnapshot(defaults.driverTerminal),
       ...(snapshot.driverTerminal ?? {}),

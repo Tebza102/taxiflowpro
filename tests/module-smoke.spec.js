@@ -17,6 +17,11 @@ const driverAccount = {
   role: "Driver",
 };
 
+const viewerAccount = {
+  email: "viewer@taxiflow.local",
+  role: "Viewer",
+};
+
 const driverTwoAccount = {
   email: "driver.two@taxiflow.local",
   role: "Driver",
@@ -107,6 +112,32 @@ test("manager and admin default to overview plus reset-only settings access", as
     await signOut(page);
   }
 
+  assertNoRuntimeErrors();
+});
+
+test("viewer is locked to demo data even when the owner switches the workspace to live", async ({
+  page,
+}) => {
+  const assertNoRuntimeErrors = attachRuntimeCollectors(page);
+
+  await signIn(page, ownerAccount.email);
+  await openModule(page, "Settings", "Roles and rights");
+  await page.getByRole("button", { name: "Live" }).click();
+  await expect(page.getByText(/Live mode is active\./i)).toBeVisible();
+  await signOut(page);
+
+  await signIn(page, viewerAccount.email);
+  await expect(page.getByText(viewerAccount.role).first()).toBeVisible();
+  await expect(page.getByText("Demo only")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Daily flow" })).toBeVisible();
+  await expect(page.getByText("Apprigate Mobility Operators")).toBeVisible();
+  await expect(page.getByText("Live operations workspace")).toHaveCount(0);
+  await expect(page.locator("button.module-button").filter({ hasText: "Money" })).toHaveCount(0);
+  await expect(page.locator("button.module-button").filter({ hasText: "Fleet & Operations" })).toHaveCount(0);
+  await expect(page.locator("button.module-button").filter({ hasText: "Drivers" })).toHaveCount(0);
+  await expect(page.locator("button.module-button").filter({ hasText: "Settings" })).toHaveCount(0);
+
+  await signOut(page);
   assertNoRuntimeErrors();
 });
 

@@ -8,6 +8,7 @@ const users = [
   { email: "owner@taxiflow.local", role: "Owner" },
   { email: "admin@taxiflow.local", role: "Admin" },
   { email: "manager@taxiflow.local", role: "Manager" },
+  { email: "viewer@taxiflow.local", role: "Viewer" },
   { email: "driver.one@taxiflow.local", role: "Driver" },
   { email: "driver.two@taxiflow.local", role: "Driver" },
 ];

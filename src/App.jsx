@@ -42,7 +42,8 @@ const ZAR = new Intl.NumberFormat("en-ZA", {
   maximumFractionDigits: 0,
 });
 
-const ROLES = ["Owner", "Admin", "Manager", "Driver"];
+const VIEWER_ROLE = "Viewer";
+const ROLES = ["Owner", "Admin", "Manager", "Driver", VIEWER_ROLE];
 const AUTH_ACCOUNT_DIRECTORY = {
   "owner@taxiflow.local": {
     name: "Owner account",
@@ -59,6 +60,11 @@ const AUTH_ACCOUNT_DIRECTORY = {
     role: "Manager",
     actorId: "mgr-01",
   },
+  "viewer@taxiflow.local": {
+    name: "Demo Viewer",
+    role: VIEWER_ROLE,
+    actorId: "viewer-session",
+  },
 };
 const DEFAULT_DRIVER_ACCOUNT_EMAIL_BY_STAFF_ID = {
   "drv-01": "driver.one@taxiflow.local",
@@ -71,6 +77,7 @@ const ROLE_LANDING_VIEW = {
   Admin: "overview",
   Manager: "overview",
   Driver: "drivers",
+  Viewer: "overview",
 };
 const MODULE_EDIT_ACCESS = {
   finance: {
@@ -96,7 +103,7 @@ const MODULE_VIEW_ACCESS = {
   finance: {
     label: "Money",
     detail: "Daily earnings, expenses, and banking.",
-    roles: ["Owner", "Admin", "Manager"],
+    roles: ["Owner", "Admin", "Manager", VIEWER_ROLE],
   },
   fleet: {
     label: "Fleet & Operations",
@@ -123,7 +130,7 @@ const NAV_ITEMS = [
     id: "finance",
     label: "Money",
     icon: Banknote,
-    roles: ["Owner", "Admin", "Manager"],
+    roles: ["Owner", "Admin", "Manager", VIEWER_ROLE],
   },
   {
     id: "fleet",
@@ -435,11 +442,19 @@ const getModuleAccessErrorMessage = (moduleKey) =>
 const normalizeRole = (value) =>
   ROLES.find((role) => role.toLowerCase() === String(value ?? "").trim().toLowerCase()) ?? null;
 
+const isViewerRole = (value) => normalizeRole(value) === VIEWER_ROLE;
+
 const createDefaultModuleViewAccess = (role) => {
   const normalizedRole = normalizeRole(role) ?? "Driver";
 
   if (normalizedRole === "Owner") {
     return Object.fromEntries(Object.keys(MODULE_VIEW_ACCESS).map((moduleKey) => [moduleKey, true]));
+  }
+
+  if (normalizedRole === VIEWER_ROLE) {
+    return Object.fromEntries(
+      Object.keys(MODULE_VIEW_ACCESS).map((moduleKey) => [moduleKey, moduleKey === "overview"]),
+    );
   }
 
   if (["Admin", "Manager"].includes(normalizedRole)) {
@@ -653,6 +668,15 @@ const buildDefaultAppUsers = (snapshot) => {
     });
   }
 
+  if (!users.some((user) => user.email === "viewer@taxiflow.local")) {
+    pushUser({
+      email: "viewer@taxiflow.local",
+      name: AUTH_ACCOUNT_DIRECTORY["viewer@taxiflow.local"].name,
+      role: VIEWER_ROLE,
+      actorId: "viewer-session",
+    });
+  }
+
   return sortAppUsers(users);
 };
 
@@ -769,13 +793,28 @@ const resolveAuthIdentity = (user, snapshot) => {
   };
 };
 
+const getAuthSessionRole = (user) => {
+  if (!user) {
+    return null;
+  }
+
+  const email = normalizeEmailAddress(user.email);
+  return normalizeRole(
+    user.app_metadata?.role ??
+      user.user_metadata?.role ??
+      AUTH_ACCOUNT_DIRECTORY[email]?.role ??
+      null,
+  );
+};
+
 const createLocalAuthSession = (email, account = null) => ({
   user: {
     email,
     app_metadata: account
       ? {
           role: account.role,
-          staffId: account.actorId,
+          staffId: account.staffId ?? account.actorId,
+          actorId: account.actorId,
         }
       : {},
     user_metadata: {},
@@ -788,21 +827,49 @@ const readStoredLocalAuthSession = () => {
   }
 
   try {
-    const email = window.localStorage.getItem(LOCAL_AUTH_STORAGE_KEY);
+    const value = window.localStorage.getItem(LOCAL_AUTH_STORAGE_KEY);
 
-    return email ? createLocalAuthSession(String(email).trim().toLowerCase()) : null;
+    if (!value) {
+      return null;
+    }
+
+    try {
+      const parsedValue = JSON.parse(value);
+      const email = normalizeEmailAddress(parsedValue?.email);
+
+      if (!email) {
+        return null;
+      }
+
+      return createLocalAuthSession(email, {
+        role: normalizeRole(parsedValue?.role) ?? null,
+        actorId: parsedValue?.actorId ?? null,
+        staffId: parsedValue?.staffId ?? null,
+      });
+    } catch {
+      const email = normalizeEmailAddress(value);
+      return email ? createLocalAuthSession(email, AUTH_ACCOUNT_DIRECTORY[email] ?? null) : null;
+    }
   } catch {
     return null;
   }
 };
 
-const persistLocalAuthSession = (email) => {
+const persistLocalAuthSession = (email, account = null) => {
   if (typeof window === "undefined") {
     return;
   }
 
   try {
-    window.localStorage.setItem(LOCAL_AUTH_STORAGE_KEY, email);
+    window.localStorage.setItem(
+      LOCAL_AUTH_STORAGE_KEY,
+      JSON.stringify({
+        email: normalizeEmailAddress(email),
+        role: normalizeRole(account?.role) ?? null,
+        actorId: account?.actorId ?? null,
+        staffId: account?.staffId ?? null,
+      }),
+    );
   } catch {
     // Ignore storage failures and continue in-memory.
   }
@@ -3781,6 +3848,12 @@ function App() {
   });
   const latestSnapshotRef = useRef(null);
   const latestBackendModeRef = useRef(repository.backendMode);
+  const sessionRole = useMemo(
+    () => getAuthSessionRole(authSession?.user ?? null),
+    [authSession?.user],
+  );
+  const viewerModeLocked = isViewerRole(sessionRole);
+  const effectiveBackendMode = viewerModeLocked ? "mock" : backendMode;
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -3888,12 +3961,12 @@ function App() {
 
     setLoading(true);
     repository
-      .loadSnapshot(backendMode)
+      .loadSnapshot(effectiveBackendMode)
       .then((data) => {
         if (isMounted) {
           syncLiveWarning(
             setLiveLoadWarning,
-            backendMode === "live" && (data?.ok === false || data?.warning)
+            effectiveBackendMode === "live" && (data?.ok === false || data?.warning)
               ? LIVE_SYNC_WARNING_MESSAGE
               : null,
           );
@@ -3905,7 +3978,7 @@ function App() {
         if (isMounted) {
           syncLiveWarning(
             setLiveLoadWarning,
-            backendMode === "live" ? LIVE_SYNC_WARNING_MESSAGE : null,
+            effectiveBackendMode === "live" ? LIVE_SYNC_WARNING_MESSAGE : null,
           );
           setLoading(false);
         }
@@ -3914,7 +3987,7 @@ function App() {
     return () => {
       isMounted = false;
     };
-  }, [authEnabled, authLoading, authSession?.user?.id, backendMode]);
+  }, [authEnabled, authLoading, authSession?.user?.id, effectiveBackendMode]);
 
   useEffect(() => {
     if (loading || !snapshot) {
@@ -3924,7 +3997,7 @@ function App() {
     let isCurrent = true;
 
     repository
-      .persistSnapshot(snapshot, backendMode)
+      .persistSnapshot(snapshot, effectiveBackendMode)
       .then((result) => {
         if (!isCurrent) {
           return;
@@ -3932,7 +4005,7 @@ function App() {
 
         syncLiveWarning(
           setLiveSaveWarning,
-          backendMode === "live" && (result?.ok === false || result?.warning)
+          effectiveBackendMode === "live" && (result?.ok === false || result?.warning)
             ? LIVE_SAVE_WARNING_MESSAGE
             : null,
         );
@@ -3944,17 +4017,17 @@ function App() {
 
         syncLiveWarning(
           setLiveSaveWarning,
-          backendMode === "live" ? LIVE_SAVE_WARNING_MESSAGE : null,
+          effectiveBackendMode === "live" ? LIVE_SAVE_WARNING_MESSAGE : null,
         );
       });
 
     return () => {
       isCurrent = false;
     };
-  }, [backendMode, loading, snapshot]);
+  }, [effectiveBackendMode, loading, snapshot]);
 
   useEffect(() => {
-    if (backendMode !== "live" || (authEnabled && (authLoading || !authSession))) {
+    if (effectiveBackendMode !== "live" || (authEnabled && (authLoading || !authSession))) {
       return undefined;
     }
 
@@ -3993,16 +4066,16 @@ function App() {
       window.clearInterval(retryId);
       window.removeEventListener("online", handleOnline);
     };
-  }, [authEnabled, authLoading, authSession, backendMode]);
+  }, [authEnabled, authLoading, authSession, effectiveBackendMode]);
 
   useEffect(() => {
-    if (backendMode === "live") {
+    if (effectiveBackendMode === "live") {
       return;
     }
 
     syncLiveWarning(setLiveLoadWarning, null);
     syncLiveWarning(setLiveSaveWarning, null);
-  }, [backendMode]);
+  }, [effectiveBackendMode]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -4042,8 +4115,8 @@ function App() {
 
   const currentSnapshot = useMemo(() => deriveSnapshot(snapshot), [snapshot]);
   const liveOperationalWarning = useMemo(
-    () => (backendMode === "live" ? liveLoadWarning ?? liveSaveWarning : null),
-    [backendMode, liveLoadWarning, liveSaveWarning],
+    () => (effectiveBackendMode === "live" ? liveLoadWarning ?? liveSaveWarning : null),
+    [effectiveBackendMode, liveLoadWarning, liveSaveWarning],
   );
   const appUsers = useMemo(() => getAppUsers(currentSnapshot), [currentSnapshot]);
   const permissionControls = useMemo(
@@ -4068,8 +4141,8 @@ function App() {
   }, [snapshot]);
 
   useEffect(() => {
-    latestBackendModeRef.current = backendMode;
-  }, [backendMode]);
+    latestBackendModeRef.current = effectiveBackendMode;
+  }, [effectiveBackendMode]);
 
   const authDisplayName = useMemo(() => {
     if (!authIdentity || !currentSnapshot) {
@@ -4255,7 +4328,7 @@ function App() {
       }
 
       const session = createLocalAuthSession(normalizedEmail, account);
-      persistLocalAuthSession(normalizedEmail);
+      persistLocalAuthSession(normalizedEmail, account);
       setAuthSession(session);
       setAuthDraft((current) => ({
         ...current,
@@ -7540,6 +7613,11 @@ function App() {
                 <span className="status-chip" data-tone="info">
                   {activeRole}
                 </span>
+                {viewerModeLocked && (
+                  <span className="status-chip" data-tone="warning">
+                    Demo only
+                  </span>
+                )}
                 <div className="auth-session-copy">
                   <strong>{authDisplayName}</strong>
                   <span>{authSession?.user?.email}</span>
@@ -12213,7 +12291,7 @@ function SettingsPanel({
                         ? isLocalAuth
                           ? "Saving now will reset this account password and close any waiting reset request for this email."
                           : "Saving here records the reset request as handled. Update the matching Supabase password separately."
-                      : "Changing a role resets optional feature access to that role's default. Management starts with Overview and Settings only until the owner enables more modules."}
+                      : "Changing a role resets optional feature access to that role's default. Admin and Manager start with Overview and Settings, while Viewer starts with Overview only until the owner enables more modules."}
                 </p>
               </form>
             ) : (

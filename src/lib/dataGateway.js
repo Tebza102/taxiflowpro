@@ -1,5 +1,11 @@
 import { mockSnapshot } from "../data/mockData";
+import {
+  safeLocalStorageGet,
+  safeLocalStorageRemove,
+  safeLocalStorageSet,
+} from "./browserRuntime";
 import { configuredBackendMode, hasSupabaseConfig, supabase } from "./supabaseClient";
+import { logStartupError, logStartupEvent } from "./runtimeDiagnostics";
 import { normalizeTripFinanceTransactions } from "./tripHistory";
 
 const DATA_MODE_STORAGE_KEY = "taxiflow-data-mode-v2";
@@ -737,12 +743,8 @@ const selectRetainedSnapshot = (candidates = [], defaults = null) => {
 };
 
 const readStoredMode = () => {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
   try {
-    const value = window.localStorage.getItem(DATA_MODE_STORAGE_KEY);
+    const value = safeLocalStorageGet(DATA_MODE_STORAGE_KEY);
     return value ? normalizeBackendMode(value) : null;
   } catch {
     return null;
@@ -750,24 +752,15 @@ const readStoredMode = () => {
 };
 
 const persistMode = (mode) => {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  try {
-    window.localStorage.setItem(DATA_MODE_STORAGE_KEY, mode);
-  } catch (error) {
+  if (!safeLocalStorageSet(DATA_MODE_STORAGE_KEY, mode)) {
+    const error = new Error("Local storage mode persistence failed.");
     logHandledWarning("Unable to persist the selected data mode in local storage.", error);
   }
 };
 
 const readStoredSnapshot = (storageKey) => {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
   try {
-    const value = window.localStorage.getItem(storageKey);
+    const value = safeLocalStorageGet(storageKey);
     return value ? JSON.parse(value) : null;
   } catch (error) {
     logHandledWarning(`Unable to read the workspace snapshot from local storage (${storageKey}).`, error);
@@ -776,16 +769,16 @@ const readStoredSnapshot = (storageKey) => {
 };
 
 const persistStoredSnapshot = (storageKey, snapshot) => {
-  if (typeof window === "undefined") {
-    return true;
-  }
-
   try {
-    window.localStorage.setItem(storageKey, JSON.stringify(snapshot));
+    const didPersistPrimary = safeLocalStorageSet(storageKey, JSON.stringify(snapshot));
     const backupStorageKey = getBackupStorageKey(storageKey);
 
+    if (!didPersistPrimary) {
+      throw new Error(`Primary snapshot storage failed for ${storageKey}.`);
+    }
+
     if (backupStorageKey && hasMeaningfulWorkspaceData(snapshot)) {
-      window.localStorage.setItem(backupStorageKey, JSON.stringify(snapshot));
+      safeLocalStorageSet(backupStorageKey, JSON.stringify(snapshot));
     }
 
     return true;
@@ -796,13 +789,8 @@ const persistStoredSnapshot = (storageKey, snapshot) => {
 };
 
 const clearStoredSnapshot = (storageKey) => {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  try {
-    window.localStorage.removeItem(storageKey);
-  } catch (error) {
+  if (!safeLocalStorageRemove(storageKey)) {
+    const error = new Error(`Snapshot storage clear failed for ${storageKey}.`);
     logHandledWarning(`Unable to clear the workspace snapshot from local storage (${storageKey}).`, error);
   }
 };
@@ -1061,6 +1049,10 @@ export const repository = {
     return persistSupabaseLiveSnapshot(nextSnapshot);
   },
   async persistSnapshot(snapshot, mode = activeBackendMode) {
+    logStartupEvent("snapshot-persist-start", {
+      mode: normalizeBackendMode(mode),
+    });
+
     if (!snapshot) {
       return createStructuredResult(null, {
         ok: false,
@@ -1083,6 +1075,11 @@ export const repository = {
 
       if (normalizedMode === "live" && canUseRemoteLiveData()) {
         const remoteResult = await persistSupabaseLiveSnapshot(nextSnapshot);
+        logStartupEvent("snapshot-persist-complete", {
+          mode: normalizedMode,
+          ok: remoteResult.ok,
+          warning: remoteResult.warning ?? localWarning,
+        });
         return createStructuredResult(nextSnapshot, {
           ok: remoteResult.ok,
           warning: remoteResult.warning ?? localWarning,
@@ -1090,12 +1087,20 @@ export const repository = {
         });
       }
 
+      logStartupEvent("snapshot-persist-complete", {
+        mode: normalizedMode,
+        ok: storedLocally,
+        warning: localWarning,
+      });
       return createStructuredResult(nextSnapshot, {
         ok: storedLocally,
         warning: localWarning,
       });
     } catch (error) {
       const warning = "Unable to save the workspace snapshot.";
+      logStartupError("snapshot-persist-failed", error, {
+        mode: normalizeBackendMode(mode),
+      });
       logHandledWarning(warning, error);
       return createStructuredResult(snapshot, { ok: false, warning, error });
     }
@@ -1103,6 +1108,10 @@ export const repository = {
   async loadSnapshot(nextMode = activeBackendMode) {
     activeBackendMode = normalizeBackendMode(nextMode);
     persistMode(activeBackendMode);
+    logStartupEvent("snapshot-load-start", {
+      mode: activeBackendMode,
+      remote: canUseRemoteLiveData(),
+    });
 
     try {
       if (activeBackendMode !== "live") {
@@ -1112,6 +1121,11 @@ export const repository = {
           selectRetainedSnapshot([storedDemoSnapshot, backupDemoSnapshot, mockSnapshot], mockSnapshot),
           createTrainingSnapshot(),
         );
+        logStartupEvent("snapshot-load-complete", {
+          mode: activeBackendMode,
+          ok: true,
+          source: "local-demo",
+        });
         return attachStructuredResult(nextSnapshot, { ok: true, warning: null });
       }
 
@@ -1127,6 +1141,11 @@ export const repository = {
       );
 
       persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, liveSnapshot);
+      logStartupEvent("snapshot-load-complete", {
+        mode: activeBackendMode,
+        ok: true,
+        source: "local-live-cache",
+      });
       return attachStructuredResult(liveSnapshot, { ok: true, warning: null });
     } catch (error) {
       const fallbackSnapshot =
@@ -1157,6 +1176,9 @@ export const repository = {
           ? "Unable to load the live workspace. Showing the last available workspace."
           : "Unable to load the workspace. Showing the last available workspace.";
 
+      logStartupError("snapshot-load-failed", error, {
+        mode: activeBackendMode,
+      });
       logHandledWarning(warning, error);
       return attachStructuredResult(fallbackSnapshot, { ok: false, warning, error });
     }

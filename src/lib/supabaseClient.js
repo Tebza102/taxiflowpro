@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { logStartupError, logStartupEvent } from "./runtimeDiagnostics";
 
 const normalizeBackendMode = (value) => {
   const normalized = String(value ?? "mock").trim().toLowerCase();
@@ -24,6 +25,28 @@ export const hasSupabaseConfig =
   !supabaseUrl.includes("your-project-url") &&
   !supabaseAnonKey.includes("your-anon-key");
 
-export const supabase = hasSupabaseConfig
-  ? createClient(supabaseUrl, supabaseAnonKey)
-  : null;
+let supabaseClient = null;
+
+if (hasSupabaseConfig) {
+  try {
+    supabaseClient = createClient(supabaseUrl, supabaseAnonKey);
+    logStartupEvent("api-init", {
+      mode: configuredBackendMode,
+      provider: "supabase",
+      hasSupabaseConfig,
+    });
+  } catch (error) {
+    logStartupError("api-init-failed", error, {
+      mode: configuredBackendMode,
+      provider: "supabase",
+    });
+  }
+} else {
+  logStartupEvent("api-init", {
+    mode: configuredBackendMode,
+    provider: "local",
+    hasSupabaseConfig,
+  });
+}
+
+export const supabase = supabaseClient;

@@ -120,7 +120,7 @@ test("driver daily trip update is visible to owner, manager, and admin", async (
   await signIn(page, "driver.one@taxiflow.local");
 
   await page.getByRole("button", { name: "Add daily earnings" }).click();
-  await expect(page.getByRole("heading", { name: "Add daily earnings" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Add Daily Earning" })).toBeVisible();
 
   await page.getByLabel("Date").fill(DAILY_DATE);
   await page.getByLabel("Time in").fill("06:00");
@@ -162,7 +162,7 @@ test("driver can save a daily trip with zero passengers and zero collected", asy
   await signIn(page, "driver.one@taxiflow.local");
 
   await page.getByRole("button", { name: "Add daily earnings" }).click();
-  await expect(page.getByRole("heading", { name: "Add daily earnings" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Add Daily Earning" })).toBeVisible();
 
   await page.getByLabel("Date").fill(ZERO_ACTIVITY_DATE);
   await page.getByLabel("Time in").fill("11:00");
@@ -194,7 +194,7 @@ test("driver edits takings and expenses with reasons and owner can review the ch
   await signIn(page, "driver.one@taxiflow.local");
 
   await page.getByRole("button", { name: "Add daily earnings" }).click();
-  await expect(page.getByRole("heading", { name: "Add daily earnings" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Add Daily Earning" })).toBeVisible();
 
   await page.getByLabel("Date").fill(DRIVER_EDIT_DATE);
   await page.getByLabel("Time in").fill("07:00");
@@ -219,7 +219,7 @@ test("driver edits takings and expenses with reasons and owner can review the ch
   await expensePanel.getByLabel("Description").fill("Edit test fuel slip");
   await expensePanel.getByLabel("Expense date").fill(DRIVER_EDIT_DATE);
   await expensePanel.getByLabel("Amount").fill("90");
-  await expensePanel.getByRole("button", { name: "Save expense" }).click();
+  await page.getByRole("button", { name: "Save expense" }).click();
   await expect(page.getByText("Expense saved and sent to a manager for review.")).toBeVisible();
 
   const activityBoard = page.locator("article.overview-board").filter({
@@ -263,7 +263,7 @@ test("driver checking shows running cash activity and gives management an expect
   await signIn(page, "driver.one@taxiflow.local");
 
   await page.getByRole("button", { name: "Add daily earnings" }).click();
-  await expect(page.getByRole("heading", { name: "Add daily earnings" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Add Daily Earning" })).toBeVisible();
 
   await page.getByLabel("Date").fill(DAILY_DATE);
   await page.getByLabel("Time in").fill("06:00");
@@ -295,7 +295,7 @@ test("driver checking shows running cash activity and gives management an expect
   await expensePanel.getByLabel("Expense date").fill(DAILY_DATE);
   await expensePanel.getByLabel("Amount").fill(String(EXPENSE_AMOUNT));
   await expensePanel.getByLabel("Paid from safe").check();
-  await expensePanel.getByRole("button", { name: "Save expense" }).click();
+  await page.getByRole("button", { name: "Save expense" }).click();
 
   await expect(page.getByText("Expense saved and sent to a manager for review.")).toBeVisible();
 
@@ -346,7 +346,7 @@ test("admin records cash hand-in, manager verifies it, and the dashboard total i
 
   await signIn(page, "driver.one@taxiflow.local");
   await page.getByRole("button", { name: "Add daily earnings" }).click();
-  await expect(page.getByRole("heading", { name: "Add daily earnings" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Add Daily Earning" })).toBeVisible();
 
   await page.getByLabel("Date").fill(DAILY_DATE);
   await page.getByLabel("Time in").fill("06:00");

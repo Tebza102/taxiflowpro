@@ -25,6 +25,10 @@ import {
   Users,
   Wrench,
 } from "lucide-react";
+import { DriverQuickActionButton } from "./components/DriverQuickActionButton";
+import { DriverFullScreenView } from "./components/DriverFullScreenView";
+import { MobileActionScreen } from "./components/MobileActionScreen";
+import { MobileBottomSheet } from "./components/MobileBottomSheet";
 import { TripLegOptionalFields } from "./components/TripLegOptionalFields";
 import { repository } from "./lib/dataGateway";
 import { getSafeDocument, getSafeWindow, safeMatchMedia } from "./lib/browserRuntime";
@@ -246,6 +250,10 @@ function App() {
   const [factoryResetSubmitting, setFactoryResetSubmitting] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [authRecoveryFeedback, setAuthRecoveryFeedback] = useState(null);
+  const [liveSyncBusy, setLiveSyncBusy] = useState(false);
+  const [lastSuccessfulSyncAt, setLastSuccessfulSyncAt] = useState(null);
+  const liveSyncOperationCountRef = useRef(0);
+  const latestLiveVersionRef = useRef(null);
   const [authDraft, setAuthDraft] = useState({
     email: "",
     password: "",
@@ -258,6 +266,20 @@ function App() {
   );
   const viewerModeLocked = isViewerRole(sessionRole);
   const effectiveBackendMode = viewerModeLocked ? "mock" : backendMode;
+
+  const beginLiveSync = () => {
+    if (effectiveBackendMode !== "live") {
+      return () => {};
+    }
+
+    liveSyncOperationCountRef.current += 1;
+    setLiveSyncBusy(true);
+
+    return () => {
+      liveSyncOperationCountRef.current = Math.max(liveSyncOperationCountRef.current - 1, 0);
+      setLiveSyncBusy(liveSyncOperationCountRef.current > 0);
+    };
+  };
 
   useEffect(() => {
     const browserWindow = getSafeWindow();
@@ -378,6 +400,7 @@ function App() {
     }
 
     let isMounted = true;
+    const finishLiveSync = beginLiveSync();
 
     setLoading(true);
     logStartupEvent("app-bootstrap-load", {
@@ -388,6 +411,11 @@ function App() {
       .loadSnapshot(effectiveBackendMode)
       .then((data) => {
         if (isMounted) {
+          if (data?.ok !== false) {
+            setBackendFeedback((current) =>
+              current?.kind === "live-conflict" ? null : current,
+            );
+          }
           logStartupEvent("app-bootstrap-load-complete", {
             backendMode: effectiveBackendMode,
             ok: data?.ok !== false,
@@ -399,8 +427,12 @@ function App() {
               ? LIVE_SYNC_WARNING_MESSAGE
               : null,
           );
+          if (effectiveBackendMode === "live" && data?.ok !== false && data?.meta?.source === "remote-live") {
+            setLastSuccessfulSyncAt(data?.meta?.liveVersion ?? new Date().toISOString());
+          }
           setSnapshot(data);
           setLoading(false);
+          finishLiveSync();
         }
       })
       .catch((error) => {
@@ -413,11 +445,13 @@ function App() {
             effectiveBackendMode === "live" ? LIVE_SYNC_WARNING_MESSAGE : null,
           );
           setLoading(false);
+          finishLiveSync();
         }
       });
 
     return () => {
       isMounted = false;
+      finishLiveSync();
     };
   }, [authEnabled, authLoading, authSession?.user?.id, effectiveBackendMode]);
 
@@ -427,6 +461,7 @@ function App() {
     }
 
     let isCurrent = true;
+    const finishLiveSync = beginLiveSync();
 
     repository
       .persistSnapshot(snapshot, effectiveBackendMode)
@@ -435,12 +470,25 @@ function App() {
           return;
         }
 
+        if (result?.conflict) {
+          setBackendFeedback({
+            kind: "live-conflict",
+            tone: "danger",
+            message: result.conflict.message,
+            actionLabel: "Refresh live data",
+          });
+        }
+
         syncLiveWarning(
           setLiveSaveWarning,
           effectiveBackendMode === "live" && (result?.ok === false || result?.warning)
             ? LIVE_SAVE_WARNING_MESSAGE
             : null,
         );
+        if (effectiveBackendMode === "live" && result?.ok && result?.meta?.source === "remote-save") {
+          setLastSuccessfulSyncAt(result?.meta?.liveVersion ?? new Date().toISOString());
+        }
+        finishLiveSync();
       })
       .catch(() => {
         if (!isCurrent) {
@@ -451,10 +499,12 @@ function App() {
           setLiveSaveWarning,
           effectiveBackendMode === "live" ? LIVE_SAVE_WARNING_MESSAGE : null,
         );
+        finishLiveSync();
       });
 
     return () => {
       isCurrent = false;
+      finishLiveSync();
     };
   }, [effectiveBackendMode, loading, snapshot]);
 
@@ -473,10 +523,23 @@ function App() {
         return;
       }
 
+      if (result?.conflict) {
+        setBackendFeedback({
+          kind: "live-conflict",
+          tone: "danger",
+          message: result.conflict.message,
+          actionLabel: "Refresh live data",
+        });
+      }
+
       syncLiveWarning(
         setLiveSaveWarning,
         result?.ok === false || result?.warning ? LIVE_SAVE_WARNING_MESSAGE : null,
       );
+
+      if (effectiveBackendMode === "live" && result?.ok && result?.meta?.source === "remote-save") {
+        setLastSuccessfulSyncAt(result?.meta?.liveVersion ?? new Date().toISOString());
+      }
     };
 
     void flushPendingLiveSave();
@@ -552,11 +615,129 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (effectiveBackendMode !== "live" || loading || (authEnabled && (authLoading || !authSession))) {
+      return undefined;
+    }
+
+    const browserWindow = getSafeWindow();
+    const browserDocument = getSafeDocument();
+
+    if (!browserWindow || !browserDocument) {
+      return undefined;
+    }
+
+    let isCurrent = true;
+
+    const refreshLiveOnForeground = async () => {
+      if (browserDocument.visibilityState === "hidden") {
+        return;
+      }
+
+      const previousVersion = latestLiveVersionRef.current;
+      await revalidateLiveWorkspace({
+        reason: "foreground-live-revalidation",
+      });
+
+      if (!isCurrent) {
+        return;
+      }
+
+      const nextVersion = latestLiveVersionRef.current;
+      if (previousVersion && nextVersion && previousVersion !== nextVersion) {
+        setBackendFeedback({
+          tone: "warning",
+          message: "Workspace changed. Refreshing live data.",
+        });
+      }
+    };
+
+    const handleVisibilityRefresh = () => {
+      if (browserDocument.visibilityState === "visible") {
+        void refreshLiveOnForeground();
+      }
+    };
+
+    const handlePageShow = () => {
+      void refreshLiveOnForeground();
+    };
+
+    browserDocument.addEventListener("visibilitychange", handleVisibilityRefresh);
+    browserWindow.addEventListener("pageshow", handlePageShow);
+
+    return () => {
+      isCurrent = false;
+      browserDocument.removeEventListener("visibilitychange", handleVisibilityRefresh);
+      browserWindow.removeEventListener("pageshow", handlePageShow);
+    };
+  }, [authEnabled, authLoading, authSession, effectiveBackendMode, loading]);
+
+  useEffect(() => {
+    if (effectiveBackendMode !== "live" || loading || (authEnabled && (authLoading || !authSession))) {
+      return undefined;
+    }
+
+    const browserWindow = getSafeWindow();
+
+    if (!browserWindow) {
+      return undefined;
+    }
+
+    const intervalId = browserWindow.setInterval(() => {
+      void revalidateLiveWorkspace({
+        reason: "interval-live-revalidation",
+      });
+    }, 60_000);
+
+    return () => {
+      browserWindow.clearInterval(intervalId);
+    };
+  }, [authEnabled, authLoading, authSession, effectiveBackendMode, loading]);
+
   const currentSnapshot = useMemo(() => deriveSnapshot(snapshot), [snapshot]);
   const liveOperationalWarning = useMemo(
     () => (effectiveBackendMode === "live" ? liveLoadWarning ?? liveSaveWarning : null),
     [effectiveBackendMode, liveLoadWarning, liveSaveWarning],
   );
+  const liveSyncBanner = useMemo(() => {
+    if (effectiveBackendMode !== "live") {
+      return null;
+    }
+
+    if (backendFeedback?.kind === "live-conflict") {
+      return {
+        tone: "danger",
+        message: "Another device changed this workspace. Reload before saving.",
+        actionLabel: "Refresh live data",
+      };
+    }
+
+    if (liveSyncBusy) {
+      return {
+        tone: "info",
+        message: "Syncing live data...",
+        actionLabel: null,
+      };
+    }
+
+    if (snapshot?.meta?.source === "local-fallback") {
+      return {
+        tone: "warning",
+        message: "Your view is stale. Refresh to continue.",
+        actionLabel: "Refresh live data",
+      };
+    }
+
+    if (liveOperationalWarning) {
+      return {
+        tone: "warning",
+        message: "Live data may be out of date.",
+        actionLabel: "Refresh live data",
+      };
+    }
+
+    return null;
+  }, [backendFeedback?.kind, effectiveBackendMode, liveOperationalWarning, liveSyncBusy, snapshot?.meta?.source]);
   const appUsers = useMemo(() => getAppUsers(currentSnapshot), [currentSnapshot]);
   const permissionControls = useMemo(
     () => getPermissionControls(currentSnapshot),
@@ -577,6 +758,10 @@ function App() {
 
   useEffect(() => {
     latestSnapshotRef.current = snapshot;
+  }, [snapshot]);
+
+  useEffect(() => {
+    latestLiveVersionRef.current = snapshot?.meta?.liveVersion ?? null;
   }, [snapshot]);
 
   useEffect(() => {
@@ -1019,6 +1204,9 @@ function App() {
     if (error) {
       setAuthError(error.message);
     } else {
+      if (latestBackendModeRef.current === "live") {
+        await repository.invalidateLiveCache("sign-out");
+      }
       setAuthSession(null);
       setAuthDraft((current) => ({
         ...current,
@@ -3886,7 +4074,73 @@ function App() {
       : "Training and presentation data is active. Reset demo to start from zero.";
   const showInstallButton = Boolean(installPromptEvent) && !pwaInstalled;
 
-  const handleBackendModeChange = (nextMode) => {
+  const revalidateLiveWorkspace = async ({
+    reason = "manual-live-revalidation",
+    force = false,
+    message = null,
+    showLoader = false,
+  } = {}) => {
+    if (effectiveBackendMode !== "live") {
+      return;
+    }
+
+    if (showLoader) {
+      setLoading(true);
+    }
+    const finishLiveSync = beginLiveSync();
+    if (message) {
+      setBackendFeedback({
+        tone: "warning",
+        message,
+      });
+    } else {
+      setBackendFeedback(null);
+    }
+
+    if (force) {
+      await repository.invalidateLiveCache(reason);
+    }
+
+    try {
+      const nextSnapshot = await repository.loadSnapshot("live");
+      const nextLiveVersion = nextSnapshot?.meta?.liveVersion ?? null;
+      const didChangeVersion =
+        Boolean(nextLiveVersion) &&
+        Boolean(latestLiveVersionRef.current) &&
+        nextLiveVersion !== latestLiveVersionRef.current;
+
+      syncLiveWarning(
+        setLiveLoadWarning,
+        nextSnapshot?.ok === false || nextSnapshot?.warning ? LIVE_SYNC_WARNING_MESSAGE : null,
+      );
+
+      if (force || didChangeVersion || nextSnapshot?.warning) {
+        setSnapshot(nextSnapshot);
+      }
+      if (nextSnapshot?.ok !== false && nextSnapshot?.meta?.source === "remote-live") {
+        setLastSuccessfulSyncAt(nextSnapshot?.meta?.liveVersion ?? new Date().toISOString());
+      }
+    } catch (error) {
+      logStartupError("live-refresh-failed", error, {
+        backendMode: effectiveBackendMode,
+      });
+      syncLiveWarning(setLiveLoadWarning, LIVE_SYNC_WARNING_MESSAGE);
+    } finally {
+      finishLiveSync();
+      if (showLoader) {
+        setLoading(false);
+      }
+    }
+  };
+
+  const handleRefreshLiveWorkspace = () =>
+    void revalidateLiveWorkspace({
+      reason: "user-refresh-after-conflict",
+      force: true,
+      showLoader: true,
+    });
+
+  const handleBackendModeChange = async (nextMode) => {
     const resolvedMode = repository.setBackendMode(nextMode);
 
     setBackendFeedback(
@@ -3902,6 +4156,9 @@ function App() {
     );
 
     if (resolvedMode !== backendMode) {
+      if (backendMode === "live" || resolvedMode === "live") {
+        await repository.invalidateLiveCache("backend-mode-switch");
+      }
       setLoading(true);
       setBackendMode(resolvedMode);
     }
@@ -3959,21 +4216,36 @@ function App() {
       }
     }
 
-    const resetSnapshot = repository.resetModeSnapshot(backendMode);
+    const resetResult =
+      backendMode === "live"
+        ? await repository.resetLiveWorkspace(resolveCurrentActorId(latestSnapshotRef.current))
+        : { ok: true, data: repository.resetModeSnapshot(backendMode), warning: null };
+
+    if (!resetResult.ok) {
+      setFactoryResetSubmitting(false);
+      return {
+        ok: false,
+        error: resetResult.warning ?? "Unable to reset the live workspace right now.",
+      };
+    }
+
+    const resetSnapshot = resetResult.data ?? resetResult;
     setSnapshot(resetSnapshot);
     setBackendFeedback({
       tone: "warning",
-      message: `${
-        backendMode === "live" ? "Live" : "Demo"
-      } workspace reset to factory settings.`,
+      message:
+        backendMode === "live"
+          ? resetResult.warning ?? "Workspace changed. Refreshing live data."
+          : "Demo workspace reset to factory settings.",
     });
     setFactoryResetSubmitting(false);
 
     return {
       ok: true,
-      message: `${
-        backendMode === "live" ? "Live" : "Demo"
-      } workspace reset to factory settings.`,
+      message:
+        backendMode === "live"
+          ? resetResult.warning ?? "Workspace changed. Refreshing live data."
+          : "Demo workspace reset to factory settings.",
     };
   };
 
@@ -4043,10 +4315,31 @@ function App() {
                   <Clock size={14} />
                   <span>Banking window {currentSnapshot.profile.nextBankingWindow}</span>
                 </span>
-                {backendFeedback && (
-                  <span className="status-chip" data-tone={backendFeedback.tone}>
-                    {backendFeedback.message}
+                {effectiveBackendMode === "live" && liveSyncBusy && (
+                  <span className="status-chip" data-tone="info">
+                    Syncing live data...
                   </span>
+                )}
+                {effectiveBackendMode === "live" && lastSuccessfulSyncAt && (
+                  <span className="status-chip" data-tone="navy">
+                    Synced {formatStamp(lastSuccessfulSyncAt)}
+                  </span>
+                )}
+                {backendFeedback && backendFeedback.kind !== "live-conflict" && (
+                  <>
+                    <span className="status-chip" data-tone={backendFeedback.tone}>
+                      {backendFeedback.message}
+                    </span>
+                    {backendFeedback.actionLabel && (
+                      <button
+                        type="button"
+                        className="action-button"
+                        onClick={handleRefreshLiveWorkspace}
+                      >
+                        {backendFeedback.actionLabel}
+                      </button>
+                    )}
+                  </>
                 )}
                 {liveOperationalWarning && (
                   <span className="status-chip" data-tone="warning">
@@ -4091,6 +4384,23 @@ function App() {
               </div>
             </div>
           </section>
+
+          {liveSyncBanner && (
+            <div className="finance-feedback" data-tone={liveSyncBanner.tone}>
+              <span className="status-chip" data-tone={liveSyncBanner.tone}>
+                {liveSyncBanner.message}
+              </span>
+              {liveSyncBanner.actionLabel && (
+                <button
+                  type="button"
+                  className="action-button"
+                  onClick={handleRefreshLiveWorkspace}
+                >
+                  {liveSyncBanner.actionLabel}
+                </button>
+              )}
+            </div>
+          )}
 
           <nav className="section-nav" aria-label="Primary views">
             {allowedViews.map((item) => (
@@ -4164,6 +4474,7 @@ function App() {
               onSubmitDriverCashUp={submitDriverCashUp}
               onSaveDriver={saveDriver}
               onAllocateDriverShift={allocateDriverShift}
+              onRevalidateLiveWorkspace={revalidateLiveWorkspace}
               onSelectDriverVehicle={selectDriverVehicle}
             />
           )}
@@ -4179,6 +4490,7 @@ function App() {
               isLocalAuth={!authEnabled}
               onChangeBackendMode={handleBackendModeChange}
               onFactoryReset={handleFactoryReset}
+              onRevalidateLiveWorkspace={revalidateLiveWorkspace}
               onResolvePasswordResetRequest={resolvePasswordResetRequest}
               onResetUserPassword={resetUserPassword}
               onSaveUserAccess={saveUserAccess}
@@ -4388,7 +4700,7 @@ function OverviewPanel({
 
         <DriverCashSummaryBoard
           summary={driverDayCashSummary}
-          onSubmitCashUp={handleDriverCashUp}
+          onOpenCashUp={handleDriverCashUp}
         />
 
         <div className="overview-board-grid">
@@ -8377,6 +8689,7 @@ function SettingsPanel({
   isLocalAuth,
   onChangeBackendMode,
   onFactoryReset,
+  onRevalidateLiveWorkspace,
   onResolvePasswordResetRequest,
   onResetUserPassword,
   onSaveUserAccess,
@@ -8525,20 +8838,34 @@ function SettingsPanel({
     }));
   };
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
-    pushFeedback(onSaveUserAccess(draft));
+    const response = onSaveUserAccess(draft);
+    pushFeedback(response);
+
+    if (response?.ok && backendMode === "live") {
+      await onRevalidateLiveWorkspace?.({
+        reason: "settings-user-access-update",
+        force: true,
+      });
+    }
   };
 
-  const handleManagedUserSubmit = (event) => {
+  const handleManagedUserSubmit = async (event) => {
     event.preventDefault();
-    pushFeedback(
-      onResetUserPassword({
-        email: selectedUser?.email,
-        name: draft.name,
-        nextAccessPassword: draft.nextAccessPassword,
-      }),
-    );
+    const response = onResetUserPassword({
+      email: selectedUser?.email,
+      name: draft.name,
+      nextAccessPassword: draft.nextAccessPassword,
+    });
+    pushFeedback(response);
+
+    if (response?.ok && backendMode === "live") {
+      await onRevalidateLiveWorkspace?.({
+        reason: "settings-user-profile-update",
+        force: true,
+      });
+    }
   };
 
   const handleFactoryResetSubmit = async (event) => {
@@ -9230,6 +9557,7 @@ function DriversPanel({
   onSubmitDriverCashUp,
   onSaveDriver,
   onAllocateDriverShift,
+  onRevalidateLiveWorkspace,
   onSelectDriverVehicle,
 }) {
   const isDriver = activeRole === "Driver";
@@ -9282,6 +9610,10 @@ function DriversPanel({
     ? snapshot.driverTerminal.assignedVehicleId ?? linkedVehicles[0]?.id ?? ""
     : snapshot.driverTerminal.assignedVehicleId ?? snapshot.vehicles[0]?.id ?? "";
   const [driverAction, setDriverAction] = useState(null);
+  const [driverActionPreparing, setDriverActionPreparing] = useState(null);
+  const [driverActionSaving, setDriverActionSaving] = useState(null);
+  const [driverActionSuccess, setDriverActionSuccess] = useState(null);
+  const [driverRouteView, setDriverRouteView] = useState(null);
   const [feedback, setFeedback] = useState(null);
   const [showDriverForm, setShowDriverForm] = useState(false);
   const [driverDraft, setDriverDraft] = useState(() => createDriverDraft());
@@ -9305,6 +9637,9 @@ function DriversPanel({
   const [specialDraft, setSpecialDraft] = useState(() => createSpecialDraft(assignedVehicleId));
   const driverFormRef = useRef(null);
   const allocationFormRef = useRef(null);
+  const driverActionBaselineRef = useRef("");
+  const driverRouteBaselineRef = useRef("");
+  const driverRouteBaselineLockedRef = useRef(false);
   const assignedVehicle = isDriver
     ? linkedVehicles.find((vehicle) => vehicle.id === assignedVehicleId) ?? linkedVehicles[0] ?? null
     : snapshot.vehicles.find((vehicle) => vehicle.id === assignedVehicleId) ?? snapshot.vehicles[0];
@@ -9397,6 +9732,112 @@ function DriversPanel({
   const expenseEditReasonError = isDriver
     ? getDriverEditReasonError(expenseDraft, "expense")
     : null;
+  const driverActionSheetTitle =
+    (
+      {
+        shift: "Add Daily Earning",
+        expense: expenseDraft.id ? "Edit Daily Expense" : "Add Daily Expense",
+        special: specialDraft.id ? "Edit Extra Trip" : "Add Extra Trip",
+        cashup: "Submit Day Checking",
+      }[driverAction]
+    ) ?? "Driver quick action";
+  const driverActionSheetSubtitle =
+    (
+      {
+        shift: shiftDraft.id
+          ? "Update the captured daily earnings record for this driver."
+          : "Capture trip takings without leaving the driver cash view.",
+        expense: expenseDraft.id
+          ? "Update the recorded daily expense for this vehicle."
+          : "Capture a daily expense against the active vehicle.",
+        special: specialDraft.id
+          ? "Update the saved extra trip and keep the cash view aligned."
+          : "Capture a once-off extra trip for the active vehicle.",
+        cashup: "Send the current day cash activity to checking.",
+      }[driverAction]
+    ) ?? "";
+  const driverActionSheetBadges = [
+    {
+      label: "Driver",
+      value: snapshot.driverTerminal.activeDriver,
+      tone: "info",
+    },
+    {
+      label: "Vehicle",
+      value: assignedVehicle?.registration ?? "Not linked",
+      tone: assignedVehicle ? "success" : "warning",
+    },
+  ];
+  const serializeDriverActionDraft = (action) => {
+    if (action === "shift") {
+      return JSON.stringify(shiftDraft);
+    }
+    if (action === "special") {
+      return JSON.stringify(specialDraft);
+    }
+    if (action === "expense") {
+      return JSON.stringify(expenseDraft);
+    }
+    return "";
+  };
+  const isDriverActionDirty =
+    ["special", "expense"].includes(driverAction) &&
+    driverActionBaselineRef.current !== serializeDriverActionDraft(driverAction);
+  const isDriverRouteDirty =
+    driverRouteView === "shift" &&
+    driverRouteBaselineRef.current !== serializeDriverActionDraft("shift");
+  const driverActionMode =
+    driverAction === "special"
+      ? "screen"
+      : driverAction === "expense" || driverAction === "cashup"
+        ? "sheet"
+        : null;
+  const driverActionFormId =
+    driverAction === "shift"
+      ? "driver-shift-form"
+      : driverAction === "special"
+        ? "driver-special-form"
+        : driverAction === "expense"
+          ? "driver-expense-form"
+          : undefined;
+  const driverActionSaveDisabled =
+    (driverAction === "shift" &&
+      (Boolean(shiftValidationError) ||
+        Boolean(shiftEditReasonError) ||
+        !canUseFinanceCapture ||
+        driverActionSaving === "shift")) ||
+    (driverAction === "special" &&
+      (!canUseFinanceCapture ||
+        Boolean(specialValidationError) ||
+        Boolean(specialEditReasonError) ||
+        driverActionSaving === "special")) ||
+    (driverAction === "expense" &&
+      (!canUseFinanceCapture ||
+        Boolean(expenseValidationError) ||
+        Boolean(expenseEditReasonError) ||
+        driverActionSaving === "expense"));
+  const driverActionSaveLabel =
+    driverActionSaving === driverAction
+      ? driverAction === "cashup"
+        ? "Sending..."
+        : "Saving..."
+      : driverAction === "shift"
+        ? shiftDraft.id
+          ? "Update trip"
+          : "Save trip"
+        : driverAction === "special"
+          ? specialDraft.id
+            ? "Update trip"
+            : "Save trip"
+          : expenseDraft.id
+            ? "Update expense"
+            : "Save expense";
+  const driverActionDismissLabel =
+    (driverAction === "shift" && shiftDraft.id) ||
+    (driverAction === "special" && specialDraft.id) ||
+    (driverAction === "expense" && expenseDraft.id)
+      ? "Cancel edit"
+      : "Discard draft";
 
   useEffect(() => {
     if (!assignedVehicleId) {
@@ -9458,27 +9899,161 @@ function DriversPanel({
     }
 
     if (shortcutIntent.type === "Log shift takings") {
-      setDriverAction("shift");
+      setDriverActionPreparing("shift");
+      setTimeout(() => {
+        setDriverRouteView("shift");
+        setDriverActionPreparing(null);
+      }, 0);
     }
     if (shortcutIntent.type === "Log daily expense") {
-      setDriverAction("expense");
+      setDriverActionPreparing("expense");
+      setTimeout(() => {
+        setDriverAction("expense");
+        setDriverActionPreparing(null);
+      }, 0);
     }
     if (shortcutIntent.type === "Capture special trip") {
-      setDriverAction("special");
+      setDriverActionPreparing("special");
+      setTimeout(() => {
+        setDriverAction("special");
+        setDriverActionPreparing(null);
+      }, 0);
     }
   }, [shortcutIntent]);
 
+  useEffect(() => {
+    if (!driverAction) {
+      return undefined;
+    }
+
+    driverActionBaselineRef.current = serializeDriverActionDraft(driverAction);
+    setDriverActionSuccess(driverAction);
+    const windowObject = getSafeWindow();
+    const successTimer = windowObject?.setTimeout?.(() => {
+      setDriverActionSuccess((current) => (current === driverAction ? null : current));
+    }, 1800);
+
+    return () => {
+      if (successTimer) {
+        windowObject?.clearTimeout?.(successTimer);
+      }
+    };
+  }, [driverAction]);
+
+  useEffect(() => {
+    if (driverRouteView !== "shift" || driverRouteBaselineLockedRef.current) {
+      return;
+    }
+
+    driverRouteBaselineRef.current = serializeDriverActionDraft("shift");
+  }, [driverRouteView, shiftDraft]);
+
+  const openDriverAction = (nextAction) => {
+    setDriverActionPreparing(nextAction);
+    setFeedback(null);
+    const windowObject = getSafeWindow();
+    windowObject?.setTimeout?.(() => {
+      setDriverAction(nextAction);
+      setDriverActionPreparing(null);
+    }, 0);
+  };
+
+  const openDriverRoute = (nextRoute) => {
+    setDriverActionPreparing(nextRoute);
+    setFeedback(null);
+    driverRouteBaselineLockedRef.current = false;
+    const windowObject = getSafeWindow();
+    windowObject?.setTimeout?.(() => {
+      setDriverRouteView(nextRoute);
+      setDriverActionPreparing(null);
+    }, 0);
+  };
+
+  const closeDriverAction = () => {
+    setDriverAction(null);
+    setDriverActionPreparing(null);
+    setDriverActionSaving(null);
+  };
+
+  const closeDriverRoute = () => {
+    setDriverRouteView(null);
+    setDriverActionPreparing(null);
+    setDriverActionSaving(null);
+    driverRouteBaselineLockedRef.current = false;
+  };
+
+  const requestCloseDriverAction = () => {
+    if (!isDriverActionDirty) {
+      closeDriverAction();
+      return;
+    }
+
+    const windowObject = getSafeWindow();
+    const shouldDiscardChanges =
+      windowObject?.confirm?.(
+        "You have unsaved changes for this driver action. Close without saving?",
+      ) ?? false;
+
+    if (!shouldDiscardChanges) {
+      return;
+    }
+
+    closeDriverAction();
+  };
+
+  const requestCloseDriverRoute = () => {
+    if (!driverRouteBaselineLockedRef.current || !isDriverRouteDirty) {
+      closeDriverRoute();
+      return;
+    }
+
+    const windowObject = getSafeWindow();
+    const shouldDiscardChanges =
+      windowObject?.confirm?.(
+        "You have unsaved changes for Add Daily Earning. Leave this form without saving?",
+      ) ?? false;
+
+    if (!shouldDiscardChanges) {
+      return;
+    }
+
+    closeDriverRoute();
+  };
+
+  const discardDriverAction = () => {
+    if (driverAction === "shift") {
+      resetDriverShiftDraft();
+    }
+    if (driverAction === "special") {
+      resetDriverSpecialDraft();
+    }
+    if (driverAction === "expense") {
+      resetDriverExpenseDraft();
+    }
+    closeDriverAction();
+  };
+
+  const discardDriverRoute = () => {
+    resetDriverShiftDraft();
+    closeDriverRoute();
+  };
+
+  const updateDriverShiftDraft = (updater) => {
+    driverRouteBaselineLockedRef.current = true;
+    setShiftDraft(updater);
+  };
+
   const handleShortcut = (shortcut) => {
     if (shortcut === "Log shift takings") {
-      setDriverAction("shift");
+      openDriverRoute("shift");
       return;
     }
     if (shortcut === "Log daily expense") {
-      setDriverAction("expense");
+      openDriverAction("expense");
       return;
     }
     if (shortcut === "Capture special trip") {
-      setDriverAction("special");
+      openDriverAction("special");
       return;
     }
     onShortcutAction(shortcut);
@@ -9504,12 +10079,22 @@ function DriversPanel({
     );
   };
 
-  const handleShiftSubmit = (event) => {
+  const markDriverActionSuccess = (action) => {
+    setDriverActionSuccess(action);
+    const windowObject = getSafeWindow();
+    windowObject?.setTimeout?.(() => {
+      setDriverActionSuccess((current) => (current === action ? null : current));
+    }, 1800);
+  };
+
+  const handleShiftSubmit = async (event) => {
     event.preventDefault();
-    const response = onSaveStandardIncome({
+    setDriverActionSaving("shift");
+    const response = await Promise.resolve(onSaveStandardIncome({
       ...shiftDraft,
       vehicleId: shiftDraft.vehicleId || assignedVehicleId,
-    });
+    }));
+    setDriverActionSaving(null);
 
     setFeedback({
       tone: response.ok ? "success" : "danger",
@@ -9517,17 +10102,20 @@ function DriversPanel({
     });
 
     if (response.ok) {
+      markDriverActionSuccess("shift");
       resetDriverShiftDraft(response.nextOpeningOdo);
-      setDriverAction(null);
+      closeDriverRoute();
     }
   };
 
-  const handleSpecialSubmit = (event) => {
+  const handleSpecialSubmit = async (event) => {
     event.preventDefault();
-    const response = onSaveSpecialIncome({
+    setDriverActionSaving("special");
+    const response = await Promise.resolve(onSaveSpecialIncome({
       ...specialDraft,
       vehicleId: specialDraft.vehicleId || assignedVehicleId,
-    });
+    }));
+    setDriverActionSaving(null);
 
     setFeedback({
       tone: response.ok ? "success" : "danger",
@@ -9535,18 +10123,21 @@ function DriversPanel({
     });
 
     if (response.ok) {
+      markDriverActionSuccess("special");
       resetDriverSpecialDraft();
-      setDriverAction(null);
+      closeDriverAction();
     }
   };
 
-  const handleExpenseSubmit = (event) => {
+  const handleExpenseSubmit = async (event) => {
     event.preventDefault();
-    const response = onSaveExpense({
+    setDriverActionSaving("expense");
+    const response = await Promise.resolve(onSaveExpense({
       ...expenseDraft,
       expenseKind: "asset",
       vehicleId: expenseDraft.vehicleId || assignedVehicleId,
-    });
+    }));
+    setDriverActionSaving(null);
 
     setFeedback({
       tone: response.ok ? "success" : "danger",
@@ -9554,8 +10145,9 @@ function DriversPanel({
     });
 
     if (response.ok) {
+      markDriverActionSuccess("expense");
       resetDriverExpenseDraft();
-      setDriverAction(null);
+      closeDriverAction();
     }
   };
 
@@ -9590,7 +10182,7 @@ function DriversPanel({
           editReason: "",
         }),
       );
-      setDriverAction("shift");
+      openDriverRoute("shift");
       return;
     }
 
@@ -9608,7 +10200,7 @@ function DriversPanel({
       amount: String(record.amount ?? ""),
       editReason: "",
     });
-    setDriverAction("special");
+    openDriverAction("special");
   };
 
   const handleEditDriverExpense = (record) => {
@@ -9634,11 +10226,13 @@ function DriversPanel({
       cashExpense: Boolean(record.cashExpense),
       editReason: "",
     });
-    setDriverAction("expense");
+    openDriverAction("expense");
   };
 
-  const handleDriverCashUp = () => {
-    const response = onSubmitDriverCashUp?.();
+  const handleDriverCashUp = async () => {
+    setDriverActionSaving("cashup");
+    const response = await Promise.resolve(onSubmitDriverCashUp?.());
+    setDriverActionSaving(null);
 
     if (!response) {
       return;
@@ -9648,6 +10242,11 @@ function DriversPanel({
       tone: response.ok ? "success" : "danger",
       message: response.message ?? response.error,
     });
+
+    if (response.ok) {
+      closeDriverAction();
+      markDriverActionSuccess("cashup");
+    }
   };
 
   const handleAddDriver = () => {
@@ -9656,7 +10255,7 @@ function DriversPanel({
     driverFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const handleDriverSubmit = (event) => {
+  const handleDriverSubmit = async (event) => {
     event.preventDefault();
     const response = onSaveDriver(driverDraft);
 
@@ -9668,6 +10267,13 @@ function DriversPanel({
     if (response.ok) {
       setDriverDraft(createDriverDraft());
       setShowDriverForm(false);
+
+      if (activeRole !== "Driver") {
+        await onRevalidateLiveWorkspace?.({
+          reason: "driver-profile-update",
+          force: true,
+        });
+      }
     }
   };
 
@@ -9676,7 +10282,7 @@ function DriversPanel({
     allocationFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const handleAllocationSubmit = (event) => {
+  const handleAllocationSubmit = async (event) => {
     event.preventDefault();
     const response = onAllocateDriverShift(allocationDraft);
 
@@ -9687,8 +10293,243 @@ function DriversPanel({
 
     if (response.ok) {
       setAllocationDraft(buildAllocationDraft(response.staffId));
+
+      await onRevalidateLiveWorkspace?.({
+        reason: "driver-linked-vehicle-update",
+        force: true,
+      });
     }
   };
+
+  const driverActionFooter =
+    driverAction === "cashup" ? (
+      <div className="sheet-action-row">
+        <button type="button" className="action-button" onClick={requestCloseDriverAction}>
+          Back
+        </button>
+        <button
+          type="button"
+          className="action-button primary"
+          disabled={!driverDayCashSummary?.entryCount || driverActionSaving === "cashup"}
+          onClick={handleDriverCashUp}
+        >
+          {driverActionSaving === "cashup" ? "Sending..." : "Checking"}
+        </button>
+      </div>
+    ) : (
+      <div className="sheet-action-row">
+        <button type="button" className="action-button" onClick={requestCloseDriverAction}>
+          Close
+        </button>
+        <button type="button" className="action-button" onClick={discardDriverAction}>
+          {driverActionDismissLabel}
+        </button>
+        <button
+          type="submit"
+          form={driverActionFormId}
+          className="action-button primary"
+          disabled={driverActionSaveDisabled}
+        >
+          {driverActionSaveLabel}
+        </button>
+      </div>
+    );
+  const driverShiftRouteFooter = (
+    <div className="sheet-action-row">
+      <button type="button" className="action-button" onClick={requestCloseDriverRoute}>
+        Back
+      </button>
+      <button type="button" className="action-button" onClick={discardDriverRoute}>
+        {shiftDraft.id ? "Cancel edit" : "Discard draft"}
+      </button>
+      <button
+        type="submit"
+        form="driver-shift-form"
+        className="action-button primary"
+        disabled={
+          Boolean(shiftValidationError) ||
+          Boolean(shiftEditReasonError) ||
+          !canUseFinanceCapture ||
+          driverActionSaving === "shift"
+        }
+      >
+        {driverActionSaving === "shift" ? "Saving..." : shiftDraft.id ? "Update trip" : "Save trip"}
+      </button>
+    </div>
+  );
+  const DriverActionContainer =
+    driverActionMode === "screen"
+      ? MobileActionScreen
+      : driverActionMode === "sheet"
+        ? MobileBottomSheet
+        : null;
+
+  if (driverRouteView === "shift") {
+    return (
+      <DriverFullScreenView
+        eyebrow="Driver quick action"
+        title="Add Daily Earning"
+        subtitle={
+          shiftDraft.id
+            ? "Update the captured daily earnings record for this driver."
+            : "Capture trip takings in a focused driver form."
+        }
+        badges={driverActionSheetBadges}
+        onBack={requestCloseDriverRoute}
+        focusKey={`${driverRouteView}-${shiftDraft.id ?? "new"}`}
+        initialFocusSelector="[data-autofocus='true'], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])"
+        footer={driverShiftRouteFooter}
+      >
+        {feedback && (
+          <div className="finance-feedback" data-tone={feedback.tone}>
+            <span className="status-chip" data-tone={feedback.tone}>
+              {feedback.message}
+            </span>
+          </div>
+        )}
+        <form id="driver-shift-form" className="finance-form driver-sheet-form" onSubmit={handleShiftSubmit}>
+          <div className="finance-form-grid">
+            <label className="finance-field">
+              <span>Vehicle</span>
+              <input type="text" value={assignedVehicle?.registration ?? ""} disabled />
+            </label>
+            <label className="finance-field">
+              <span>Date</span>
+              <input
+                data-autofocus="true"
+                type="date"
+                value={shiftDraft.tripDate}
+                onChange={(event) =>
+                  updateDriverShiftDraft((current) => ({
+                    ...current,
+                    tripDate: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="finance-field">
+              <span>Time in</span>
+              <input
+                type="time"
+                value={shiftDraft.timeIn}
+                onChange={(event) =>
+                  updateDriverShiftDraft((current) => ({
+                    ...current,
+                    timeIn: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="finance-field">
+              <span>Time out</span>
+              <input
+                type="time"
+                value={shiftDraft.timeOut}
+                onChange={(event) =>
+                  updateDriverShiftDraft((current) => ({
+                    ...current,
+                    timeOut: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="finance-field">
+              <span>Opening odo</span>
+              <input
+                type="number"
+                value={shiftDraft.openingOdo}
+                onChange={(event) =>
+                  updateDriverShiftDraft((current) => ({
+                    ...current,
+                    openingOdo: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="finance-field">
+              <span>Closing odo</span>
+              <input
+                type="number"
+                min={Number(shiftDraft.openingOdo || 0) + 1}
+                value={shiftDraft.closingOdo}
+                onChange={(event) =>
+                  updateDriverShiftDraft((current) => ({
+                    ...current,
+                    closingOdo: event.target.value,
+                  }))
+                }
+              />
+            </label>
+            <label className="finance-field">
+              <span>Total passengers</span>
+              <input type="text" value={shiftTripTotals.totalPassengers.toLocaleString()} disabled readOnly />
+            </label>
+            <label className="finance-field">
+              <span>Total collected</span>
+              <input type="text" value={formatMoney(shiftTripTotals.totalAmount)} disabled readOnly />
+            </label>
+          </div>
+          <DailyTripLogbookFields
+            route={assignedVehicleRoute}
+            tripLogbook={shiftDraft.tripLogbook}
+            onChange={(nextTripLogbook) =>
+              updateDriverShiftDraft((current) =>
+                syncStandardDraftTripLogbook({
+                  ...current,
+                  tripLogbook: nextTripLogbook,
+                }),
+              )
+            }
+          />
+          {shiftDraft.id && (
+            <label className="finance-field finance-field-wide">
+              <span>Update reason</span>
+              <textarea
+                rows="3"
+                value={shiftDraft.editReason}
+                onChange={(event) =>
+                  updateDriverShiftDraft((current) => ({
+                    ...current,
+                    editReason: event.target.value,
+                  }))
+                }
+              />
+            </label>
+          )}
+          <div className="finance-form-meta">
+            <span className="status-chip" data-tone="info">
+              Expected opening {Number(snapshot.finance.vehicleOpenings?.[assignedVehicleId] ?? 0).toLocaleString()} km
+            </span>
+            <span
+              className="status-chip"
+              data-tone={
+                Number(shiftDraft.closingOdo || 0) > Number(shiftDraft.openingOdo || 0)
+                  ? "success"
+                  : "danger"
+              }
+            >
+              Distance{" "}
+              {Math.max(
+                Number(shiftDraft.closingOdo || 0) - Number(shiftDraft.openingOdo || 0),
+                0,
+              ).toLocaleString()}{" "}
+              km
+            </span>
+          </div>
+          <p
+            className="finance-form-note"
+            data-tone={shiftValidationError || shiftEditReasonError ? "danger" : "info"}
+          >
+            {shiftEditReasonError ??
+              shiftValidationError ??
+              (shiftDraft.id
+                ? "Explain the correction before updating this taking. The owner will see the note in system activity history."
+                : "Passenger trip logbook is complete and ready to save.")}
+          </p>
+        </form>
+      </DriverFullScreenView>
+    );
+  }
 
   return (
     <div className="content-stack">
@@ -9770,22 +10611,61 @@ function DriversPanel({
               <InfoPair label="Terminal mode" value="High contrast" />
             </div>
 
-            <div className="shortcut-grid">
-              {snapshot.driverTerminal.shortcuts.map((shortcut, index) => (
-                <button
-                  key={`${shortcut}-${index}`}
-                  type="button"
-                  className="shortcut-button"
-                  onClick={() => handleShortcut(shortcut)}
-                >
-                  {formatShortcutLabel(shortcut)}
-                </button>
-              ))}
-            </div>
-
             <DriverCashSummaryBoard
               summary={driverDayCashSummary}
+              actions={snapshot.driverTerminal.shortcuts.map((shortcut) => ({
+                key:
+                  shortcut === "Log shift takings"
+                    ? "shift"
+                    : shortcut === "Log daily expense"
+                      ? "expense"
+                      : shortcut === "Capture special trip"
+                        ? "special"
+                        : shortcut,
+                label: formatShortcutLabel(shortcut),
+                meta:
+                  shortcut === "Log shift takings"
+                    ? "Capture daily trip takings"
+                    : shortcut === "Log daily expense"
+                      ? "Capture vehicle expense"
+                      : shortcut === "Capture special trip"
+                        ? "Capture once-off trip"
+                        : "Open action",
+                icon:
+                  shortcut === "Log shift takings"
+                    ? ArrowDownToLine
+                    : shortcut === "Log daily expense"
+                      ? Briefcase
+                      : TrendingUp,
+                tone:
+                  shortcut === "Log shift takings"
+                    ? "success"
+                    : shortcut === "Log daily expense"
+                      ? "warning"
+                      : "info",
+                active:
+                  (shortcut === "Log shift takings" && driverRouteView === "shift") ||
+                  (shortcut === "Log daily expense" && driverAction === "expense") ||
+                  (shortcut === "Capture special trip" && driverAction === "special"),
+                loading:
+                  (shortcut === "Log shift takings" &&
+                    (driverActionPreparing === "shift" || driverActionSaving === "shift")) ||
+                  (shortcut === "Log daily expense" &&
+                    (driverActionPreparing === "expense" || driverActionSaving === "expense")) ||
+                  (shortcut === "Capture special trip" &&
+                    (driverActionPreparing === "special" || driverActionSaving === "special")),
+                success:
+                  (shortcut === "Log shift takings" && driverActionSuccess === "shift") ||
+                  (shortcut === "Log daily expense" && driverActionSuccess === "expense") ||
+                  (shortcut === "Capture special trip" && driverActionSuccess === "special"),
+                disabled: !canUseFinanceCapture,
+                onClick: () => handleShortcut(shortcut),
+              }))}
               onSubmitCashUp={handleDriverCashUp}
+              onOpenCashUp={() => openDriverAction("cashup")}
+              activeAction={driverAction}
+              cashUpLoading={driverActionPreparing === "cashup" || driverActionSaving === "cashup"}
+              cashUpSuccess={driverActionSuccess === "cashup"}
             />
 
             {isDriver && (
@@ -9854,23 +10734,21 @@ function DriversPanel({
               </article>
             )}
 
-            {driverAction && (
-              <div className="driver-action-panel">
-                <div className="overview-board-head">
-                  <p className="eyebrow">Quick entry</p>
-                  <h3>
-                    {(
-                      {
-                        shift: "Add daily earnings",
-                        expense: "Add daily expense",
-                        special: "Add extra trip",
-                      }[driverAction]
-                    ) ?? "Quick entry"}
-                  </h3>
-                </div>
-
+            {DriverActionContainer ? (
+              <DriverActionContainer
+                open={Boolean(driverAction)}
+                eyebrow="Driver quick action"
+                title={driverActionSheetTitle}
+                subtitle={driverActionSheetSubtitle}
+                badges={driverActionSheetBadges}
+                onClose={requestCloseDriverAction}
+                focusKey={driverAction}
+                initialFocusSelector="[data-autofocus='true'], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])"
+                footer={driverActionFooter}
+              >
+              <div>
                 {driverAction === "shift" && (
-                  <form className="finance-form" onSubmit={handleShiftSubmit}>
+                  <form id="driver-shift-form" className="finance-form driver-sheet-form" onSubmit={handleShiftSubmit}>
                     <div className="finance-form-grid">
                       <label className="finance-field">
                         <span>Vehicle</span>
@@ -9879,6 +10757,7 @@ function DriversPanel({
                       <label className="finance-field">
                         <span>Date</span>
                         <input
+                          data-autofocus="true"
                           type="date"
                           value={shiftDraft.tripDate}
                           onChange={(event) =>
@@ -10010,29 +10889,6 @@ function DriversPanel({
                         ).toLocaleString()} km
                       </span>
                     </div>
-                    <div className="finance-form-actions">
-                      <button
-                        type="submit"
-                        className="action-button primary"
-                        disabled={
-                          Boolean(shiftValidationError) ||
-                          Boolean(shiftEditReasonError) ||
-                          !canUseFinanceCapture
-                        }
-                      >
-                        {shiftDraft.id ? "Update trip" : "Save trip"}
-                      </button>
-                      <button
-                        type="button"
-                        className="action-button"
-                        onClick={() => {
-                          resetDriverShiftDraft();
-                          setDriverAction(null);
-                        }}
-                      >
-                        {shiftDraft.id ? "Cancel edit" : "Cancel"}
-                      </button>
-                    </div>
                     <p
                       className="finance-form-note"
                       data-tone={shiftValidationError || shiftEditReasonError ? "danger" : "info"}
@@ -10047,11 +10903,12 @@ function DriversPanel({
                 )}
 
                 {driverAction === "special" && (
-                  <form className="finance-form" onSubmit={handleSpecialSubmit}>
+                  <form id="driver-special-form" className="finance-form driver-sheet-form" onSubmit={handleSpecialSubmit}>
                     <div className="finance-form-grid">
                       <label className="finance-field">
                         <span>Date</span>
                         <input
+                          data-autofocus="true"
                           type="date"
                           value={specialDraft.tripDate}
                           onChange={(event) =>
@@ -10208,29 +11065,6 @@ function DriversPanel({
                         Business km {getBusinessKmValue(specialDraft).toLocaleString()} km
                       </span>
                     </div>
-                    <div className="finance-form-actions">
-                      <button
-                        type="submit"
-                        className="action-button primary"
-                        disabled={
-                          !canUseFinanceCapture ||
-                          Boolean(specialValidationError) ||
-                          Boolean(specialEditReasonError)
-                        }
-                      >
-                        {specialDraft.id ? "Update trip" : "Save trip"}
-                      </button>
-                      <button
-                        type="button"
-                        className="action-button"
-                        onClick={() => {
-                          resetDriverSpecialDraft();
-                          setDriverAction(null);
-                        }}
-                      >
-                        {specialDraft.id ? "Cancel edit" : "Cancel"}
-                      </button>
-                    </div>
                     <p
                       className="finance-form-note"
                       data-tone={specialValidationError || specialEditReasonError ? "danger" : "info"}
@@ -10245,7 +11079,7 @@ function DriversPanel({
                 )}
 
                 {driverAction === "expense" && (
-                  <form className="finance-form" onSubmit={handleExpenseSubmit}>
+                  <form id="driver-expense-form" className="finance-form driver-sheet-form" onSubmit={handleExpenseSubmit}>
                     <div className="finance-form-grid">
                       <label className="finance-field">
                         <span>Vehicle</span>
@@ -10276,6 +11110,7 @@ function DriversPanel({
                         <span>Description</span>
                         {usesCustomDriverExpenseDescription ? (
                           <input
+                            data-autofocus="true"
                             type="text"
                             placeholder={
                               expenseDraft.category === EXPENSE_OTHER_CATEGORY
@@ -10293,6 +11128,7 @@ function DriversPanel({
                           />
                         ) : (
                           <select
+                            data-autofocus="true"
                             value={expenseDraft.descriptionPreset}
                             onChange={(event) =>
                               setExpenseDraft((current) =>
@@ -10402,29 +11238,6 @@ function DriversPanel({
                         Status starts as {autoCheckDriverExpenses ? "checked" : "waiting"}
                       </span>
                     </div>
-                    <div className="finance-form-actions">
-                      <button
-                        type="submit"
-                        className="action-button primary"
-                        disabled={
-                          !canUseFinanceCapture ||
-                          Boolean(expenseValidationError) ||
-                          Boolean(expenseEditReasonError)
-                        }
-                      >
-                        {expenseDraft.id ? "Update expense" : "Save expense"}
-                      </button>
-                      <button
-                        type="button"
-                        className="action-button"
-                        onClick={() => {
-                          resetDriverExpenseDraft();
-                          setDriverAction(null);
-                        }}
-                      >
-                        {expenseDraft.id ? "Cancel edit" : "Cancel"}
-                      </button>
-                    </div>
                     <p
                       className="finance-form-note"
                       data-tone={expenseValidationError || expenseEditReasonError ? "danger" : "info"}
@@ -10437,8 +11250,32 @@ function DriversPanel({
                     </p>
                   </form>
                 )}
+
+                {driverAction === "cashup" && (
+                  <div className="driver-sheet-confirm">
+                    <div className="finance-form-meta">
+                      <span className="status-chip" data-tone="info">
+                        {driverDayCashSummary.entryCount.toLocaleString()} activity entries
+                      </span>
+                      <span className="status-chip" data-tone="success">
+                        Expected cash in {formatMoney(driverDayCashSummary.expectedCashIn ?? 0)}
+                      </span>
+                    </div>
+                    <p className="panel-note">
+                      Submit checking for the active driver and vehicle. This keeps the existing
+                      cash-up workflow unchanged and sends one day hand-in total to management.
+                    </p>
+                    {isDriverActionDirty ? (
+                      <p className="finance-form-note" data-tone="warning">
+                        Unsaved entry changes are still open in another action. Save or discard them
+                        before checking.
+                      </p>
+                    ) : null}
+                  </div>
+                )}
               </div>
-            )}
+              </DriverActionContainer>
+            ) : null}
           </div>
         </Panel>
 
@@ -10976,7 +11813,14 @@ function AccessDeniedShell({ email, onSignOut }) {
   );
 }
 
-function DriverCashSummaryBoard({ summary, onSubmitCashUp }) {
+function DriverCashSummaryBoard({
+  summary,
+  actions = [],
+  onOpenCashUp,
+  activeAction,
+  cashUpLoading = false,
+  cashUpSuccess = false,
+}) {
   const hasEntries = (summary?.entryCount ?? 0) > 0;
   const expectedCashTone =
     (summary?.expectedCashIn ?? 0) < 0
@@ -11014,6 +11858,34 @@ function DriverCashSummaryBoard({ summary, onSubmitCashUp }) {
         </span>
       </div>
 
+      <div className="driver-quick-actions-grid">
+        {actions.map((action) => (
+          <DriverQuickActionButton
+            key={action.key}
+            label={action.label}
+            meta={action.meta}
+            icon={action.icon}
+            tone={action.tone}
+            active={action.active}
+            loading={action.loading}
+            success={action.success}
+            disabled={action.disabled}
+            onClick={action.onClick}
+          />
+        ))}
+        <DriverQuickActionButton
+          label="Checking"
+          meta={hasEntries ? "Review and submit day cash" : "Needs saved activity first"}
+          icon={Banknote}
+          tone="navy"
+          active={activeAction === "cashup"}
+          loading={cashUpLoading}
+          success={cashUpSuccess}
+          disabled={!hasEntries || !onOpenCashUp}
+          onClick={onOpenCashUp}
+        />
+      </div>
+
       {hasEntries ? (
         <div className="finance-ledger">
           {(summary?.entries ?? []).slice(0, 5).map((entry) => (
@@ -11037,17 +11909,6 @@ function DriverCashSummaryBoard({ summary, onSubmitCashUp }) {
           Save trip income or expense entries first to build the day cash activity view.
         </p>
       )}
-
-      <div className="finance-form-actions">
-        <button
-          type="button"
-          className="action-button primary"
-          disabled={!hasEntries || !onSubmitCashUp}
-          onClick={onSubmitCashUp}
-        >
-          Checking
-        </button>
-      </div>
       <p className="finance-form-note" data-tone={hasEntries ? "info" : "warning"}>
         {hasEntries
           ? "Checking wraps up the current day and sends management one day hand-in total."

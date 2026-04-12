@@ -112,3 +112,18 @@ export const clearBrowserCaches = async () => {
     return 0;
   }
 };
+
+export const clearAppBrowserCaches = async (prefix = "taxiflow-pro-") => {
+  if (typeof caches === "undefined" || !caches?.keys) {
+    return 0;
+  }
+
+  try {
+    const keys = await caches.keys();
+    const matchingKeys = keys.filter((key) => String(key ?? "").startsWith(prefix));
+    await Promise.all(matchingKeys.map((key) => caches.delete(key)));
+    return matchingKeys.length;
+  } catch {
+    return 0;
+  }
+};

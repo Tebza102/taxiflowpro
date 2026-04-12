@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test:sync-guards": "node tests/liveSyncGuards.test.mjs",
     "dev:daily-log-check": "node scripts/daily-log-regression.mjs",
     "supabase:seed-users": "node scripts/create-supabase-users.mjs"
   },

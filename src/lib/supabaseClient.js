@@ -27,9 +27,24 @@ export const hasSupabaseConfig =
 
 let supabaseClient = null;
 
+const buildNoStoreFetch = () => async (input, init = {}) => {
+  const nextHeaders = new Headers(init?.headers ?? {});
+  nextHeaders.set("x-taxiflow-cache", "bypass");
+
+  return fetch(input, {
+    ...init,
+    cache: "no-store",
+    headers: nextHeaders,
+  });
+};
+
 if (hasSupabaseConfig) {
   try {
-    supabaseClient = createClient(supabaseUrl, supabaseAnonKey);
+    supabaseClient = createClient(supabaseUrl, supabaseAnonKey, {
+      global: {
+        fetch: buildNoStoreFetch(),
+      },
+    });
     logStartupEvent("api-init", {
       mode: configuredBackendMode,
       provider: "supabase",

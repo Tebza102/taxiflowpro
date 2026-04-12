@@ -1,13 +1,27 @@
-const CACHE_NAME = "taxiflow-pro-v4";
+const CACHE_NAME = "taxiflow-pro-v5";
 const APP_SHELL = ["/", "/manifest.webmanifest", "/pwa-192.png", "/pwa-512.png"];
 const STATIC_ASSET_PATTERN =
   /\.(?:js|css|png|jpg|jpeg|svg|webp|gif|ico|woff2?|ttf|otf|json|webmanifest)$/i;
 const BLOCKED_PATH_PREFIXES = ["/api/", "/functions/", "/analytics/", "/platform/"];
+const LIVE_BYPASS_PATH_PATTERNS = [
+  /\/auth\/v1\//i,
+  /\/rest\/v1\//i,
+  /\/realtime\/v1\//i,
+  /workspace_snapshots/i,
+];
 
 const isBlockedRequest = (requestUrl) => {
-  const { hostname, pathname } = new URL(requestUrl);
+  const { hostname, pathname, searchParams } = new URL(requestUrl);
 
   if (hostname.includes("supabase")) {
+    return true;
+  }
+
+  if (LIVE_BYPASS_PATH_PATTERNS.some((pattern) => pattern.test(pathname))) {
+    return true;
+  }
+
+  if (searchParams.get("workspace_key") === "taxiflow-live") {
     return true;
   }
 
@@ -48,7 +62,10 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (isBlockedRequest(event.request.url)) {
+  if (
+    event.request.headers.get("x-taxiflow-cache") === "bypass" ||
+    isBlockedRequest(event.request.url)
+  ) {
     // Operational data must always bypass the worker cache.
     event.respondWith(fetch(event.request, { cache: "no-store" }));
     return;

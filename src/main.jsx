@@ -51,7 +51,9 @@ const registerServiceWorker = () => {
   const browserWindowRef = getSafeWindow();
   const runRegistration = () => {
     browserNavigator.serviceWorker
-      .register("/sw.js")
+      .register("/sw.js", {
+        updateViaCache: "none",
+      })
       .then((registration) => {
         logStartupEvent("service-worker-registered", {
           scope: registration.scope,

@@ -890,12 +890,41 @@ button {
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  transition:
+    transform 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease;
 }
 
 .action-button.primary {
   background: var(--navy);
   border-color: var(--navy);
   color: var(--white);
+}
+
+.action-button:hover,
+.record-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 18px rgba(11, 37, 69, 0.08);
+}
+
+.action-button:active,
+.record-button:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.action-button:focus-visible,
+.record-button:focus-visible,
+.shortcut-button:focus-visible,
+.mobile-sheet-close:focus-visible,
+.mobile-action-screen-close:focus-visible,
+.driver-fullscreen-back:focus-visible,
+.driver-quick-action-button:focus-visible {
+  outline: 3px solid rgba(27, 197, 189, 0.3);
+  outline-offset: 2px;
 }
 
 .record-button.danger {
@@ -1867,12 +1896,486 @@ button {
   font-weight: 700;
 }
 
+.shortcut-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 12px 22px rgba(11, 37, 69, 0.08);
+}
+
+.shortcut-button:active {
+  transform: scale(0.98);
+}
+
 .driver-action-panel {
   display: grid;
   gap: 0.85rem;
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 1px solid rgba(11, 37, 69, 0.08);
+}
+
+.driver-quick-actions-grid {
+  display: grid;
+  /* Container-responsive: avoid 2-up when the host panel is narrow (even on desktop). */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  gap: 0.7rem;
+}
+
+.driver-quick-action-button {
+  position: relative;
+  min-height: 5.75rem;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(11, 37, 69, 0.08);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(243, 246, 250, 0.98));
+  color: var(--navy);
+  text-align: left;
+  box-shadow: 0 10px 20px rgba(11, 37, 69, 0.05);
+  touch-action: manipulation;
+  user-select: none;
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease,
+    color 160ms ease,
+    opacity 160ms ease;
+}
+
+.driver-quick-action-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 16px 28px rgba(11, 37, 69, 0.1);
+  border-color: rgba(11, 37, 69, 0.16);
+}
+
+.driver-quick-action-button:active {
+  transform: translateY(0) scale(0.975);
+  box-shadow: 0 8px 18px rgba(11, 37, 69, 0.12);
+}
+
+.driver-quick-action-button:focus-visible {
+  outline-offset: 3px;
+  box-shadow:
+    0 0 0 4px rgba(27, 197, 189, 0.14),
+    0 14px 28px rgba(11, 37, 69, 0.12);
+}
+
+.driver-quick-action-button:disabled {
+  opacity: 0.62;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+.driver-quick-action-button[data-disabled="true"] {
+  background: linear-gradient(180deg, rgba(246, 248, 251, 0.98), rgba(237, 241, 246, 0.98));
+  color: rgba(11, 37, 69, 0.7);
+}
+
+.driver-quick-action-button[data-tone="success"] .driver-quick-action-icon {
+  background: rgba(39, 174, 96, 0.12);
+  color: var(--success);
+}
+
+.driver-quick-action-button[data-tone="warning"] .driver-quick-action-icon {
+  background: rgba(243, 156, 18, 0.12);
+  color: var(--warning);
+}
+
+.driver-quick-action-button[data-tone="navy"] .driver-quick-action-icon {
+  background: rgba(11, 37, 69, 0.12);
+  color: var(--navy);
+}
+
+.driver-quick-action-button[data-active="true"] {
+  border-color: rgba(11, 37, 69, 0.24);
+  background: linear-gradient(180deg, rgba(11, 37, 69, 0.98), rgba(27, 52, 88, 0.98));
+  color: var(--white);
+  box-shadow: 0 16px 28px rgba(11, 37, 69, 0.16);
+}
+
+.driver-quick-action-button[data-active="true"] .driver-quick-action-icon {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--white);
+}
+
+.driver-quick-action-button[data-active="true"] .driver-quick-action-copy span {
+  color: rgba(255, 255, 255, 0.74);
+}
+
+.driver-quick-action-button[data-success="true"] {
+  border-color: rgba(39, 174, 96, 0.28);
+  box-shadow: 0 14px 28px rgba(39, 174, 96, 0.12);
+}
+
+.driver-quick-action-button[data-loading="true"] {
+  border-color: rgba(11, 37, 69, 0.18);
+}
+
+.driver-quick-action-icon {
+  width: 2.75rem;
+  height: 2.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.7rem;
+  background: rgba(52, 152, 219, 0.12);
+  color: var(--info);
+  flex-shrink: 0;
+}
+
+.driver-quick-action-copy {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.driver-quick-action-copy strong {
+  font-size: 0.92rem;
+  line-height: 1.25;
+  word-break: normal;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+
+.driver-quick-action-copy span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.35;
+  text-transform: uppercase;
+  letter-spacing: 0;
+  word-break: normal;
+  overflow-wrap: break-word;
+  hyphens: auto;
+}
+
+.driver-quick-action-state {
+  min-width: 2.4rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: end;
+  font-size: 0.69rem;
+  font-weight: 800;
+  line-height: 1.1;
+  text-transform: uppercase;
+  letter-spacing: 0;
+  color: rgba(11, 37, 69, 0.56);
+  text-align: right;
+}
+
+.driver-quick-action-state:empty {
+  display: none;
+}
+
+.driver-quick-action-button[data-active="true"] .driver-quick-action-state,
+.driver-quick-action-button[data-active="true"] .driver-quick-action-state-label {
+  color: rgba(255, 255, 255, 0.76);
+}
+
+/* state label removed: we only show loading text or success icon */
+
+.driver-quick-action-spinner {
+  animation: spin 0.9s linear infinite;
+}
+
+@media (hover: none) {
+  .driver-quick-action-button:hover {
+    transform: none;
+    box-shadow: 0 10px 20px rgba(11, 37, 69, 0.05);
+    border-color: rgba(11, 37, 69, 0.08);
+  }
+}
+
+.mobile-sheet-root {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-top: max(0.75rem, env(safe-area-inset-top, 0px));
+}
+
+.mobile-sheet-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(11, 37, 69, 0.42);
+  backdrop-filter: blur(2px);
+}
+
+.mobile-sheet {
+  position: relative;
+  width: min(100%, 36rem);
+  max-height: min(92vh, 52rem);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  border-radius: 1.4rem 1.4rem 0 0;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(246, 248, 251, 0.99));
+  box-shadow: 0 -18px 42px rgba(11, 37, 69, 0.22);
+  overflow: hidden;
+  animation: mobile-sheet-enter 180ms ease-out;
+  overscroll-behavior: contain;
+}
+
+.mobile-action-screen-root {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  background: rgba(247, 249, 252, 0.98);
+}
+
+.mobile-action-screen {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(246, 248, 251, 0.99));
+  animation: mobile-screen-enter 180ms ease-out;
+  overscroll-behavior: contain;
+}
+
+.mobile-action-screen-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  gap: 0.75rem;
+  padding: calc(1rem + env(safe-area-inset-top, 0px)) 1rem 1rem;
+  background: rgba(255, 255, 255, 0.97);
+  border-bottom: 1px solid rgba(11, 37, 69, 0.08);
+}
+
+.mobile-action-screen-title-wrap {
+  display: grid;
+  gap: 0.4rem;
+  padding-right: 3rem;
+}
+
+.mobile-action-screen-title-wrap h2 {
+  margin: 0;
+  color: var(--navy);
+  font-size: 1.35rem;
+  line-height: 1.2;
+}
+
+.mobile-action-screen-subtitle {
+  margin: 0;
+  color: var(--subtext);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.mobile-action-screen-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.mobile-action-screen-close {
+  position: absolute;
+  top: calc(0.95rem + env(safe-area-inset-top, 0px));
+  right: 1rem;
+  width: 2.5rem;
+  height: 2.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(11, 37, 69, 0.08);
+  background: #ffffff;
+  color: var(--navy);
+}
+
+.mobile-action-screen-body {
+  overflow-y: auto;
+  padding: 1rem;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mobile-action-screen-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: 0.9rem 1rem calc(0.95rem + env(safe-area-inset-bottom, 0px));
+  background: rgba(255, 255, 255, 0.97);
+  border-top: 1px solid rgba(11, 37, 69, 0.08);
+}
+
+.driver-fullscreen-view {
+  position: fixed;
+  inset: 0;
+  z-index: 135;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.99), rgba(246, 248, 251, 0.99));
+}
+
+.driver-fullscreen-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  gap: 0.85rem;
+  padding: calc(1rem + env(safe-area-inset-top, 0px)) 1rem 1rem;
+  background: rgba(255, 255, 255, 0.97);
+  border-bottom: 1px solid rgba(11, 37, 69, 0.08);
+}
+
+.driver-fullscreen-back {
+  width: fit-content;
+  min-height: 2.75rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: 0.7rem;
+  border: 1px solid rgba(11, 37, 69, 0.08);
+  background: #ffffff;
+  color: var(--navy);
+  font-weight: 700;
+}
+
+.driver-fullscreen-title-wrap {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.driver-fullscreen-title-wrap h2 {
+  margin: 0;
+  color: var(--navy);
+  font-size: 1.35rem;
+  line-height: 1.2;
+}
+
+.driver-fullscreen-subtitle {
+  margin: 0;
+  color: var(--subtext);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.driver-fullscreen-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.driver-fullscreen-body {
+  overflow-y: auto;
+  padding: 1rem;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.driver-fullscreen-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: 0.9rem 1rem calc(0.95rem + env(safe-area-inset-bottom, 0px));
+  background: rgba(255, 255, 255, 0.97);
+  border-top: 1px solid rgba(11, 37, 69, 0.08);
+}
+
+.mobile-sheet-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: grid;
+  gap: 0.65rem;
+  padding: 0.75rem 1rem 0.95rem;
+  background: rgba(255, 255, 255, 0.96);
+  border-bottom: 1px solid rgba(11, 37, 69, 0.08);
+}
+
+.mobile-sheet-grab {
+  width: 3rem;
+  height: 0.32rem;
+  margin: 0 auto;
+  border-radius: 999px;
+  background: rgba(11, 37, 69, 0.14);
+}
+
+.mobile-sheet-title-wrap {
+  display: grid;
+  gap: 0.35rem;
+  padding-right: 3rem;
+}
+
+.mobile-sheet-title-wrap h3 {
+  margin: 0;
+  color: var(--navy);
+  font-size: 1.25rem;
+}
+
+.mobile-sheet-subtitle {
+  margin: 0;
+  color: var(--subtext);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.mobile-sheet-close {
+  position: absolute;
+  top: 0.9rem;
+  right: 0.95rem;
+  width: 2.35rem;
+  height: 2.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid rgba(11, 37, 69, 0.08);
+  background: #ffffff;
+  color: var(--navy);
+}
+
+.mobile-sheet-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.mobile-sheet-body {
+  overflow-y: auto;
+  padding: 1rem;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mobile-sheet-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: 0.9rem 1rem calc(0.9rem + env(safe-area-inset-bottom, 0px));
+  background: rgba(255, 255, 255, 0.97);
+  border-top: 1px solid rgba(11, 37, 69, 0.08);
+}
+
+.sheet-action-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.sheet-action-row .action-button {
+  width: 100%;
+  min-height: 3rem;
+}
+
+.driver-sheet-form {
+  padding-bottom: 0.6rem;
+}
+
+.driver-sheet-confirm {
+  display: grid;
+  gap: 0.9rem;
 }
 
 .person-metrics {
@@ -1910,6 +2413,30 @@ button {
 .bottom-nav-item.active {
   background: rgba(255, 255, 255, 0.12);
   color: var(--white);
+}
+
+@keyframes mobile-sheet-enter {
+  from {
+    opacity: 0;
+    transform: translateY(1.5rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes mobile-screen-enter {
+  from {
+    opacity: 0;
+    transform: translateY(1rem);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 @media (min-width: 720px) {
@@ -1970,6 +2497,15 @@ button {
   .bottom-nav {
     display: none;
   }
+
+  /* Keep the quick-actions grid container-responsive; do not force 2-up on narrow panels. */
+  .driver-quick-actions-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  }
+
+  .sheet-action-row {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
 
 @media (min-width: 1080px) {
@@ -2012,4 +2548,76 @@ button {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
+}
+
+@media (max-width: 719px) {
+  .panel-card {
+    padding: 1rem;
+    border-radius: 1.2rem;
+  }
+
+  .panel-card::before {
+    border-radius: 1.2rem 0 0 1.2rem;
+  }
+
+  /* Remove redundant nested card chrome inside panels on mobile to reclaim space. */
+  .panel-card > .terminal-card {
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+
+  .overview-board {
+    padding: 0.85rem;
+    border-radius: 0.9rem;
+  }
+
+  .driver-quick-actions-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .sheet-action-row {
+    grid-template-columns: 1fr;
+  }
+
+  .driver-quick-action-button {
+    min-height: auto;
+    gap: 0.5rem;
+    padding: 0.75rem;
+    grid-template-columns: auto 1fr max-content;
+  }
+
+  .driver-quick-action-icon {
+    width: 2.25rem;
+    height: 2.25rem;
+    flex-shrink: 0;
+  }
+
+  .driver-quick-action-copy {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .driver-quick-action-copy strong {
+    font-size: 0.85rem;
+    white-space: normal;
+    word-break: normal;
+    overflow-wrap: break-word;
+  }
+
+  .driver-quick-action-copy span {
+    font-size: 0.65rem;
+    white-space: normal;
+    word-break: normal;
+    overflow-wrap: break-word;
+  }
+
+  .driver-quick-action-state {
+    min-width: max-content;
+    max-width: none;
+    width: auto;
+    font-size: 0.6rem;
+    flex-shrink: 1;
+    padding: 0.25rem 0.5rem;
+  }
 }

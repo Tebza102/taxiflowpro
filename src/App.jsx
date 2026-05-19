@@ -9376,7 +9376,7 @@ function SettingsPanel({
                   </div>
                   <p className="panel-note">
                     Overview stays on for every user. Admin and Manager get operational modules
-                    by default; the owner can still remove optional access when needed.
+                    by default for daily operations and finance controls.
                   </p>
                   <div className="finance-sub-switch">
                     {SETTINGS_ASSIGNABLE_MODULES.map((moduleKey) => {

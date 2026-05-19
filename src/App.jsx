@@ -254,6 +254,9 @@ function App() {
   const [lastSuccessfulSyncAt, setLastSuccessfulSyncAt] = useState(null);
   const liveSyncOperationCountRef = useRef(0);
   const latestLiveVersionRef = useRef(null);
+  const latestLiveSaveWarningRef = useRef(null);
+  const pendingUserAccessWriteRef = useRef(false);
+  const pendingUserAccessSnapshotRef = useRef(null);
   const [authDraft, setAuthDraft] = useState({
     email: "",
     password: "",
@@ -765,6 +768,10 @@ function App() {
   }, [snapshot]);
 
   useEffect(() => {
+    latestLiveSaveWarningRef.current = liveSaveWarning;
+  }, [liveSaveWarning]);
+
+  useEffect(() => {
     latestBackendModeRef.current = effectiveBackendMode;
   }, [effectiveBackendMode]);
 
@@ -897,6 +904,95 @@ function App() {
       actorId: event.actorId ?? resolveCurrentActorId(current),
       actorRole: event.actorRole ?? activeRole,
     });
+
+  const protectPendingUserAccess = (nextSnapshot) => {
+    if (!pendingUserAccessWriteRef.current || !pendingUserAccessSnapshotRef.current) {
+      return nextSnapshot;
+    }
+
+    return {
+      ...nextSnapshot,
+      appUsers: pendingUserAccessSnapshotRef.current.appUsers ?? nextSnapshot.appUsers,
+    };
+  };
+
+  const syncUserWithSupabaseAuth = async ({ action, email, name, role, password, staffId }) => {
+    if (effectiveBackendMode !== "live" || !authSession?.access_token) {
+      return { ok: true, skipped: true, message: "Supabase Auth sync skipped (demo mode or no session)" };
+    }
+
+    try {
+      const response = await fetch("/api/admin/auth-users", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${authSession.access_token}`,
+        },
+        body: JSON.stringify({
+          action,
+          email,
+          name,
+          role,
+          password,
+          staffId,
+          actorId: authSession.user?.id,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok || !result.ok) {
+        return {
+          ok: false,
+          error: result.error ?? "Supabase Auth sync failed",
+          status: response.status,
+        };
+      }
+
+      return { ok: true, message: result.message, user: result.user };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error.message ?? "Network error during Supabase Auth sync",
+      };
+    }
+  };
+
+  const commitUserAccessSnapshot = async (nextSnapshot) => {
+    pendingUserAccessWriteRef.current = true;
+    pendingUserAccessSnapshotRef.current = nextSnapshot;
+    setSnapshot(nextSnapshot);
+    latestSnapshotRef.current = nextSnapshot;
+
+    const persistResult = await repository.persistSnapshot(nextSnapshot, effectiveBackendMode);
+
+    if (persistResult?.conflict) {
+      setBackendFeedback({
+        kind: "live-conflict",
+        tone: "danger",
+        message: persistResult.conflict.message,
+        actionLabel: "Refresh live data",
+      });
+    }
+
+    syncLiveWarning(
+      setLiveSaveWarning,
+      effectiveBackendMode === "live" && (persistResult?.ok === false || persistResult?.warning)
+        ? LIVE_SAVE_WARNING_MESSAGE
+        : null,
+    );
+
+    if (effectiveBackendMode === "live" && persistResult?.ok && persistResult?.meta?.source === "remote-save") {
+      setLastSuccessfulSyncAt(persistResult?.meta?.liveVersion ?? new Date().toISOString());
+    }
+
+    if (effectiveBackendMode !== "live" || (persistResult?.ok && !persistResult?.warning && !persistResult?.conflict)) {
+      pendingUserAccessWriteRef.current = false;
+      pendingUserAccessSnapshotRef.current = null;
+    }
+
+    return persistResult;
+  };
 
   const hasModuleUpdateAccess = (current, moduleKey) =>
     canEditModuleUpdates(
@@ -1461,243 +1557,91 @@ function App() {
     return result;
   };
 
-  const saveUserAccess = (draft) => {
-    let result = { ok: false, error: "Unable to save this user access change." };
+  const saveUserAccess = async (draft) => {
+    if (activeRole !== "Owner") {
+      return { ok: false, error: "Only the owner can change roles and access rights." };
+    }
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-      if (activeRole !== "Owner") {
-        result = { ok: false, error: "Only the owner can change roles and access rights." };
-        return current;
-      }
+    const current = currentSnapshot;
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
 
-      const currentUsers = getAppUsers(current);
-      const existingUser =
-        currentUsers.find(
-          (user) =>
-            user.id === draft.id ||
-            user.email === String(draft.email ?? "").trim().toLowerCase(),
-        ) ?? null;
+    const currentUsers = getAppUsers(current);
+    const existingUser =
+      currentUsers.find(
+        (user) =>
+          user.id === draft.id ||
+          user.email === String(draft.email ?? "").trim().toLowerCase(),
+      ) ?? null;
 
-      if (!existingUser) {
-        result = { ok: false, error: "This user account could not be found." };
-        return current;
-      }
+    if (!existingUser) {
+      return { ok: false, error: "This user account could not be found." };
+    }
 
-      if (existingUser.email === String(authSession?.user?.email ?? "").trim().toLowerCase()) {
-        result = {
-          ok: false,
-          error: "Use another owner account if you need to change the signed-in owner profile.",
-        };
-        return current;
-      }
-
-      const nextRole = normalizeRole(draft.role);
-      if (!nextRole) {
-        result = { ok: false, error: "Select a valid TaxiFlow role." };
-        return current;
-      }
-
-      const nextAccessPassword = String(draft.nextAccessPassword ?? "").trim();
-      if (nextAccessPassword && nextAccessPassword.length < 6) {
-        result = {
-          ok: false,
-          error: "Reset password must be at least 6 characters long.",
-        };
-        return current;
-      }
-
-      if (!canAssignRoleToUser(nextRole, existingUser)) {
-        result = {
-          ok: false,
-          error: "This account must be linked to a driver profile before it can use the Driver role.",
-        };
-        return current;
-      }
-
-      const ownerCount = currentUsers.filter((user) => user.role === "Owner").length;
-      if (existingUser.role === "Owner" && nextRole !== "Owner" && ownerCount <= 1) {
-        result = { ok: false, error: "TaxiFlow must always keep at least one owner account." };
-        return current;
-      }
-
-      const timestamp = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const resolvedRequestIds = nextAccessPassword
-        ? (current.passwordResetRequests ?? [])
-            .filter(
-              (request) =>
-                normalizeEmailAddress(request.email) === existingUser.email &&
-                String(request.status ?? "pending").trim().toLowerCase() === "pending",
-            )
-            .map((request) => request.id)
-        : [];
-      const nextUser = normalizeAppUser({
-        ...existingUser,
-        role: nextRole,
-        accessPassword: nextAccessPassword || existingUser.accessPassword,
-        moduleAccess: normalizeModuleViewAccess(draft.moduleAccess, nextRole),
-        updatedAt: timestamp,
-        updatedBy: actorId,
-        updatedByRole: activeRole,
-      });
-      const nextUsers = sortAppUsers(
-        currentUsers.map((user) => (user.email === existingUser.email ? nextUser : normalizeAppUser(user))),
-      );
-      const nextDrivers =
-        nextAccessPassword && existingUser.staffId
-          ? (current.drivers ?? []).map((driver) =>
-              driver.staffId === existingUser.staffId
-                ? {
-                    ...driver,
-                    accessPassword: nextAccessPassword,
-                    updatedAt: timestamp,
-                    updatedBy: actorId,
-                    updatedByRole: activeRole,
-                  }
-                : driver,
-            )
-          : current.drivers ?? [];
-      const enabledModules = SETTINGS_ASSIGNABLE_MODULES.filter(
-        (moduleKey) => nextUser.moduleAccess[moduleKey],
-      ).map((moduleKey) => MODULE_VIEW_ACCESS[moduleKey].label);
-      const nextPasswordResetRequests = resolvedRequestIds.length
-        ? (current.passwordResetRequests ?? []).map((request) =>
-            resolvedRequestIds.includes(request.id)
-              ? {
-                  ...request,
-                  status: "resolved",
-                  notificationStatus: "sent",
-                  notificationSentAt:
-                    request.notificationSentAt ?? request.requestedAt ?? timestamp,
-                  resolvedAt: timestamp,
-                  resolvedBy: actorId,
-                  resolvedByRole: activeRole,
-                }
-              : request,
-          )
-        : current.passwordResetRequests ?? [];
-      const nextEmailOutbox = resolvedRequestIds.length
-        ? (current.emailOutbox ?? []).map((entry) =>
-            resolvedRequestIds.includes(entry.relatedRequestId) &&
-            String(entry.status ?? "queued").trim().toLowerCase() === "queued"
-              ? {
-                  ...entry,
-                  status: "actioned",
-                  actionedAt: timestamp,
-                  actionedBy: actorId,
-                }
-              : entry,
-          )
-        : current.emailOutbox ?? [];
-
-      result = {
-        ok: true,
-        message: `${nextUser.name} updated as ${nextUser.role}.${nextAccessPassword ? " Password reset saved." : ""}`,
-      };
-
+    if (existingUser.email === String(authSession?.user?.email ?? "").trim().toLowerCase()) {
       return {
-        ...current,
-        appUsers: nextUsers,
-        drivers: nextDrivers,
-        passwordResetRequests: nextPasswordResetRequests,
-        emailOutbox: nextEmailOutbox,
-        auditTrail: appendAuditTrail(current.auditTrail, [
-          buildCurrentAuditEvent(current, {
-            timestamp,
-            scope: "system",
-            action: "update",
-            entityType: "user-access",
-            entityId: nextUser.id,
-            title: `User access updated / ${nextUser.name}`,
-            detail: [
-              nextUser.email,
-              `Role ${nextUser.role}`,
-              enabledModules.length > 0
-                ? `Rights ${enabledModules.join(", ")}`
-                : "Rights overview only",
-              nextAccessPassword ? "Local password reset saved" : null,
-              resolvedRequestIds.length > 0
-                ? `${resolvedRequestIds.length} password reset request${resolvedRequestIds.length === 1 ? "" : "s"} handled`
-                : null,
-            ]
-              .filter(Boolean)
-              .join(" / "),
-          }),
-        ]),
+        ok: false,
+        error: "Use another owner account if you need to change the signed-in owner profile.",
       };
+    }
+
+    const nextRole = normalizeRole(draft.role);
+    if (!nextRole) {
+      return { ok: false, error: "Select a valid TaxiFlow role." };
+    }
+
+    const nextAccessPassword = String(draft.nextAccessPassword ?? "").trim();
+    if (nextAccessPassword && nextAccessPassword.length < 6) {
+      return {
+        ok: false,
+        error: "Reset password must be at least 6 characters long.",
+      };
+    }
+
+    if (!canAssignRoleToUser(nextRole, existingUser)) {
+      return {
+        ok: false,
+        error: "This account must be linked to a driver profile before it can use the Driver role.",
+      };
+    }
+
+    const ownerCount = currentUsers.filter((user) => user.role === "Owner").length;
+    if (existingUser.role === "Owner" && nextRole !== "Owner" && ownerCount <= 1) {
+      return { ok: false, error: "TaxiFlow must always keep at least one owner account." };
+    }
+
+    const timestamp = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const resolvedRequestIds = nextAccessPassword
+      ? (current.passwordResetRequests ?? [])
+          .filter(
+            (request) =>
+              normalizeEmailAddress(request.email) === existingUser.email &&
+              String(request.status ?? "pending").trim().toLowerCase() === "pending",
+          )
+          .map((request) => request.id)
+      : [];
+    const nextUser = normalizeAppUser({
+      ...existingUser,
+      name: String(draft.name ?? "").trim() || existingUser.name,
+      role: nextRole,
+      accessPassword: nextAccessPassword || existingUser.accessPassword,
+      moduleAccess: normalizeModuleViewAccess(draft.moduleAccess, nextRole),
+      updatedAt: timestamp,
+      updatedBy: actorId,
+      updatedByRole: activeRole,
     });
-
-    return result;
-  };
-
-  const resetUserPassword = ({ email, name, nextAccessPassword }) => {
-    let result = { ok: false, error: "Unable to reset this TaxiFlow password." };
-
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-
-      if (!PASSWORD_RESET_ROLES.has(activeRole)) {
-        result = { ok: false, error: "Only management can reset TaxiFlow passwords." };
-        return current;
-      }
-
-      const normalizedEmail = normalizeEmailAddress(email);
-      const password = String(nextAccessPassword ?? "").trim();
-      const currentUsers = getAppUsers(current);
-      const existingUser =
-        currentUsers.find((user) => normalizeEmailAddress(user.email) === normalizedEmail) ?? null;
-
-      if (!existingUser) {
-        result = { ok: false, error: "This user account could not be found." };
-        return current;
-      }
-
-      const nextName = String(name ?? existingUser.name ?? "").trim();
-      const shouldUpdateName = nextName !== String(existingUser.name ?? "").trim();
-      const shouldUpdatePassword = Boolean(password);
-
-      if (!nextName) {
-        result = { ok: false, error: "Enter the full name before saving these details." };
-        return current;
-      }
-
-      if (!shouldUpdateName && !shouldUpdatePassword) {
-        result = { ok: false, error: "Update the full name or enter a new password before saving." };
-        return current;
-      }
-
-      if (shouldUpdatePassword && password.length < 6) {
-        result = { ok: false, error: "Reset password must be at least 6 characters long." };
-        return current;
-      }
-
-      const timestamp = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const nextUser = normalizeAppUser({
-        ...existingUser,
-        name: nextName,
-        accessPassword: shouldUpdatePassword ? password : existingUser.accessPassword,
-        updatedAt: timestamp,
-        updatedBy: actorId,
-        updatedByRole: activeRole,
-      });
-      const nextUsers = sortAppUsers(
-        currentUsers.map((user) =>
-          user.email === existingUser.email ? nextUser : normalizeAppUser(user),
-        ),
-      );
-      const nextDrivers = existingUser.staffId
+    const nextUsers = sortAppUsers(
+      currentUsers.map((user) => (user.email === existingUser.email ? nextUser : normalizeAppUser(user))),
+    );
+    const nextDrivers =
+      nextAccessPassword && existingUser.staffId
         ? (current.drivers ?? []).map((driver) =>
             driver.staffId === existingUser.staffId
               ? {
                   ...driver,
-                  name: nextName,
-                  accessPassword: shouldUpdatePassword ? password : driver.accessPassword,
+                  accessPassword: nextAccessPassword,
                   updatedAt: timestamp,
                   updatedBy: actorId,
                   updatedByRole: activeRole,
@@ -1705,90 +1649,410 @@ function App() {
               : driver,
           )
         : current.drivers ?? [];
-      const resolvedRequestIds = shouldUpdatePassword
-        ? (current.passwordResetRequests ?? [])
-            .filter(
-              (request) =>
-                normalizeEmailAddress(request.email) === normalizedEmail &&
-                String(request.status ?? "pending").trim().toLowerCase() === "pending",
-            )
-            .map((request) => request.id)
-        : [];
-      const nextPasswordResetRequests = resolvedRequestIds.length
-        ? (current.passwordResetRequests ?? []).map((request) =>
-            resolvedRequestIds.includes(request.id)
-              ? {
-                  ...request,
-                  status: "resolved",
-                  notificationStatus: "sent",
-                  notificationSentAt:
-                    request.notificationSentAt ?? request.requestedAt ?? timestamp,
-                  resolvedAt: timestamp,
-                  resolvedBy: actorId,
-                  resolvedByRole: activeRole,
-                }
-              : request,
-          )
-        : current.passwordResetRequests ?? [];
-      const nextEmailOutbox = resolvedRequestIds.length
-        ? (current.emailOutbox ?? []).map((entry) =>
-            resolvedRequestIds.includes(entry.relatedRequestId) &&
-            String(entry.status ?? "queued").trim().toLowerCase() === "queued"
-              ? {
-                  ...entry,
-                  status: "actioned",
-                  actionedAt: timestamp,
-                  actionedBy: actorId,
-                }
-              : entry,
-          )
-        : current.emailOutbox ?? [];
+    const enabledModules = SETTINGS_ASSIGNABLE_MODULES.filter(
+      (moduleKey) => nextUser.moduleAccess[moduleKey],
+    ).map((moduleKey) => MODULE_VIEW_ACCESS[moduleKey].label);
+    const nextPasswordResetRequests = resolvedRequestIds.length
+      ? (current.passwordResetRequests ?? []).map((request) =>
+          resolvedRequestIds.includes(request.id)
+            ? {
+                ...request,
+                status: "resolved",
+                notificationStatus: "sent",
+                notificationSentAt:
+                  request.notificationSentAt ?? request.requestedAt ?? timestamp,
+                resolvedAt: timestamp,
+                resolvedBy: actorId,
+                resolvedByRole: activeRole,
+              }
+            : request,
+        )
+      : current.passwordResetRequests ?? [];
+    const nextEmailOutbox = resolvedRequestIds.length
+      ? (current.emailOutbox ?? []).map((entry) =>
+          resolvedRequestIds.includes(entry.relatedRequestId) &&
+          String(entry.status ?? "queued").trim().toLowerCase() === "queued"
+            ? {
+                ...entry,
+                status: "actioned",
+                actionedAt: timestamp,
+                actionedBy: actorId,
+              }
+            : entry,
+        )
+      : current.emailOutbox ?? [];
 
-      result = {
-        ok: true,
-        message: shouldUpdateName && shouldUpdatePassword
-          ? `${nextUser.name} details and password saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}`
-          : shouldUpdatePassword
-            ? `${nextUser.name} password reset saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}`
-            : `${nextUser.name} details saved.`,
-      };
-
-      return {
-        ...current,
-        appUsers: nextUsers,
-        drivers: nextDrivers,
-        passwordResetRequests: nextPasswordResetRequests,
-        emailOutbox: nextEmailOutbox,
-        auditTrail: appendAuditTrail(current.auditTrail, [
-          buildCurrentAuditEvent(current, {
-            timestamp,
-            scope: "system",
-            action: "update",
-            entityType: shouldUpdatePassword ? "password-reset" : "user-profile",
-            entityId: nextUser.id,
-            title: shouldUpdatePassword
-              ? `Password reset saved / ${nextUser.name}`
-              : `User details saved / ${nextUser.name}`,
-            detail: [
-              nextUser.email,
-              shouldUpdateName ? "Name updated" : null,
-              shouldUpdatePassword
-                ? activeRole === "Owner"
-                  ? "Owner reset saved"
-                  : "Management reset saved"
-                : null,
-              resolvedRequestIds.length > 0
-                ? `${resolvedRequestIds.length} password reset request${resolvedRequestIds.length === 1 ? "" : "s"} handled`
-                : null,
-            ]
-              .filter(Boolean)
-              .join(" / "),
+    const nextSnapshot = {
+      ...current,
+      appUsers: nextUsers,
+      drivers: nextDrivers,
+      passwordResetRequests: nextPasswordResetRequests,
+      emailOutbox: nextEmailOutbox,
+      auditTrail: appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp,
+          scope: "system",
+          action: "update",
+          entityType: "user-access",
+          entityId: nextUser.id,
+          title: `User access updated / ${nextUser.name}`,
+          detail: [
+            nextUser.email,
+            `Role ${nextUser.role}`,
+            enabledModules.length > 0
+              ? `Rights ${enabledModules.join(", ")}`
+              : "Rights overview only",
+            nextAccessPassword ? "Local password reset saved" : null,
+            resolvedRequestIds.length > 0
+              ? `${resolvedRequestIds.length} password reset request${resolvedRequestIds.length === 1 ? "" : "s"} handled`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" / "),
           }),
         ]),
+    };
+
+    const persistResult = await commitUserAccessSnapshot(nextSnapshot);
+    const liveWarning =
+      effectiveBackendMode === "live" && (persistResult?.ok === false || persistResult?.warning)
+        ? " Saved locally and queued for live sync."
+        : "";
+
+    return {
+      ok: true,
+      message: `${nextUser.name} updated as ${nextUser.role}.${nextAccessPassword ? " Password reset saved." : ""}${liveWarning}`,
+    };
+  };
+
+  const createUserAccess = async (draft) => {
+    if (activeRole !== "Owner") {
+      return { ok: false, error: "Only the owner can create new user accounts." };
+    }
+
+    const current = currentSnapshot;
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+
+    const newEmail = String(draft.email ?? "").trim().toLowerCase();
+    if (!isValidEmailAddress(newEmail)) {
+      return { ok: false, error: "Enter a valid email address." };
+    }
+
+    const currentUsers = getAppUsers(current);
+    if (currentUsers.some((user) => user.email === newEmail)) {
+      return { ok: false, error: "A user account with this email already exists." };
+    }
+
+    const userRole = normalizeRole(draft.role) ?? "Manager";
+    if (!canAssignRoleToUser(userRole, { staffId: draft.staffId })) {
+      return {
+        ok: false,
+        error: "This account must be linked to a driver profile before it can use the Driver role.",
       };
+    }
+
+    const nextAccessPassword = String(draft.nextAccessPassword ?? "").trim();
+    if (nextAccessPassword && nextAccessPassword.length < 6) {
+      return {
+        ok: false,
+        error: "Password must be at least 6 characters long.",
+      };
+    }
+
+    const timestamp = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const newUser = normalizeAppUser({
+      id: newEmail,
+      email: newEmail,
+      name: String(draft.name ?? "").trim() || newEmail,
+      role: userRole,
+      actorId: `usr-${Date.now()}`,
+      staffId: null,
+      active: true,
+      moduleAccess: normalizeModuleViewAccess(draft.moduleAccess, userRole),
+      createdAt: timestamp,
+      createdBy: actorId,
+      createdByRole: activeRole,
+      accessPassword: nextAccessPassword || null,
     });
 
-    return result;
+    const nextUsers = sortAppUsers([...currentUsers, newUser]);
+
+    const nextSnapshot = {
+      ...current,
+      appUsers: nextUsers,
+      auditTrail: appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp,
+          scope: "system",
+          action: "create",
+          entityType: "user-access",
+          entityId: newUser.id,
+          title: `User access created / ${newUser.name}`,
+          detail: [
+            newUser.email,
+            `Role ${newUser.role}`,
+            SETTINGS_ASSIGNABLE_MODULES.filter((moduleKey) => newUser.moduleAccess[moduleKey]).length > 0
+              ? `Rights ${SETTINGS_ASSIGNABLE_MODULES.filter((moduleKey) => newUser.moduleAccess[moduleKey])
+                  .map((moduleKey) => MODULE_VIEW_ACCESS[moduleKey].label)
+                  .join(", ")}`
+              : "Rights overview only",
+            nextAccessPassword ? "Local password saved" : null,
+          ]
+            .filter(Boolean)
+            .join(" / "),
+        }),
+      ]),
+    };
+
+    const persistResult = await commitUserAccessSnapshot(nextSnapshot);
+    const liveWarning =
+      effectiveBackendMode === "live" && (persistResult?.ok === false || persistResult?.warning)
+        ? " Saved locally and queued for live sync."
+        : "";
+
+    let authSyncMessage = "";
+    if (effectiveBackendMode === "live" && nextAccessPassword) {
+      const authSyncResult = await syncUserWithSupabaseAuth({
+        action: "create",
+        email: newEmail,
+        name: newUser.name,
+        role: userRole,
+        password: nextAccessPassword,
+      });
+
+      if (!authSyncResult.ok && !authSyncResult.skipped) {
+        authSyncMessage = ` Supabase Auth sync failed: ${authSyncResult.error}`;
+      } else if (authSyncResult.message) {
+        authSyncMessage = ` ${authSyncResult.message}`;
+      }
+    }
+
+    return {
+      ok: true,
+      message: `New user created: ${newUser.name} as ${newUser.role}.${liveWarning}${authSyncMessage}`,
+      user: newUser,
+    };
+  };
+
+  const deleteUserAccess = async (userEmail) => {
+    if (activeRole !== "Owner") {
+      return { ok: false, error: "Only the owner can delete user accounts." };
+    }
+
+    const current = currentSnapshot;
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+
+    const currentUsers = getAppUsers(current);
+    const userToDelete = currentUsers.find((user) => user.email === userEmail) ?? null;
+
+    if (!userToDelete) {
+      return { ok: false, error: "User account not found." };
+    }
+
+    if (userToDelete.role === "Owner") {
+      return { ok: false, error: "Cannot delete an owner account." };
+    }
+
+    const signedInEmail = String(authSession?.user?.email ?? "").trim().toLowerCase();
+    if (userToDelete.email === signedInEmail) {
+      return { ok: false, error: "Cannot delete the account you are signed in with." };
+    }
+
+    const nextUsers = sortAppUsers(
+      currentUsers.filter((user) => user.email !== userEmail),
+    );
+
+    const nextSnapshot = {
+      ...current,
+      appUsers: nextUsers,
+    };
+
+    const persistResult = await commitUserAccessSnapshot(nextSnapshot);
+    const liveWarning =
+      effectiveBackendMode === "live" && (persistResult?.ok === false || persistResult?.warning)
+        ? " Saved locally and queued for live sync."
+        : "";
+
+    return {
+      ok: true,
+      message: `User account deleted: ${userToDelete.name}.${liveWarning}`,
+    };
+  };
+
+  const resetUserPassword = async ({ email, name, nextAccessPassword }) => {
+    const current = currentSnapshot;
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+
+    if (!PASSWORD_RESET_ROLES.has(activeRole)) {
+      return { ok: false, error: "Only management can reset TaxiFlow passwords." };
+    }
+
+    const normalizedEmail = normalizeEmailAddress(email);
+    const password = String(nextAccessPassword ?? "").trim();
+    const currentUsers = getAppUsers(current);
+    const existingUser =
+      currentUsers.find((user) => normalizeEmailAddress(user.email) === normalizedEmail) ?? null;
+
+    if (!existingUser) {
+      return { ok: false, error: "This user account could not be found." };
+    }
+
+    const nextName = String(name ?? existingUser.name ?? "").trim();
+    const shouldUpdateName = nextName !== String(existingUser.name ?? "").trim();
+    const shouldUpdatePassword = Boolean(password);
+
+    if (!nextName) {
+      return { ok: false, error: "Enter the full name before saving these details." };
+    }
+
+    if (!shouldUpdateName && !shouldUpdatePassword) {
+      return { ok: false, error: "Update the full name or enter a new password before saving." };
+    }
+
+    if (shouldUpdatePassword && password.length < 6) {
+      return { ok: false, error: "Reset password must be at least 6 characters long." };
+    }
+
+    const timestamp = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const nextUser = normalizeAppUser({
+      ...existingUser,
+      name: nextName,
+      accessPassword: shouldUpdatePassword ? password : existingUser.accessPassword,
+      updatedAt: timestamp,
+      updatedBy: actorId,
+      updatedByRole: activeRole,
+    });
+    const nextUsers = sortAppUsers(
+      currentUsers.map((user) =>
+        user.email === existingUser.email ? nextUser : normalizeAppUser(user),
+      ),
+    );
+    const nextDrivers = existingUser.staffId
+      ? (current.drivers ?? []).map((driver) =>
+          driver.staffId === existingUser.staffId
+            ? {
+                ...driver,
+                name: nextName,
+                accessPassword: shouldUpdatePassword ? password : driver.accessPassword,
+                updatedAt: timestamp,
+                updatedBy: actorId,
+                updatedByRole: activeRole,
+              }
+            : driver,
+        )
+      : current.drivers ?? [];
+    const resolvedRequestIds = shouldUpdatePassword
+      ? (current.passwordResetRequests ?? [])
+          .filter(
+            (request) =>
+              normalizeEmailAddress(request.email) === normalizedEmail &&
+              String(request.status ?? "pending").trim().toLowerCase() === "pending",
+          )
+          .map((request) => request.id)
+      : [];
+    const nextPasswordResetRequests = resolvedRequestIds.length
+      ? (current.passwordResetRequests ?? []).map((request) =>
+          resolvedRequestIds.includes(request.id)
+            ? {
+                ...request,
+                status: "resolved",
+                notificationStatus: "sent",
+                notificationSentAt:
+                  request.notificationSentAt ?? request.requestedAt ?? timestamp,
+                resolvedAt: timestamp,
+                resolvedBy: actorId,
+                resolvedByRole: activeRole,
+              }
+            : request,
+        )
+      : current.passwordResetRequests ?? [];
+    const nextEmailOutbox = resolvedRequestIds.length
+      ? (current.emailOutbox ?? []).map((entry) =>
+          resolvedRequestIds.includes(entry.relatedRequestId) &&
+          String(entry.status ?? "queued").trim().toLowerCase() === "queued"
+            ? {
+                ...entry,
+                status: "actioned",
+                actionedAt: timestamp,
+                actionedBy: actorId,
+              }
+            : entry,
+        )
+      : current.emailOutbox ?? [];
+
+    const nextSnapshot = {
+      ...current,
+      appUsers: nextUsers,
+      drivers: nextDrivers,
+      passwordResetRequests: nextPasswordResetRequests,
+      emailOutbox: nextEmailOutbox,
+      auditTrail: appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp,
+          scope: "system",
+          action: "update",
+          entityType: shouldUpdatePassword ? "password-reset" : "user-profile",
+          entityId: nextUser.id,
+          title: shouldUpdatePassword
+            ? `Password reset saved / ${nextUser.name}`
+            : `User details saved / ${nextUser.name}`,
+          detail: [
+            nextUser.email,
+            shouldUpdateName ? "Name updated" : null,
+            shouldUpdatePassword
+              ? activeRole === "Owner"
+                ? "Owner reset saved"
+                : "Management reset saved"
+              : null,
+            resolvedRequestIds.length > 0
+              ? `${resolvedRequestIds.length} password reset request${resolvedRequestIds.length === 1 ? "" : "s"} handled`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(" / "),
+        }),
+      ]),
+    };
+
+    const persistResult = await commitUserAccessSnapshot(nextSnapshot);
+    const liveWarning =
+      effectiveBackendMode === "live" && (persistResult?.ok === false || persistResult?.warning)
+        ? " Saved locally and queued for live sync."
+        : "";
+
+    let authSyncMessage = "";
+    if (effectiveBackendMode === "live" && shouldUpdatePassword) {
+      const authSyncResult = await syncUserWithSupabaseAuth({
+        action: "reset-password",
+        email: normalizedEmail,
+        name: nextName,
+        role: existingUser.role,
+        password,
+      });
+
+      if (!authSyncResult.ok && !authSyncResult.skipped) {
+        authSyncMessage = ` Supabase Auth sync failed: ${authSyncResult.error}`;
+      } else if (authSyncResult.message) {
+        authSyncMessage = ` ${authSyncResult.message}`;
+      }
+    }
+
+    return {
+      ok: true,
+      message: shouldUpdateName && shouldUpdatePassword
+        ? `${nextUser.name} details and password saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}${liveWarning}${authSyncMessage}`
+        : shouldUpdatePassword
+          ? `${nextUser.name} password reset saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}${liveWarning}${authSyncMessage}`
+          : `${nextUser.name} details saved.${liveWarning}`,
+    };
   };
 
   const resolvePasswordResetRequest = (requestId) => {
@@ -4084,6 +4348,10 @@ function App() {
       return;
     }
 
+    if (!force && (latestLiveSaveWarningRef.current || pendingUserAccessWriteRef.current)) {
+      return;
+    }
+
     if (showLoader) {
       setLoading(true);
     }
@@ -4102,7 +4370,10 @@ function App() {
     }
 
     try {
-      const nextSnapshot = await repository.loadSnapshot("live");
+      const loadedSnapshot = await repository.loadSnapshot("live");
+      const nextSnapshot = force
+        ? protectPendingUserAccess(loadedSnapshot)
+        : loadedSnapshot;
       const nextLiveVersion = nextSnapshot?.meta?.liveVersion ?? null;
       const didChangeVersion =
         Boolean(nextLiveVersion) &&
@@ -4494,6 +4765,8 @@ function App() {
               onResolvePasswordResetRequest={resolvePasswordResetRequest}
               onResetUserPassword={resetUserPassword}
               onSaveUserAccess={saveUserAccess}
+              onCreateUserAccess={createUserAccess}
+              onDeleteUserAccess={deleteUserAccess}
             />
           )}
         </main>
@@ -8693,6 +8966,8 @@ function SettingsPanel({
   onResolvePasswordResetRequest,
   onResetUserPassword,
   onSaveUserAccess,
+  onCreateUserAccess,
+  onDeleteUserAccess,
 }) {
   const users = useMemo(() => getAppUsers(snapshot), [snapshot]);
   const normalizedCurrentUserEmail = String(currentUserEmail ?? "").trim().toLowerCase();
@@ -8701,15 +8976,21 @@ function SettingsPanel({
   const [feedback, setFeedback] = useState(null);
   const [factoryResetPassword, setFactoryResetPassword] = useState("");
   const [factoryResetFeedback, setFactoryResetFeedback] = useState(null);
+  const isCreatingUser = !draft.id;
 
   useEffect(() => {
+    if (isCreatingUser) {
+      return;
+    }
+
     if (!users.some((user) => user.email === selectedUserEmail)) {
       setSelectedUserEmail(users[0]?.email ?? "");
     }
-  }, [selectedUserEmail, users]);
+  }, [isCreatingUser, selectedUserEmail, users]);
 
-  const selectedUser = users.find((user) => user.email === selectedUserEmail) ?? users[0] ?? null;
-  const isEditingSignedInOwner = selectedUser?.email === normalizedCurrentUserEmail;
+  const selectedUser = users.find((user) => user.email === selectedUserEmail) ?? null;
+  const isEditingSignedInOwner =
+    !isCreatingUser && selectedUser?.email === normalizedCurrentUserEmail;
   const selectedUserVisibleModules = Object.keys(MODULE_VIEW_ACCESS).filter(
     (moduleKey) => selectedUser?.moduleAccess?.[moduleKey],
   );
@@ -8805,10 +9086,10 @@ function SettingsPanel({
       Boolean(String(draft.nextAccessPassword ?? "").trim()));
 
   useEffect(() => {
-    if (selectedUser) {
+    if (selectedUser && (!isCreatingUser || selectedUser.email === selectedUserEmail)) {
       setDraft(createUserAccessDraft(selectedUser));
     }
-  }, [selectedUser]);
+  }, [isCreatingUser, selectedUser, selectedUserEmail]);
 
   const pushFeedback = (response) => {
     setFeedback({
@@ -8840,20 +9121,44 @@ function SettingsPanel({
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    const response = onSaveUserAccess(draft);
+
+    let response;
+
+    if (!draft.id) {
+      response = await onCreateUserAccess(draft);
+    } else {
+      response = await onSaveUserAccess(draft);
+    }
+
     pushFeedback(response);
 
-    if (response?.ok && backendMode === "live") {
-      await onRevalidateLiveWorkspace?.({
-        reason: "settings-user-access-update",
-        force: true,
-      });
+    if (response?.ok && !draft.id) {
+      const newEmail = String(draft.email ?? "").trim().toLowerCase();
+      if (newEmail) {
+        setSelectedUserEmail(newEmail);
+      }
+      if (response.user) {
+        setDraft(createUserAccessDraft(response.user));
+      }
+    }
+  };
+
+  const handleDeleteUser = async () => {
+    if (!selectedUser || !window.confirm(`Delete ${selectedUser.name}?`)) {
+      return;
+    }
+    const response = await onDeleteUserAccess(selectedUser.email);
+    pushFeedback(response);
+
+    if (response?.ok) {
+      setSelectedUserEmail(users[0]?.email ?? "");
+      setDraft(createUserAccessDraft(users[0] ?? null));
     }
   };
 
   const handleManagedUserSubmit = async (event) => {
     event.preventDefault();
-    const response = onResetUserPassword({
+    const response = await onResetUserPassword({
       email: selectedUser?.email,
       name: draft.name,
       nextAccessPassword: draft.nextAccessPassword,
@@ -8907,7 +9212,34 @@ function SettingsPanel({
                 Default local password: {LOCAL_AUTH_PASSWORD}
               </span>
             )}
+            {!isLocalAuth && (
+              <span className="status-chip" data-tone="success">
+                Supabase Auth sync active
+              </span>
+            )}
           </div>
+          {canManageUserAccess && (
+            <button
+              type="button"
+              className="action-button primary"
+              onClick={() => {
+                const newDraft = {
+                  id: null,
+                  email: "",
+                  name: "",
+                  role: "Manager",
+                  actorId: "",
+                  staffId: null,
+                  moduleAccess: normalizeModuleViewAccess({}, "Manager"),
+                  nextAccessPassword: "",
+                };
+                setDraft(newDraft);
+                setSelectedUserEmail("");
+              }}
+            >
+              + Add new user
+            </button>
+          )}
           <div className="list-stack">
             {users.map((user) => {
               const visibleModuleCount = Object.keys(MODULE_VIEW_ACCESS).filter(
@@ -8950,26 +9282,72 @@ function SettingsPanel({
           title={canManageUserAccess ? "Edit selected user" : "Update selected user"}
           icon={Lock}
         >
-          {selectedUser ? (
+          {selectedUser || isCreatingUser ? (
             canManageUserAccess ? (
               <form className="finance-form" onSubmit={handleSubmit}>
                 <div className="queue-stats">
-                  <InfoPair label="Name" value={selectedUser.name} />
-                  <InfoPair label="Email" value={selectedUser.email} />
-                  <InfoPair
-                    label="Driver link"
-                    value={selectedUser.staffId ? selectedUser.staffId : "Not linked"}
-                  />
-                  <InfoPair
-                    label="Current rights"
-                    value={
-                      selectedUserVisibleModules.length > 0
-                        ? selectedUserVisibleModules
-                            .map((moduleKey) => MODULE_VIEW_ACCESS[moduleKey].label)
-                            .join(", ")
-                        : "Overview only"
-                    }
-                  />
+                  {!draft.id ? (
+                    <>
+                      <label className="finance-field">
+                        <span>Email</span>
+                        <input
+                          type="email"
+                          placeholder="email@example.com"
+                          value={draft.email}
+                          onChange={(event) =>
+                            setDraft((current) => ({
+                              ...current,
+                              email: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="finance-field">
+                        <span>Full name</span>
+                        <input
+                          type="text"
+                          placeholder="Name and surname"
+                          value={draft.name}
+                          onChange={(event) =>
+                            setDraft((current) => ({
+                              ...current,
+                              name: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                    </>
+                  ) : (
+                    <>
+                      <InfoPair label="Name" value={
+                        <input
+                          type="text"
+                          value={draft.name}
+                          onChange={(event) =>
+                            setDraft((current) => ({
+                              ...current,
+                              name: event.target.value,
+                            }))
+                          }
+                        />
+                      } />
+                      <InfoPair label="Email" value={selectedUser.email} />
+                      <InfoPair
+                        label="Driver link"
+                        value={selectedUser.staffId ? selectedUser.staffId : "Not linked"}
+                      />
+                      <InfoPair
+                        label="Current rights"
+                        value={
+                          selectedUserVisibleModules.length > 0
+                            ? selectedUserVisibleModules
+                                .map((moduleKey) => MODULE_VIEW_ACCESS[moduleKey].label)
+                                .join(", ")
+                            : "Overview only"
+                        }
+                      />
+                    </>
+                  )}
                 </div>
 
                 <label className="finance-field">
@@ -8980,7 +9358,11 @@ function SettingsPanel({
                     onChange={(event) => handleRoleChange(event.target.value)}
                   >
                     {ROLES.map((role) => (
-                      <option key={role} value={role} disabled={!canAssignRoleToUser(role, selectedUser)}>
+                      <option
+                        key={role}
+                        value={role}
+                        disabled={!canAssignRoleToUser(role, isCreatingUser ? draft : selectedUser)}
+                      >
                         {role}
                       </option>
                     ))}
@@ -9036,33 +9418,45 @@ function SettingsPanel({
 
                 <div className="finance-form-actions">
                   <button type="submit" className="action-button primary" disabled={isEditingSignedInOwner}>
-                    Save access
+                    {!draft.id ? "Create user" : "Save access"}
                   </button>
-                  <button
-                    type="button"
-                    className="action-button"
-                    onClick={() => setDraft(createUserAccessDraft(selectedUser))}
-                  >
-                    Reset
-                  </button>
+                  {draft.id && (
+                    <button
+                      type="button"
+                      className="action-button"
+                      onClick={() => setDraft(createUserAccessDraft(selectedUser))}
+                    >
+                      Reset
+                    </button>
+                  )}
+                  {draft.id && selectedUser && selectedUser.role !== "Owner" && !isEditingSignedInOwner && (
+                    <button
+                      type="button"
+                      className="action-button danger"
+                      onClick={handleDeleteUser}
+                    >
+                      Delete
+                    </button>
+                  )}
                 </div>
 
                 <p
                   className="finance-form-note"
                   data-tone={
-                    isEditingSignedInOwner || !canAssignRoleToUser(draft.role, selectedUser)
+                    isEditingSignedInOwner ||
+                    !canAssignRoleToUser(draft.role, isCreatingUser ? draft : selectedUser)
                       ? "warning"
                       : "info"
                   }
                 >
                   {isEditingSignedInOwner
                     ? "The signed-in owner account stays locked while it is in use."
-                    : !canAssignRoleToUser(draft.role, selectedUser)
+                    : !canAssignRoleToUser(draft.role, isCreatingUser ? draft : selectedUser)
                       ? "Link this account to a driver profile before assigning the Driver role."
-                      : draft.nextAccessPassword
-                        ? isLocalAuth
-                          ? "Saving now will reset this account password and close any waiting reset request for this email."
-                          : "Saving here records the reset request as handled. Update the matching Supabase password separately."
+                       : draft.nextAccessPassword
+                         ? isLocalAuth
+                           ? "Saving now will reset this account password and close any waiting reset request for this email."
+                           : "Saving here updates the local snapshot and syncs the Supabase Auth password automatically."
                       : "Changing a role resets optional feature access to that role's default. Admin and Manager start with Overview and Settings, while Viewer starts with Overview only until the owner enables more modules."}
                 </p>
               </form>
@@ -9142,7 +9536,7 @@ function SettingsPanel({
                     ? "Only management can amend user profiles and password details."
                     : isLocalAuth
                       ? "Management can update user names here and optionally reset local passwords. The owner still controls roles and feature access."
-                      : "Management can update user names here and log password resets. The owner still controls roles and feature access, and the matching Supabase password must still be updated separately in live mode."}
+                      : "Management can update user names and reset passwords here. Changes sync to both the local snapshot and Supabase Auth automatically."}
                 </p>
               </form>
             )

@@ -972,7 +972,7 @@ const loadSupabaseLiveSnapshot = async () => {
   try {
     const { data, error } = await supabase
       .from("workspace_snapshots")
-      .select("snapshot")
+      .select("snapshot, updated_at")
       .eq("workspace_key", LIVE_WORKSPACE_KEY)
       .maybeSingle();
 
@@ -1067,6 +1067,9 @@ const persistSupabaseLiveSnapshot = async (snapshot, actorId = null) => {
     const { updatedAt: serverVersion, error: metaError } = await getLiveSnapshotMeta();
 
     if (metaError) {
+      // When offline (or during transient network failures) we still want to retain the user's work
+      // and replay it automatically once connectivity returns.
+      persistPendingLiveSnapshot(snapshot);
       const warning =
         "Unable to confirm the latest live workspace version. Refresh before saving again.";
       logHandledWarning(warning, metaError);
@@ -1084,6 +1087,8 @@ const persistSupabaseLiveSnapshot = async (snapshot, actorId = null) => {
     const conflict = detectLiveWriteConflict(localVersion, serverVersion);
 
     if (conflict) {
+      // Preserve the pending snapshot so it can be reviewed/replayed after a refresh.
+      persistPendingLiveSnapshot(snapshot);
       return createStructuredResult(snapshot, {
         ok: false,
         warning: conflict.message,
@@ -1273,21 +1278,20 @@ export const repository = {
       const nextSnapshot = normalizeSnapshotShape(snapshot, defaults);
 
       if (normalizedMode === "live" && canUseRemoteLiveData()) {
+        // Always persist locally first so offline capture is durable.
+        const storedLocally = persistStoredSnapshot(storageKey, nextSnapshot);
+        const localWarning = storedLocally
+          ? null
+          : "Unable to save the workspace snapshot in local storage.";
+
         const remoteResult = await persistSupabaseLiveSnapshot(nextSnapshot);
-        const storedLocally = remoteResult.ok
-          ? persistStoredSnapshot(storageKey, nextSnapshot)
-          : false;
-        const localWarning =
-          remoteResult.ok && !storedLocally
-            ? "Unable to save the workspace snapshot in local storage."
-            : null;
         logStartupEvent("snapshot-persist-complete", {
           mode: normalizedMode,
-          ok: remoteResult.ok,
+          ok: Boolean(storedLocally) && remoteResult.ok !== false,
           warning: remoteResult.warning ?? localWarning,
         });
         return createStructuredResult(nextSnapshot, {
-          ok: remoteResult.ok,
+          ok: Boolean(storedLocally) && remoteResult.ok !== false,
           warning: remoteResult.warning ?? localWarning,
           error: remoteResult.conflict ?? remoteResult.error ?? { meta: remoteResult.meta },
         });

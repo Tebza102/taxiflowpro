@@ -43,7 +43,9 @@ const AUTH_ACCOUNT_DIRECTORY = {
     name: "Lerato Maseko",
     role: "Manager",
     actorId: "mgr-01",
+    staffId: "mgr-01",
   },
+
   "viewer@taxiflow.local": {
     name: "Demo Viewer",
     role: VIEWER_ROLE,
@@ -478,8 +480,8 @@ const normalizeModuleViewAccess = (value = {}, role) => {
         return [moduleKey, MODULE_VIEW_ACCESS[moduleKey].roles.includes(normalizedRole)];
       }
 
-      const allowedByRole = MODULE_VIEW_ACCESS[moduleKey].roles.includes(normalizedRole);
-      return [moduleKey, allowedByRole ? Boolean(value?.[moduleKey] ?? defaults[moduleKey]) : false];
+const allowedByRole = MODULE_VIEW_ACCESS[moduleKey].roles.includes(normalizedRole);
+      return [moduleKey, allowedByRole ? Boolean(value?.[moduleKey] || defaults[moduleKey]) : false];
     }),
   );
 };
@@ -568,6 +570,7 @@ const normalizeAppUser = (user = {}) => {
     actorId,
     staffId,
     accessPassword: String(user.accessPassword ?? user.localPassword ?? user.password ?? "").trim() || null,
+    active: user.active !== false,
     moduleAccess: normalizeModuleViewAccess(user.moduleAccess, role),
     createdAt: user.createdAt ?? null,
     createdBy: user.createdBy ?? null,
@@ -618,6 +621,15 @@ const buildDefaultAppUsers = (snapshot) => {
     role: "Admin",
     actorId: "admin-session",
   });
+  if (!users.some((user) => user.email === "manager@taxiflow.local")) {
+    pushUser({
+      email: "manager@taxiflow.local",
+      name: AUTH_ACCOUNT_DIRECTORY["manager@taxiflow.local"].name,
+      role: "Manager",
+      actorId: "mgr-01",
+      staffId: "mgr-01",
+    });
+  }
 
   (snapshot?.drivers ?? []).forEach((driver) => {
     const mappedAccount = accountByActorId.get(driver.staffId);
@@ -644,16 +656,6 @@ const buildDefaultAppUsers = (snapshot) => {
     });
   });
 
-  if (!users.some((user) => user.email === "manager@taxiflow.local")) {
-    pushUser({
-      email: "manager@taxiflow.local",
-      name: AUTH_ACCOUNT_DIRECTORY["manager@taxiflow.local"].name,
-      role: "Manager",
-      actorId: "mgr-01",
-      staffId: "mgr-01",
-    });
-  }
-
   if (!users.some((user) => user.email === "viewer@taxiflow.local")) {
     pushUser({
       email: "viewer@taxiflow.local",
@@ -678,7 +680,7 @@ const getAppUsers = (snapshot) => {
       ? normalizeAppUser({
           ...fallbackUser,
           ...user,
-          moduleAccess: user.moduleAccess ?? fallbackUser.moduleAccess,
+          moduleAccess: user.moduleAccess || fallbackUser.moduleAccess,
         })
       : user;
 

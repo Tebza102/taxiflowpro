@@ -449,7 +449,7 @@ const createDefaultModuleViewAccess = (role) => {
     return Object.fromEntries(
       Object.keys(MODULE_VIEW_ACCESS).map((moduleKey) => [
         moduleKey,
-        moduleKey === "overview" || moduleKey === "settings",
+        MODULE_VIEW_ACCESS[moduleKey].roles.includes(normalizedRole),
       ]),
     );
   }

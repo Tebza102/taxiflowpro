@@ -9375,8 +9375,8 @@ function SettingsPanel({
                     <h3>Access by role</h3>
                   </div>
                   <p className="panel-note">
-                    Overview stays on for every user. Management keeps Settings for password resets,
-                    and the owner turns Money, Fleet & Operations, and Drivers on only when needed.
+                    Overview stays on for every user. Admin and Manager get operational modules
+                    by default; the owner can still remove optional access when needed.
                   </p>
                   <div className="finance-sub-switch">
                     {SETTINGS_ASSIGNABLE_MODULES.map((moduleKey) => {
@@ -9457,7 +9457,7 @@ function SettingsPanel({
                          ? isLocalAuth
                            ? "Saving now will reset this account password and close any waiting reset request for this email."
                            : "Saving here updates the local snapshot and syncs the Supabase Auth password automatically."
-                      : "Changing a role resets optional feature access to that role's default. Admin and Manager start with Overview and Settings, while Viewer starts with Overview only until the owner enables more modules."}
+                      : "Changing a role resets optional feature access to that role's default. Admin and Manager start with Money, Fleet & Operations, Drivers, and Settings. Viewer starts with Overview only until the owner enables more modules."}
                 </p>
               </form>
             ) : (

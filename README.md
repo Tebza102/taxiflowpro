@@ -33,3 +33,4 @@ npm run dev:daily-log-check
 - Live mode uses Supabase when valid environment variables exist and an authenticated session is present.
 - The current production sync path stores the live workspace in `workspace_snapshots.snapshot` for cross-device sharing.
 - `supabase/schema.sql` includes the snapshot sync table plus the normalized ERP tables for the next backend phase.
+"# taxiflowv2" 

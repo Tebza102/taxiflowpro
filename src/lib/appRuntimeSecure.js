@@ -94,8 +94,7 @@ export const resolveAuthIdentity = (user, snapshot) => {
     moduleAccess: core.normalizeModuleViewAccess(storedUser?.moduleAccess ?? {}, metadataRole),
     name:
       storedUser?.name ??
-      String(user.user_metadata?.name ?? user.user_metadata?.full_name ?? email).trim() ||
-      email,
+      (String(user.user_metadata?.name ?? user.user_metadata?.full_name ?? email).trim() || email),
   };
 };
 

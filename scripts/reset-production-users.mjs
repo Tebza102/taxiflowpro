@@ -59,33 +59,68 @@ const listAllUsers = async () => {
 };
 
 const existingUsers = await listAllUsers();
-console.log(`TaxiFlow production auth reset: ${existingUsers.length} existing account(s) will be removed.`);
+const existingOwner = existingUsers.find(
+  (user) => user.email?.trim().toLowerCase() === OWNER_EMAIL,
+);
 
-for (const user of existingUsers) {
+let owner;
+
+if (existingOwner) {
+  const { data, error } = await supabase.auth.admin.updateUserById(existingOwner.id, {
+    email: OWNER_EMAIL,
+    password: OWNER_PASSWORD,
+    email_confirm: true,
+    user_metadata: {
+      ...(existingOwner.user_metadata ?? {}),
+      name: OWNER_NAME,
+      role: "Owner",
+    },
+    app_metadata: {
+      ...(existingOwner.app_metadata ?? {}),
+      role: "Owner",
+    },
+  });
+
+  if (error || !data?.user) {
+    throw new Error(`Failed to repair bootstrap Owner: ${error?.message ?? "unknown error"}`);
+  }
+
+  owner = data.user;
+} else {
+  const { data, error } = await supabase.auth.admin.createUser({
+    email: OWNER_EMAIL,
+    password: OWNER_PASSWORD,
+    email_confirm: true,
+    user_metadata: {
+      name: OWNER_NAME,
+      role: "Owner",
+    },
+    app_metadata: {
+      role: "Owner",
+    },
+  });
+
+  if (error || !data?.user) {
+    throw new Error(`Failed to create bootstrap Owner: ${error?.message ?? "unknown error"}`);
+  }
+
+  owner = data.user;
+}
+
+// The replacement Owner is now guaranteed to exist before any other Auth user
+// is removed. This keeps a recoverable production identity throughout the reset.
+const usersToDelete = existingUsers.filter((user) => user.id !== owner.id);
+console.log(
+  `TaxiFlow production auth reset: Owner is ready; ${usersToDelete.length} other account(s) will be removed.`,
+);
+
+for (const user of usersToDelete) {
   const { error } = await supabase.auth.admin.deleteUser(user.id);
   if (error) {
     throw new Error(`Failed to remove existing Auth user ${user.id}: ${error.message}`);
   }
 }
 
-const { data: ownerData, error: ownerError } = await supabase.auth.admin.createUser({
-  email: OWNER_EMAIL,
-  password: OWNER_PASSWORD,
-  email_confirm: true,
-  user_metadata: {
-    name: OWNER_NAME,
-    role: "Owner",
-  },
-  app_metadata: {
-    role: "Owner",
-  },
-});
-
-if (ownerError || !ownerData?.user) {
-  throw new Error(`Failed to create bootstrap Owner: ${ownerError?.message ?? "unknown error"}`);
-}
-
-const owner = ownerData.user;
 const now = new Date().toISOString();
 
 const { data: workspaceRow, error: workspaceReadError } = await supabase
@@ -95,7 +130,7 @@ const { data: workspaceRow, error: workspaceReadError } = await supabase
   .maybeSingle();
 
 if (workspaceReadError) {
-  throw new Error(`Owner was created, but workspace cleanup could not be read: ${workspaceReadError.message}`);
+  throw new Error(`Owner is ready, but workspace cleanup could not be read: ${workspaceReadError.message}`);
 }
 
 if (workspaceRow?.snapshot && typeof workspaceRow.snapshot === "object") {
@@ -144,7 +179,7 @@ if (workspaceRow?.snapshot && typeof workspaceRow.snapshot === "object") {
 
   if (workspaceWriteError) {
     throw new Error(
-      `Owner was created, but workspace user reset failed: ${workspaceWriteError.message}`,
+      `Owner is ready, but workspace user reset failed: ${workspaceWriteError.message}`,
     );
   }
 } else {
@@ -152,5 +187,5 @@ if (workspaceRow?.snapshot && typeof workspaceRow.snapshot === "object") {
 }
 
 console.log("TaxiFlow production accounts reset successfully.");
-console.log(`Bootstrap Owner created: ${OWNER_EMAIL}`);
+console.log(`Bootstrap Owner ready: ${OWNER_EMAIL}`);
 console.log("No password value was printed or stored in the workspace snapshot.");

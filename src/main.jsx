@@ -1,6 +1,7 @@
 import React, { Suspense } from "react";
 import ReactDOM from "react-dom/client";
 import { AppErrorBoundary } from "./components/AppErrorBoundary";
+import { ProductionAuthGuard } from "./components/ProductionAuthGuard";
 import { StartupFallback } from "./components/StartupFallback";
 import { canUseServiceWorker, clearBrowserCaches, getSafeWindow, unregisterAllServiceWorkers } from "./lib/browserRuntime";
 import { attachGlobalRuntimeDiagnostics, logStartupError, logStartupEvent } from "./lib/runtimeDiagnostics";
@@ -94,17 +95,19 @@ const mount = async () => {
     ReactDOM.createRoot(rootElement).render(
       <React.StrictMode>
         <AppErrorBoundary>
-          <Suspense
-            fallback={
-              <StartupFallback
-                title="TaxiFlow is starting."
-                message="The app is loading core modules for this device."
-                showDiagnostics={false}
-              />
-            }
-          >
-            <App />
-          </Suspense>
+          <ProductionAuthGuard>
+            <Suspense
+              fallback={
+                <StartupFallback
+                  title="TaxiFlow is starting."
+                  message="The app is loading core modules for this device."
+                  showDiagnostics={false}
+                />
+              }
+            >
+              <App />
+            </Suspense>
+          </ProductionAuthGuard>
         </AppErrorBoundary>
       </React.StrictMode>,
     );

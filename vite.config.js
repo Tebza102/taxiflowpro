@@ -10,6 +10,10 @@ export default defineConfig({
         find: /^\.\/lib\/appRuntime$/,
         replacement: fileURLToPath(new URL("./src/lib/appRuntimeSecure.js", import.meta.url)),
       },
+      {
+        find: /^\.\/lib\/dataGateway$/,
+        replacement: fileURLToPath(new URL("./src/lib/dataGatewaySecure.js", import.meta.url)),
+      },
     ],
   },
   build: {

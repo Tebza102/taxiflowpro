@@ -1,0 +1,156 @@
+import { createClient } from "@supabase/supabase-js";
+
+const required = (name) => {
+  const value = String(process.env[name] ?? "").trim();
+  if (!value) {
+    throw new Error(`${name} is required.`);
+  }
+  return value;
+};
+
+const SUPABASE_URL = required("SUPABASE_URL");
+const SUPABASE_SERVICE_ROLE_KEY = required("SUPABASE_SERVICE_ROLE_KEY");
+const OWNER_EMAIL = required("TAXIFLOW_BOOTSTRAP_OWNER_EMAIL").toLowerCase();
+const OWNER_PASSWORD = required("TAXIFLOW_BOOTSTRAP_OWNER_PASSWORD");
+const OWNER_NAME = String(process.env.TAXIFLOW_BOOTSTRAP_OWNER_NAME ?? "TaxiFlow Owner").trim();
+const WORKSPACE_KEY = String(process.env.SUPABASE_WORKSPACE_KEY ?? "taxiflow-live").trim();
+const CONFIRMATION = String(process.env.TAXIFLOW_CONFIRM_OWNER_RESET ?? "").trim();
+
+if (CONFIRMATION !== "RESET_TAXIFLOW_PRODUCTION_USERS") {
+  throw new Error(
+    "Refusing destructive reset. Set TAXIFLOW_CONFIRM_OWNER_RESET=RESET_TAXIFLOW_PRODUCTION_USERS to continue.",
+  );
+}
+
+if (!OWNER_EMAIL.includes("@")) {
+  throw new Error("TAXIFLOW_BOOTSTRAP_OWNER_EMAIL must be a valid email address.");
+}
+
+if (OWNER_EMAIL.endsWith("@taxiflow.local")) {
+  throw new Error("Production Owner must use a real email address, not @taxiflow.local.");
+}
+
+if (OWNER_PASSWORD.length < 8) {
+  throw new Error("TAXIFLOW_BOOTSTRAP_OWNER_PASSWORD must be at least 8 characters long.");
+}
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  auth: {
+    autoRefreshToken: false,
+    persistSession: false,
+  },
+});
+
+const listAllUsers = async () => {
+  const users = [];
+  let page = 1;
+
+  while (true) {
+    const { data, error } = await supabase.auth.admin.listUsers({ page, perPage: 1000 });
+    if (error) throw error;
+
+    const batch = data?.users ?? [];
+    users.push(...batch);
+    if (batch.length < 1000) break;
+    page += 1;
+  }
+
+  return users;
+};
+
+const existingUsers = await listAllUsers();
+console.log(`TaxiFlow production auth reset: ${existingUsers.length} existing account(s) will be removed.`);
+
+for (const user of existingUsers) {
+  const { error } = await supabase.auth.admin.deleteUser(user.id);
+  if (error) {
+    throw new Error(`Failed to remove existing Auth user ${user.id}: ${error.message}`);
+  }
+}
+
+const { data: ownerData, error: ownerError } = await supabase.auth.admin.createUser({
+  email: OWNER_EMAIL,
+  password: OWNER_PASSWORD,
+  email_confirm: true,
+  user_metadata: {
+    name: OWNER_NAME,
+    role: "Owner",
+  },
+  app_metadata: {
+    role: "Owner",
+  },
+});
+
+if (ownerError || !ownerData?.user) {
+  throw new Error(`Failed to create bootstrap Owner: ${ownerError?.message ?? "unknown error"}`);
+}
+
+const owner = ownerData.user;
+const now = new Date().toISOString();
+
+const { data: workspaceRow, error: workspaceReadError } = await supabase
+  .from("workspace_snapshots")
+  .select("snapshot")
+  .eq("workspace_key", WORKSPACE_KEY)
+  .maybeSingle();
+
+if (workspaceReadError) {
+  throw new Error(`Owner was created, but workspace cleanup could not be read: ${workspaceReadError.message}`);
+}
+
+if (workspaceRow?.snapshot && typeof workspaceRow.snapshot === "object") {
+  const existingSnapshot = workspaceRow.snapshot;
+  const sanitizedDrivers = Array.isArray(existingSnapshot.drivers)
+    ? existingSnapshot.drivers.map(({ accessPassword, localPassword, password, ...driver }) => driver)
+    : [];
+  const ownerRecord = {
+    id: OWNER_EMAIL,
+    email: OWNER_EMAIL,
+    name: OWNER_NAME,
+    role: "Owner",
+    actorId: owner.id,
+    staffId: null,
+    accessPassword: null,
+    active: true,
+    moduleAccess: {
+      overview: true,
+      finance: true,
+      fleet: true,
+      drivers: true,
+      settings: true,
+    },
+    createdAt: now,
+    createdBy: "developer-bootstrap",
+    createdByRole: "Developer",
+  };
+
+  const nextSnapshot = {
+    ...existingSnapshot,
+    appUsers: [ownerRecord],
+    drivers: sanitizedDrivers,
+    passwordResetRequests: [],
+    emailOutbox: [],
+  };
+
+  const { error: workspaceWriteError } = await supabase.from("workspace_snapshots").upsert(
+    {
+      workspace_key: WORKSPACE_KEY,
+      snapshot: nextSnapshot,
+      updated_at: now,
+      updated_by: owner.id,
+    },
+    { onConflict: "workspace_key" },
+  );
+
+  if (workspaceWriteError) {
+    throw new Error(
+      `Owner was created, but workspace user reset failed: ${workspaceWriteError.message}`,
+    );
+  }
+} else {
+  console.log("No existing workspace snapshot was found; Auth reset completed without snapshot mutation.");
+}
+
+console.log("TaxiFlow production accounts reset successfully.");
+console.log(`Bootstrap Owner created: ${OWNER_EMAIL}`);
+console.log("No password value was printed or stored in the workspace snapshot.");

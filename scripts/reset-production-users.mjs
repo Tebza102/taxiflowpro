@@ -107,12 +107,41 @@ if (existingOwner) {
   owner = data.user;
 }
 
-// The replacement Owner is now guaranteed to exist before any other Auth user
-// is removed. This keeps a recoverable production identity throughout the reset.
+// The replacement Owner is guaranteed to exist before any other Auth user is removed.
 const usersToDelete = existingUsers.filter((user) => user.id !== owner.id);
+const userIdsToDelete = new Set(usersToDelete.map((user) => user.id));
+
 console.log(
   `TaxiFlow production auth reset: Owner is ready; ${usersToDelete.length} other account(s) will be removed.`,
 );
+
+// workspace_snapshots.updated_by references auth.users(id) without ON DELETE CASCADE/SET NULL.
+// Clear references to accounts that are about to be removed so PostgreSQL does not reject
+// the Auth deletion. The production workspace is assigned back to the new Owner later.
+const { data: workspaceAuditRows, error: workspaceAuditReadError } = await supabase
+  .from("workspace_snapshots")
+  .select("workspace_key, updated_by");
+
+if (workspaceAuditReadError) {
+  throw new Error(
+    `Owner is ready, but workspace audit references could not be read: ${workspaceAuditReadError.message}`,
+  );
+}
+
+for (const row of workspaceAuditRows ?? []) {
+  if (!row.updated_by || !userIdsToDelete.has(row.updated_by)) continue;
+
+  const { error: workspaceAuditClearError } = await supabase
+    .from("workspace_snapshots")
+    .update({ updated_by: null })
+    .eq("workspace_key", row.workspace_key);
+
+  if (workspaceAuditClearError) {
+    throw new Error(
+      `Owner is ready, but workspace audit reference ${row.workspace_key} could not be cleared: ${workspaceAuditClearError.message}`,
+    );
+  }
+}
 
 for (const user of usersToDelete) {
   const { error } = await supabase.auth.admin.deleteUser(user.id);

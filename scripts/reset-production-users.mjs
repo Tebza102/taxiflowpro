@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { resolveServerWorkspaceKey } from "../api/_lib/workspaceKey.js";
 
 const required = (name) => {
   const value = String(process.env[name] ?? "").trim();
@@ -13,7 +14,7 @@ const SUPABASE_SERVICE_ROLE_KEY = required("SUPABASE_SERVICE_ROLE_KEY");
 const OWNER_EMAIL = required("TAXIFLOW_BOOTSTRAP_OWNER_EMAIL").toLowerCase();
 const OWNER_PASSWORD = required("TAXIFLOW_BOOTSTRAP_OWNER_PASSWORD");
 const OWNER_NAME = String(process.env.TAXIFLOW_BOOTSTRAP_OWNER_NAME ?? "TaxiFlow Owner").trim();
-const WORKSPACE_KEY = String(process.env.SUPABASE_WORKSPACE_KEY ?? "taxiflow-live").trim();
+const WORKSPACE_KEY = resolveServerWorkspaceKey();
 const CONFIRMATION = String(process.env.TAXIFLOW_CONFIRM_OWNER_RESET ?? "").trim();
 
 if (CONFIRMATION !== "RESET_TAXIFLOW_PRODUCTION_USERS") {

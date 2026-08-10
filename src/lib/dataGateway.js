@@ -9,6 +9,7 @@ import { createLiveConflictError, detectLiveWriteConflict } from "./liveSyncGuar
 import { configuredBackendMode, hasSupabaseConfig, supabase } from "./supabaseClient";
 import { logStartupError, logStartupEvent } from "./runtimeDiagnostics";
 import { normalizeTripFinanceTransactions } from "./tripHistory";
+import { LIVE_WORKSPACE_KEY } from "./workspaceContract";
 
 const DATA_MODE_STORAGE_KEY = "taxiflow-data-mode-v2";
 const DEMO_SNAPSHOT_STORAGE_KEY = "taxiflow-demo-snapshot-v1";
@@ -17,7 +18,6 @@ const LIVE_SNAPSHOT_VERSION_STORAGE_KEY = "taxiflow-live-snapshot-version-v1";
 const LIVE_PENDING_SNAPSHOT_STORAGE_KEY = "taxiflow-live-pending-snapshot-v1";
 const DEMO_SNAPSHOT_BACKUP_STORAGE_KEY = "taxiflow-demo-snapshot-backup-v1";
 const LIVE_SNAPSHOT_BACKUP_STORAGE_KEY = "taxiflow-live-snapshot-backup-v1";
-const LIVE_WORKSPACE_KEY = "taxiflow-live";
 
 const normalizeBackendMode = (value) =>
   String(value ?? "mock").trim().toLowerCase() === "live" ? "live" : "mock";
@@ -451,6 +451,14 @@ const attachStructuredResult = (data, options = {}) => {
   if (options.meta) {
     descriptors.meta = {
       value: options.meta,
+      enumerable: false,
+      configurable: true,
+    };
+  }
+
+  if (options.workspaceMissing) {
+    descriptors.workspaceMissing = {
+      value: true,
       enumerable: false,
       configurable: true,
     };
@@ -992,6 +1000,32 @@ const loadSupabaseLiveSnapshot = async () => {
         meta: {
           liveVersion: activeLiveSnapshotVersion,
           source: "local-fallback",
+        },
+      });
+    }
+
+    if (!data) {
+      // No row exists yet for this workspace key. This is NOT a successful load -
+      // treating it as one previously caused an empty "liveDefaults" snapshot to be
+      // reported as the source of truth, which could go on to discard real retained
+      // local/cached/backup/pending data as a false "workspace mismatch". Report it
+      // explicitly instead, and keep every retained snapshot untouched so a caller
+      // (e.g. an Owner bootstrap flow) can use it.
+      const retainedSnapshot = normalizeSnapshotShape(
+        selectRetainedSnapshot([pendingSnapshot, cachedSnapshot, backupSnapshot], liveDefaults),
+        liveDefaults,
+      );
+      logStartupEvent("live-workspace-missing", {
+        reason: "no-workspace-snapshots-row-for-workspace-key",
+      });
+      return attachStructuredResult(cloneSnapshot(retainedSnapshot), {
+        ok: false,
+        workspaceMissing: true,
+        warning: null,
+        error: null,
+        meta: {
+          liveVersion: activeLiveSnapshotVersion,
+          source: "workspace-missing",
         },
       });
     }

@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { resolveServerWorkspaceKey } from "../api/_lib/workspaceKey.js";
 
 // Repairs divergence between Supabase Auth and workspace_snapshots.snapshot.appUsers
 // for LEGITIMATE existing Auth identities that are missing (or inactive) in the
@@ -16,7 +17,7 @@ import { createClient } from "@supabase/supabase-js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const WORKSPACE_KEY = process.env.SUPABASE_WORKSPACE_KEY || "taxiflow-live";
+const WORKSPACE_KEY = resolveServerWorkspaceKey();
 const CONFIRM = process.argv.includes("--confirm");
 
 const VALID_ROLES = ["Owner", "Admin", "Manager", "Driver", "Viewer"];

@@ -415,33 +415,101 @@ function App() {
       backendMode: effectiveBackendMode,
       authEnabled,
     });
+    const isAuthSessionOwner = () =>
+      authSession?.user?.app_metadata?.role === "Owner" ||
+      authSession?.user?.user_metadata?.role === "Owner";
+
+    // A missing workspace row is only auto-recoverable by an Owner, since bootstrap
+    // is Owner-gated server-side too. Any other role just sees the workspaceMissing
+    // state via the normal ok:false handling below (no silent pretend-live state).
+    const attemptWorkspaceBootstrapAndReload = async (retainedSnapshot) => {
+      try {
+        const response = await fetch("/api/admin/bootstrap-workspace", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authSession.access_token}`,
+          },
+          body: JSON.stringify({ snapshot: retainedSnapshot }),
+        });
+        const bootstrapResult = await response.json();
+
+        if (!response.ok || !bootstrapResult?.ok) {
+          return { ok: false };
+        }
+
+        const reloaded = await repository.loadSnapshot("live");
+        if (reloaded?.ok !== false && reloaded?.meta?.source === "remote-live") {
+          skipNextGenericPersistRef.current = true;
+          return { ok: true, snapshot: reloaded };
+        }
+        return { ok: false };
+      } catch {
+        return { ok: false };
+      }
+    };
+
     repository
       .loadSnapshot(effectiveBackendMode)
-      .then((data) => {
-        if (isMounted) {
-          if (data?.ok !== false) {
-            setBackendFeedback((current) =>
-              current?.kind === "live-conflict" ? null : current,
+      .then(async (data) => {
+        if (!isMounted) {
+          return;
+        }
+
+        if (effectiveBackendMode === "live" && data?.workspaceMissing && authSession?.access_token && isAuthSessionOwner()) {
+          const bootstrap = await attemptWorkspaceBootstrapAndReload(data);
+          if (!isMounted) {
+            return;
+          }
+
+          if (bootstrap.ok) {
+            setBackendFeedback(null);
+            setLastSuccessfulSyncAt(
+              bootstrap.snapshot?.meta?.liveVersion ?? new Date().toISOString(),
             );
+            setSnapshot(bootstrap.snapshot);
+            setLoading(false);
+            finishLiveSync();
+            return;
           }
-          logStartupEvent("app-bootstrap-load-complete", {
-            backendMode: effectiveBackendMode,
-            ok: data?.ok !== false,
-            warning: data?.warning ?? null,
+
+          setBackendFeedback({
+            tone: "danger",
+            message: "Live workspace could not be initialized.",
           });
-          syncLiveWarning(
-            setLiveLoadWarning,
-            effectiveBackendMode === "live" && (data?.ok === false || data?.warning)
-              ? LIVE_SYNC_WARNING_MESSAGE
-              : null,
-          );
-          if (effectiveBackendMode === "live" && data?.ok !== false && data?.meta?.source === "remote-live") {
-            setLastSuccessfulSyncAt(data?.meta?.liveVersion ?? new Date().toISOString());
-          }
           setSnapshot(data);
           setLoading(false);
           finishLiveSync();
+          return;
         }
+
+        if (data?.ok !== false) {
+          setBackendFeedback((current) =>
+            current?.kind === "live-conflict" ? null : current,
+          );
+        } else if (data?.workspaceMissing) {
+          setBackendFeedback({
+            tone: "danger",
+            message: "Live workspace could not be initialized.",
+          });
+        }
+        logStartupEvent("app-bootstrap-load-complete", {
+          backendMode: effectiveBackendMode,
+          ok: data?.ok !== false,
+          warning: data?.warning ?? null,
+        });
+        syncLiveWarning(
+          setLiveLoadWarning,
+          effectiveBackendMode === "live" && (data?.ok === false || data?.warning)
+            ? LIVE_SYNC_WARNING_MESSAGE
+            : null,
+        );
+        if (effectiveBackendMode === "live" && data?.ok !== false && data?.meta?.source === "remote-live") {
+          setLastSuccessfulSyncAt(data?.meta?.liveVersion ?? new Date().toISOString());
+        }
+        setSnapshot(data);
+        setLoading(false);
+        finishLiveSync();
       })
       .catch((error) => {
         if (isMounted) {

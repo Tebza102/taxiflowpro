@@ -5,10 +5,11 @@ import {
   resetPassword,
   deleteUser,
 } from "../_lib/userLifecycle.js";
+import { resolveServerWorkspaceKey } from "../_lib/workspaceKey.js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const WORKSPACE_KEY = process.env.SUPABASE_WORKSPACE_KEY || "taxiflow-live";
+const WORKSPACE_KEY = resolveServerWorkspaceKey();
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

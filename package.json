@@ -10,7 +10,8 @@
     "test:sync-guards": "node tests/liveSyncGuards.test.mjs",
     "dev:daily-log-check": "node scripts/daily-log-regression.mjs",
     "supabase:seed-users": "node scripts/create-supabase-users.mjs",
-    "supabase:reset-owner": "node scripts/reset-production-users.mjs"
+    "supabase:reset-owner": "node scripts/reset-production-users.mjs",
+    "supabase:reconcile-users": "node scripts/reconcile-production-users.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.8",

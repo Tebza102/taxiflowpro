@@ -66,6 +66,22 @@ export const resolveAuthIdentity = (user, snapshot) => {
 
   const email = core.normalizeEmailAddress(user.email);
   const metadataRole = core.normalizeRole(user.app_metadata?.role ?? user.user_metadata?.role);
+
+  if (!email || !metadataRole) {
+    return null;
+  }
+
+  // Production membership gate: a valid Supabase Auth session is necessary but not
+  // sufficient. The account must also exist as an ACTIVE member of the TaxiFlow
+  // account directory (appUsers). An Auth-only identity - for example one left
+  // behind by a partial account creation, or created directly in Supabase without
+  // ever being added to TaxiFlow - must never resolve to application access.
+  const storedUser = getAppUserByEmail(snapshot, email);
+
+  if (!storedUser || storedUser.active === false) {
+    return null;
+  }
+
   const metadataStaffId =
     user.app_metadata?.staffId ??
     user.app_metadata?.staff_id ??
@@ -73,27 +89,17 @@ export const resolveAuthIdentity = (user, snapshot) => {
     user.user_metadata?.staff_id ??
     null;
 
-  // In production, Supabase Auth metadata is authoritative. Snapshot data may
-  // enrich display/access details, but it must never manufacture an identity.
-  if (!email || !metadataRole) {
-    return null;
-  }
-
-  const storedUser = getAppUserByEmail(snapshot, email);
-  const actorId =
-    storedUser?.actorId ??
-    metadataStaffId ??
-    user.id ??
-    `${metadataRole.toLowerCase()}-session`;
+  const role = storedUser.role ?? metadataRole;
+  const actorId = storedUser.actorId ?? metadataStaffId ?? user.id ?? `${role.toLowerCase()}-session`;
 
   return {
     email,
-    role: metadataRole,
+    role,
     actorId,
-    staffId: storedUser?.staffId ?? metadataStaffId ?? null,
-    moduleAccess: core.normalizeModuleViewAccess(storedUser?.moduleAccess ?? {}, metadataRole),
+    staffId: storedUser.staffId ?? metadataStaffId ?? null,
+    moduleAccess: core.normalizeModuleViewAccess(storedUser.moduleAccess ?? {}, role),
     name:
-      storedUser?.name ??
+      storedUser.name ??
       (String(user.user_metadata?.name ?? user.user_metadata?.full_name ?? email).trim() || email),
   };
 };

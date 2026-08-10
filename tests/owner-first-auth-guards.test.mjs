@@ -30,10 +30,18 @@ test("live snapshot persistence strips local seed users and plaintext credential
   assert.match(source, /sanitizeLiveSnapshot\(snapshot\)/);
 });
 
-test("Supabase account API protects Owner identities and supports deleting non-owners", async () => {
+test("Supabase account API routes delete/update actions to the user lifecycle module", async () => {
   const source = await read("api/admin/auth-users.js");
 
   assert.match(source, /"delete"/);
+  assert.match(source, /from "\.\.\/_lib\/userLifecycle\.js"/);
+  assert.match(source, /deleteUser\(shared\)/);
+  assert.match(source, /updateUser\(/);
+});
+
+test("user lifecycle module protects Owner identities and supports deleting non-owners", async () => {
+  const source = await read("api/_lib/userLifecycle.js");
+
   assert.match(source, /Owner accounts cannot be deleted inside TaxiFlow/);
   assert.match(source, /Owner accounts cannot be demoted inside TaxiFlow/);
   assert.match(source, /supabase\.auth\.admin\.deleteUser/);

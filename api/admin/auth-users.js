@@ -1,7 +1,14 @@
-import { createClient } from "@supabase/supabase-js";
+import {
+  createServiceClient,
+  createUser,
+  updateUser,
+  resetPassword,
+  deleteUser,
+} from "../_lib/userLifecycle.js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const WORKSPACE_KEY = process.env.SUPABASE_WORKSPACE_KEY || "taxiflow-live";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -18,7 +25,7 @@ const createResponse = (body, status = 200) =>
     },
   });
 
-const validateAdminSession = async (req) => {
+const validateSession = async (req, supabase) => {
   const authHeader = req.headers.get("authorization");
   if (!authHeader?.toLowerCase().startsWith("bearer ")) {
     return { error: "Missing or invalid authorization header", status: 401 };
@@ -29,17 +36,6 @@ const validateAdminSession = async (req) => {
     return { error: "Empty bearer token", status: 401 };
   }
 
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    return { error: "Server configuration incomplete", status: 503 };
-  }
-
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
-
   const {
     data: { user },
     error: userError,
@@ -49,29 +45,26 @@ const validateAdminSession = async (req) => {
     return { error: "Invalid or expired session token", status: 401 };
   }
 
-  const userRole = user.app_metadata?.role ?? user.user_metadata?.role ?? null;
-  if (!["Owner", "Admin", "Manager"].includes(userRole)) {
-    return { error: "Insufficient permissions for admin operations", status: 403 };
+  if (!user.email) {
+    return { error: "Session has no associated email address", status: 401 };
   }
 
-  return { user, userRole, supabase };
-};
-
-const listAuthUsers = async (supabase) => {
-  const { data, error } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
-  return { users: data?.users ?? [], error };
+  return { user };
 };
 
 export async function POST(req) {
-  const sessionValidation = await validateAdminSession(req);
-  if (sessionValidation.error) {
-    return createResponse(
-      { ok: false, error: sessionValidation.error },
-      sessionValidation.status,
-    );
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    return createResponse({ ok: false, error: "Server configuration incomplete" }, 503);
   }
 
-  const { user: sessionUser, userRole, supabase } = sessionValidation;
+  const supabase = createServiceClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const sessionValidation = await validateSession(req, supabase);
+
+  if (sessionValidation.error) {
+    return createResponse({ ok: false, error: sessionValidation.error }, sessionValidation.status);
+  }
+
+  const { user: sessionUser } = sessionValidation;
 
   let body;
   try {
@@ -80,7 +73,7 @@ export async function POST(req) {
     return createResponse({ ok: false, error: "Invalid request body" }, 400);
   }
 
-  const { action, email, name, role, password } = body;
+  const { action, email, name, role, password, staffId, moduleAccess } = body;
   const allowedActions = ["create", "reset-password", "update", "delete"];
 
   if (!action || !allowedActions.includes(action)) {
@@ -91,174 +84,38 @@ export async function POST(req) {
     return createResponse({ ok: false, error: "Valid email address required" }, 400);
   }
 
-  const normalizedEmail = email.trim().toLowerCase();
-
-  if (action === "create") {
-    if (userRole !== "Owner") {
-      return createResponse({ ok: false, error: "Only the owner can create new user accounts" }, 403);
-    }
-
-    if (!role || !["Owner", "Admin", "Manager", "Driver", "Viewer"].includes(role)) {
-      return createResponse({ ok: false, error: "Valid role required for user creation" }, 400);
-    }
-
-    if (!password || password.length < 6) {
-      return createResponse({ ok: false, error: "Password must be at least 6 characters long" }, 400);
-    }
-
-    const existingUsers = await listAuthUsers(supabase);
-    if (existingUsers.error) {
-      return createResponse({ ok: false, error: "Failed to check existing users" }, 502);
-    }
-
-    const existingUser = existingUsers.users.find(
-      (candidate) => candidate.email?.toLowerCase() === normalizedEmail,
-    );
-
-    if (existingUser) {
-      return createResponse({ ok: false, error: "User already exists in Supabase Auth" }, 409);
-    }
-
-    const { data, error } = await supabase.auth.admin.createUser({
-      email: normalizedEmail,
-      password,
-      email_confirm: true,
-      user_metadata: {
-        name: name || normalizedEmail,
-        role,
-        staffId: body.staffId ?? null,
-      },
-      app_metadata: {
-        role,
-        staff_id: body.staffId ?? null,
-      },
-    });
-
-    if (error) {
-      return createResponse({ ok: false, error: error.message }, 502);
-    }
-
-    return createResponse({
-      ok: true,
-      message: `User ${normalizedEmail} created in Supabase Auth`,
-      user: {
-        id: data.user.id,
-        email: data.user.email,
-        role: data.user.app_metadata?.role ?? role,
-      },
-    });
-  }
-
-  const existingUsers = await listAuthUsers(supabase);
-  if (existingUsers.error) {
-    return createResponse({ ok: false, error: "Failed to find user in Supabase Auth" }, 502);
-  }
-
-  const existingUser = existingUsers.users.find(
-    (candidate) => candidate.email?.toLowerCase() === normalizedEmail,
-  );
-
-  if (!existingUser) {
-    return createResponse({ ok: false, error: "User not found in Supabase Auth" }, 404);
-  }
-
-  const existingRole =
-    existingUser.app_metadata?.role ?? existingUser.user_metadata?.role ?? null;
-
-  if (action === "delete") {
-    if (userRole !== "Owner") {
-      return createResponse({ ok: false, error: "Only the owner can delete user accounts" }, 403);
-    }
-
-    // Owner identities are infrastructure-protected. They can only be removed
-    // through the developer/Supabase administration recovery path.
-    if (existingRole === "Owner") {
-      return createResponse(
-        { ok: false, error: "Owner accounts cannot be deleted inside TaxiFlow" },
-        403,
-      );
-    }
-
-    if (existingUser.id === sessionUser.id) {
-      return createResponse({ ok: false, error: "Cannot delete the signed-in account" }, 403);
-    }
-
-    const { error } = await supabase.auth.admin.deleteUser(existingUser.id);
-    if (error) {
-      return createResponse({ ok: false, error: error.message }, 502);
-    }
-
-    return createResponse({
-      ok: true,
-      message: `User ${normalizedEmail} deleted from Supabase Auth`,
-    });
-  }
-
-  if (action === "reset-password") {
-    if (existingRole === "Owner" && userRole !== "Owner") {
-      return createResponse(
-        { ok: false, error: "Only an owner can reset an owner account password" },
-        403,
-      );
-    }
-
-    if (!password || password.length < 6) {
-      return createResponse({ ok: false, error: "Password must be at least 6 characters long" }, 400);
-    }
-  }
-
-  if (action === "update" && role) {
-    if (userRole !== "Owner") {
-      return createResponse({ ok: false, error: "Only the owner can change user roles" }, 403);
-    }
-
-    if (!["Owner", "Admin", "Manager", "Driver", "Viewer"].includes(role)) {
-      return createResponse({ ok: false, error: "Valid role required for user update" }, 400);
-    }
-
-    if (existingRole === "Owner" && role !== "Owner") {
-      return createResponse(
-        { ok: false, error: "Owner accounts cannot be demoted inside TaxiFlow" },
-        403,
-      );
-    }
-  }
-
-  const nextRole = action === "update" && role ? role : existingRole;
-  const updates = {
-    email_confirm: true,
-    user_metadata: {
-      ...(existingUser.user_metadata ?? {}),
-      name: name || existingUser.user_metadata?.name || normalizedEmail,
-      ...(nextRole ? { role: nextRole } : {}),
-    },
-    app_metadata: {
-      ...(existingUser.app_metadata ?? {}),
-      ...(nextRole ? { role: nextRole } : {}),
-    },
+  const shared = {
+    supabase,
+    workspaceKey: WORKSPACE_KEY,
+    requesterEmail: sessionUser.email,
+    email,
   };
 
-  if (password && password.length >= 6) {
-    updates.password = password;
+  let result;
+
+  try {
+    if (action === "create") {
+      result = await createUser({ ...shared, name, role, password, staffId });
+    } else if (action === "update") {
+      result = await updateUser({ ...shared, name, role, moduleAccess });
+    } else if (action === "reset-password") {
+      result = await resetPassword({
+        ...shared,
+        requesterRole: sessionUser.app_metadata?.role ?? null,
+        name,
+        password,
+      });
+    } else {
+      result = await deleteUser(shared);
+    }
+  } catch (error) {
+    return createResponse(
+      { ok: false, error: error?.message ?? "Unexpected server error during account operation" },
+      500,
+    );
   }
 
-  const { data, error } = await supabase.auth.admin.updateUserById(existingUser.id, updates);
-
-  if (error) {
-    return createResponse({ ok: false, error: error.message }, 502);
-  }
-
-  return createResponse({
-    ok: true,
-    message: password
-      ? `Password reset for ${normalizedEmail}`
-      : `User ${normalizedEmail} updated`,
-    user: {
-      id: data.user.id,
-      email: data.user.email,
-      role: data.user.app_metadata?.role ?? nextRole,
-    },
-  });
+  return createResponse(result, result.status ?? (result.ok ? 200 : 400));
 }
 
 export async function OPTIONS() {

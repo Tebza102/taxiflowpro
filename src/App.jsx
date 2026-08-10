@@ -257,6 +257,11 @@ function App() {
   const latestLiveSaveWarningRef = useRef(null);
   const pendingUserAccessWriteRef = useRef(false);
   const pendingUserAccessSnapshotRef = useRef(null);
+  // Set right before setSnapshot() is called with a snapshot that a server lifecycle
+  // call (create/update/delete/reset-password user) already persisted remotely.
+  // Prevents the generic persistence effect from firing a redundant, uncoordinated
+  // second write for the same mutation.
+  const skipNextGenericPersistRef = useRef(false);
   const [authDraft, setAuthDraft] = useState({
     email: "",
     password: "",
@@ -460,6 +465,11 @@ function App() {
 
   useEffect(() => {
     if (loading || !snapshot) {
+      return undefined;
+    }
+
+    if (skipNextGenericPersistRef.current) {
+      skipNextGenericPersistRef.current = false;
       return undefined;
     }
 
@@ -916,9 +926,14 @@ function App() {
     };
   };
 
-  const syncUserWithSupabaseAuth = async ({ action, email, name, role, password, staffId }) => {
-    if (effectiveBackendMode !== "live" || !authSession?.access_token) {
-      return { ok: true, skipped: true, message: "Supabase Auth sync skipped (demo mode or no session)" };
+  // Server-orchestrated user lifecycle (live mode only). The server endpoint commits
+  // BOTH the Supabase Auth identity and the appUsers snapshot record for a single
+  // mutation, so the client never performs its own separate snapshot write for these
+  // operations - that dual-write is exactly what previously let the two stores drift
+  // apart. Mock/demo mode never calls this; it keeps the original client-only flow.
+  const callUserLifecycleApi = async ({ action, email, name, role, password, staffId, moduleAccess }) => {
+    if (!authSession?.access_token) {
+      return { ok: false, error: "No active session available for this account operation." };
     }
 
     try {
@@ -928,15 +943,7 @@ function App() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${authSession.access_token}`,
         },
-        body: JSON.stringify({
-          action,
-          email,
-          name,
-          role,
-          password,
-          staffId,
-          actorId: authSession.user?.id,
-        }),
+        body: JSON.stringify({ action, email, name, role, password, staffId, moduleAccess }),
       });
 
       const result = await response.json();
@@ -944,18 +951,33 @@ function App() {
       if (!response.ok || !result.ok) {
         return {
           ok: false,
-          error: result.error ?? "Supabase Auth sync failed",
+          partial: Boolean(result?.partial),
+          error: result?.error ?? "Account operation failed",
           status: response.status,
         };
       }
 
-      return { ok: true, message: result.message, user: result.user };
+      return result;
     } catch (error) {
       return {
         ok: false,
-        error: error.message ?? "Network error during Supabase Auth sync",
+        error: error?.message ?? "Network error during account operation",
       };
     }
+  };
+
+  // After a server lifecycle call succeeds, the server's copy of the snapshot is the
+  // only trustworthy one. Reload it and suppress the one redundant generic-persist
+  // write that would otherwise fire in response to setSnapshot().
+  const reloadCanonicalLiveSnapshot = async () => {
+    const loaded = await repository.loadSnapshot("live");
+    skipNextGenericPersistRef.current = true;
+    setSnapshot(loaded);
+    latestSnapshotRef.current = loaded;
+    if (loaded?.ok !== false && loaded?.meta?.source === "remote-live") {
+      setLastSuccessfulSyncAt(loaded?.meta?.liveVersion ?? new Date().toISOString());
+    }
+    return loaded;
   };
 
   const commitUserAccessSnapshot = async (nextSnapshot) => {
@@ -1591,14 +1613,6 @@ function App() {
       return { ok: false, error: "Select a valid TaxiFlow role." };
     }
 
-    const nextAccessPassword = String(draft.nextAccessPassword ?? "").trim();
-    if (nextAccessPassword && nextAccessPassword.length < 6) {
-      return {
-        ok: false,
-        error: "Reset password must be at least 6 characters long.",
-      };
-    }
-
     if (!canAssignRoleToUser(nextRole, existingUser)) {
       return {
         ok: false,
@@ -1609,6 +1623,52 @@ function App() {
     const ownerCount = currentUsers.filter((user) => user.role === "Owner").length;
     if (existingUser.role === "Owner" && nextRole !== "Owner" && ownerCount <= 1) {
       return { ok: false, error: "TaxiFlow must always keep at least one owner account." };
+    }
+
+    const nextAccessPassword = String(draft.nextAccessPassword ?? "").trim();
+
+    if (effectiveBackendMode === "live") {
+      if (nextAccessPassword && nextAccessPassword.length < 8) {
+        return { ok: false, error: "Reset password must be at least 8 characters long." };
+      }
+
+      const updateResult = await callUserLifecycleApi({
+        action: "update",
+        email: existingUser.email,
+        name: String(draft.name ?? "").trim() || existingUser.name,
+        role: nextRole,
+        moduleAccess: normalizeModuleViewAccess(draft.moduleAccess, nextRole),
+      });
+
+      if (!updateResult.ok) {
+        return { ok: false, error: updateResult.error };
+      }
+
+      let passwordMessage = "";
+      if (nextAccessPassword) {
+        const passwordResult = await callUserLifecycleApi({
+          action: "reset-password",
+          email: existingUser.email,
+          password: nextAccessPassword,
+        });
+        passwordMessage = passwordResult.ok
+          ? " Password reset saved."
+          : ` Role/access saved, but the password reset failed: ${passwordResult.error}`;
+      }
+
+      await reloadCanonicalLiveSnapshot();
+
+      return {
+        ok: true,
+        message: `${updateResult.appUser?.name ?? existingUser.name} updated as ${nextRole}.${passwordMessage}`,
+      };
+    }
+
+    if (nextAccessPassword && nextAccessPassword.length < 6) {
+      return {
+        ok: false,
+        error: "Reset password must be at least 6 characters long.",
+      };
     }
 
     const timestamp = new Date().toISOString();
@@ -1713,15 +1773,13 @@ function App() {
         ]),
     };
 
-    const persistResult = await commitUserAccessSnapshot(nextSnapshot);
-    const liveWarning =
-      effectiveBackendMode === "live" && (persistResult?.ok === false || persistResult?.warning)
-        ? " Saved locally and queued for live sync."
-        : "";
+    // Mock/demo mode only reaches here (live mode returned earlier via the server
+    // lifecycle call above).
+    await commitUserAccessSnapshot(nextSnapshot);
 
     return {
       ok: true,
-      message: `${nextUser.name} updated as ${nextUser.role}.${nextAccessPassword ? " Password reset saved." : ""}${liveWarning}`,
+      message: `${nextUser.name} updated as ${nextUser.role}.${nextAccessPassword ? " Password reset saved." : ""}`,
     };
   };
 
@@ -1754,6 +1812,39 @@ function App() {
     }
 
     const nextAccessPassword = String(draft.nextAccessPassword ?? "").trim();
+
+    if (effectiveBackendMode === "live") {
+      // Live mode: the server commits Supabase Auth + appUsers together, or neither.
+      // No client-side snapshot mutation happens here.
+      if (!nextAccessPassword || nextAccessPassword.length < 8) {
+        return {
+          ok: false,
+          error: "A real password (8+ characters) is required to create a live account.",
+        };
+      }
+
+      const lifecycleResult = await callUserLifecycleApi({
+        action: "create",
+        email: newEmail,
+        name: String(draft.name ?? "").trim() || newEmail,
+        role: userRole,
+        password: nextAccessPassword,
+        staffId: draft.staffId ?? null,
+      });
+
+      if (!lifecycleResult.ok) {
+        return { ok: false, error: lifecycleResult.error };
+      }
+
+      await reloadCanonicalLiveSnapshot();
+
+      return {
+        ok: true,
+        message: `New user created: ${lifecycleResult.appUser?.name ?? newEmail} as ${userRole}.`,
+        user: lifecycleResult.appUser,
+      };
+    }
+
     if (nextAccessPassword && nextAccessPassword.length < 6) {
       return {
         ok: false,
@@ -1807,32 +1898,13 @@ function App() {
       ]),
     };
 
-    const persistResult = await commitUserAccessSnapshot(nextSnapshot);
-    const liveWarning =
-      effectiveBackendMode === "live" && (persistResult?.ok === false || persistResult?.warning)
-        ? " Saved locally and queued for live sync."
-        : "";
-
-    let authSyncMessage = "";
-    if (effectiveBackendMode === "live" && nextAccessPassword) {
-      const authSyncResult = await syncUserWithSupabaseAuth({
-        action: "create",
-        email: newEmail,
-        name: newUser.name,
-        role: userRole,
-        password: nextAccessPassword,
-      });
-
-      if (!authSyncResult.ok && !authSyncResult.skipped) {
-        authSyncMessage = ` Supabase Auth sync failed: ${authSyncResult.error}`;
-      } else if (authSyncResult.message) {
-        authSyncMessage = ` ${authSyncResult.message}`;
-      }
-    }
+    // Mock/demo mode only reaches here (live mode returned earlier via the server
+    // lifecycle call above).
+    await commitUserAccessSnapshot(nextSnapshot);
 
     return {
       ok: true,
-      message: `New user created: ${newUser.name} as ${newUser.role}.${liveWarning}${authSyncMessage}`,
+      message: `New user created: ${newUser.name} as ${newUser.role}.`,
       user: newUser,
     };
   };
@@ -1863,6 +1935,30 @@ function App() {
       return { ok: false, error: "Cannot delete the account you are signed in with." };
     }
 
+    if (effectiveBackendMode === "live") {
+      const lifecycleResult = await callUserLifecycleApi({
+        action: "delete",
+        email: userToDelete.email,
+      });
+
+      // Reload the canonical snapshot even on a "partial" outcome: the server
+      // guarantees appUsers membership is removed (and access blocked) before it
+      // ever attempts the Supabase Auth deletion, so the account directory is
+      // authoritative either way.
+      if (lifecycleResult.ok || lifecycleResult.partial) {
+        await reloadCanonicalLiveSnapshot();
+      }
+
+      if (!lifecycleResult.ok) {
+        return { ok: false, error: lifecycleResult.error };
+      }
+
+      return {
+        ok: true,
+        message: lifecycleResult.message ?? `User account deleted: ${userToDelete.name}.`,
+      };
+    }
+
     const nextUsers = sortAppUsers(
       currentUsers.filter((user) => user.email !== userEmail),
     );
@@ -1872,15 +1968,11 @@ function App() {
       appUsers: nextUsers,
     };
 
-    const persistResult = await commitUserAccessSnapshot(nextSnapshot);
-    const liveWarning =
-      effectiveBackendMode === "live" && (persistResult?.ok === false || persistResult?.warning)
-        ? " Saved locally and queued for live sync."
-        : "";
+    await commitUserAccessSnapshot(nextSnapshot);
 
     return {
       ok: true,
-      message: `User account deleted: ${userToDelete.name}.${liveWarning}`,
+      message: `User account deleted: ${userToDelete.name}.`,
     };
   };
 
@@ -1914,6 +2006,36 @@ function App() {
 
     if (!shouldUpdateName && !shouldUpdatePassword) {
       return { ok: false, error: "Update the full name or enter a new password before saving." };
+    }
+
+    if (effectiveBackendMode === "live") {
+      if (shouldUpdatePassword && password.length < 8) {
+        return { ok: false, error: "Reset password must be at least 8 characters long." };
+      }
+
+      // Password only ever goes to Supabase Auth here - it is never written into the
+      // live snapshot, matching the "no plaintext credentials in workspace_snapshots"
+      // contract.
+      const lifecycleResult = await callUserLifecycleApi({
+        action: "reset-password",
+        email: normalizedEmail,
+        name: shouldUpdateName ? nextName : undefined,
+        password: shouldUpdatePassword ? password : undefined,
+      });
+
+      if (!lifecycleResult.ok) {
+        return { ok: false, error: lifecycleResult.error };
+      }
+
+      await reloadCanonicalLiveSnapshot();
+
+      return {
+        ok: true,
+        message:
+          lifecycleResult.warning ??
+          lifecycleResult.message ??
+          `${nextName} details saved.`,
+      };
     }
 
     if (shouldUpdatePassword && password.length < 6) {
@@ -2022,36 +2144,17 @@ function App() {
       ]),
     };
 
-    const persistResult = await commitUserAccessSnapshot(nextSnapshot);
-    const liveWarning =
-      effectiveBackendMode === "live" && (persistResult?.ok === false || persistResult?.warning)
-        ? " Saved locally and queued for live sync."
-        : "";
-
-    let authSyncMessage = "";
-    if (effectiveBackendMode === "live" && shouldUpdatePassword) {
-      const authSyncResult = await syncUserWithSupabaseAuth({
-        action: "reset-password",
-        email: normalizedEmail,
-        name: nextName,
-        role: existingUser.role,
-        password,
-      });
-
-      if (!authSyncResult.ok && !authSyncResult.skipped) {
-        authSyncMessage = ` Supabase Auth sync failed: ${authSyncResult.error}`;
-      } else if (authSyncResult.message) {
-        authSyncMessage = ` ${authSyncResult.message}`;
-      }
-    }
+    // Mock/demo mode only reaches here (live mode returned earlier via the server
+    // lifecycle call above).
+    await commitUserAccessSnapshot(nextSnapshot);
 
     return {
       ok: true,
       message: shouldUpdateName && shouldUpdatePassword
-        ? `${nextUser.name} details and password saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}${liveWarning}${authSyncMessage}`
+        ? `${nextUser.name} details and password saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}`
         : shouldUpdatePassword
-          ? `${nextUser.name} password reset saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}${liveWarning}${authSyncMessage}`
-          : `${nextUser.name} details saved.${liveWarning}`,
+          ? `${nextUser.name} password reset saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}`
+          : `${nextUser.name} details saved.`,
     };
   };
 

@@ -47,3 +47,17 @@ test("production reset requires explicit destructive confirmation and bootstraps
   assert.match(source, /appUsers: \[ownerRecord\]/);
   assert.match(source, /accessPassword: null/);
 });
+
+test("production reset clears workspace auth-user foreign keys before deleting old users", async () => {
+  const source = await read("scripts/reset-production-users.mjs");
+
+  assert.match(source, /select\("workspace_key, updated_by"\)/);
+  assert.match(source, /update\(\{ updated_by: null \}\)/);
+
+  const clearIndex = source.indexOf('update({ updated_by: null })');
+  const deleteIndex = source.indexOf('supabase.auth.admin.deleteUser(user.id)');
+
+  assert.ok(clearIndex >= 0, "expected workspace updated_by cleanup");
+  assert.ok(deleteIndex >= 0, "expected old Auth user deletion");
+  assert.ok(clearIndex < deleteIndex, "workspace foreign-key cleanup must happen before Auth deletion");
+});

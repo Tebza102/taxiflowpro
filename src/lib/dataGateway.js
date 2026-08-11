@@ -1098,51 +1098,95 @@ const persistSupabaseLiveSnapshot = async (snapshot, actorId = null) => {
 
   try {
     const localVersion = activeLiveSnapshotVersion;
-    const { updatedAt: serverVersion, error: metaError } = await getLiveSnapshotMeta();
-
-    if (metaError) {
-      // When offline (or during transient network failures) we still want to retain the user's work
-      // and replay it automatically once connectivity returns.
-      persistPendingLiveSnapshot(snapshot);
-      const warning =
-        "Unable to confirm the latest live workspace version. Refresh before saving again.";
-      logHandledWarning(warning, metaError);
-      return createStructuredResult(snapshot, {
-        ok: false,
-        warning,
-        error: createLiveConflictError({
-          localVersion,
-          serverVersion,
-          reason: "version-check-failed",
-        }),
-      });
-    }
-
-    const conflict = detectLiveWriteConflict(localVersion, serverVersion);
-
-    if (conflict) {
-      // Preserve the pending snapshot so it can be reviewed/replayed after a refresh.
-      persistPendingLiveSnapshot(snapshot);
-      return createStructuredResult(snapshot, {
-        ok: false,
-        warning: conflict.message,
-        error: conflict,
-      });
-    }
-
     const payload = cloneSnapshot(snapshot);
     const nextUpdatedAt = new Date().toISOString();
-    const { error } = await supabase.from("workspace_snapshots").upsert(
-      {
+    const actorUserId = actorId ?? session.user.id;
+
+    // No known prior version yet: this is the one case a compare-and-swap UPDATE
+    // can't handle (there is no `updated_at` to match against). Confirm whether a
+    // row genuinely doesn't exist before inserting - if one *does* exist, we must
+    // not blind-write over it, so this is reported as the same conflict a stale
+    // writer would get, and first-time creation is left to the existing bootstrap
+    // mechanism (attemptWorkspaceBootstrapAndReload in App.jsx).
+    if (!localVersion) {
+      const { updatedAt: serverVersion, error: metaError } = await getLiveSnapshotMeta();
+
+      if (metaError) {
+        persistPendingLiveSnapshot(snapshot);
+        const warning =
+          "Unable to confirm the latest live workspace version. Refresh before saving again.";
+        logHandledWarning(warning, metaError);
+        return createStructuredResult(snapshot, {
+          ok: false,
+          warning,
+          error: createLiveConflictError({
+            localVersion,
+            serverVersion,
+            reason: "version-check-failed",
+          }),
+        });
+      }
+
+      const conflict = detectLiveWriteConflict(localVersion, serverVersion);
+
+      if (conflict) {
+        persistPendingLiveSnapshot(snapshot);
+        return createStructuredResult(snapshot, {
+          ok: false,
+          warning: conflict.message,
+          error: conflict,
+        });
+      }
+
+      const { error: insertError } = await supabase.from("workspace_snapshots").insert({
         workspace_key: LIVE_WORKSPACE_KEY,
         snapshot: payload,
         updated_at: nextUpdatedAt,
-        updated_by: actorId ?? session.user.id,
-      },
-      {
-        onConflict: "workspace_key",
-      },
-    );
+        updated_by: actorUserId,
+      });
+
+      if (insertError) {
+        persistPendingLiveSnapshot(snapshot);
+        const warning =
+          "Unable to save the live workspace remotely. Changes are queued and will retry automatically.";
+        logHandledWarning(warning, insertError);
+        return createStructuredResult(snapshot, { ok: false, warning, error: insertError });
+      }
+
+      persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, payload);
+      activeLiveSnapshotVersion = nextUpdatedAt;
+      persistLiveSnapshotVersion(nextUpdatedAt);
+      clearPendingLiveSnapshot();
+      return createStructuredResult(snapshot, {
+        ok: true,
+        warning: null,
+        error: {
+          meta: {
+            liveVersion: nextUpdatedAt,
+            source: "remote-save",
+          },
+        },
+      });
+    }
+
+    // Known prior version: one atomic UPDATE, gated by both workspace_key AND the
+    // expected updated_at, in a single database round trip. The version check and
+    // the write can no longer race - a second writer starting from the same
+    // version either lands first (this UPDATE then matches 0 rows, reported as a
+    // conflict below) or lands second (its own UPDATE matches 0 rows instead).
+    // Either way, exactly one writer wins and the loser is told to refresh, instead
+    // of both succeeding and the second silently discarding the first (the
+    // read-then-write race this replaces).
+    const { data: updatedRows, error } = await supabase
+      .from("workspace_snapshots")
+      .update({
+        snapshot: payload,
+        updated_at: nextUpdatedAt,
+        updated_by: actorUserId,
+      })
+      .eq("workspace_key", LIVE_WORKSPACE_KEY)
+      .eq("updated_at", localVersion)
+      .select("workspace_key");
 
     if (error) {
       persistPendingLiveSnapshot(snapshot);
@@ -1150,6 +1194,20 @@ const persistSupabaseLiveSnapshot = async (snapshot, actorId = null) => {
         "Unable to save the live workspace remotely. Changes are queued and will retry automatically.";
       logHandledWarning(warning, error);
       return createStructuredResult(snapshot, { ok: false, warning, error });
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      persistPendingLiveSnapshot(snapshot);
+      const conflict = createLiveConflictError({
+        localVersion,
+        serverVersion: null,
+        reason: "server-newer-than-local",
+      });
+      return createStructuredResult(snapshot, {
+        ok: false,
+        warning: conflict.message,
+        error: conflict,
+      });
     }
 
     persistStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY, payload);

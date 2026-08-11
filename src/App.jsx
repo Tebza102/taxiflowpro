@@ -1048,6 +1048,75 @@ function App() {
     return loaded;
   };
 
+  // Reusable confirmed-mutation helper: same principle already proven for account
+  // persistence (commitUserAccessSnapshot / reloadCanonicalLiveSnapshot above) -
+  // a local React state change is never reported to the caller as "saved" on its
+  // own. In live mode this persists remotely, waits for the result, and only a
+  // *fresh canonical remote read* that actually contains the change is treated as
+  // success; on any failure or conflict the canonical remote state is reloaded
+  // instead (never left showing an unconfirmed optimistic write), and a clear
+  // error is returned. Mock mode keeps the original local-only behaviour, since
+  // there is no remote to verify against.
+  //
+  // Built for Route persistence first; intentionally generic (plain
+  // current/next-snapshot in, {ok, snapshot|error} out) so Drivers and Finance can
+  // adopt it later once Route is proven, per the standing instruction not to build
+  // a second, route-specific persistence system.
+  const commitLiveSnapshotMutation = async (current, nextSnapshot) => {
+    if (effectiveBackendMode !== "live") {
+      setSnapshot(nextSnapshot);
+      latestSnapshotRef.current = nextSnapshot;
+      return { ok: true, snapshot: nextSnapshot };
+    }
+
+    const finishLiveSync = beginLiveSync();
+
+    try {
+      const persistResult = await repository.persistSnapshot(nextSnapshot, effectiveBackendMode);
+
+      if (persistResult?.conflict) {
+        setBackendFeedback({
+          kind: "live-conflict",
+          tone: "danger",
+          message: persistResult.conflict.message,
+          actionLabel: "Refresh live data",
+        });
+        await reloadCanonicalLiveSnapshot();
+        return {
+          ok: false,
+          error:
+            persistResult.conflict.message ??
+            "Live data changed on another device. Refresh before saving.",
+        };
+      }
+
+      if (persistResult?.ok !== true) {
+        syncLiveWarning(setLiveSaveWarning, LIVE_SAVE_WARNING_MESSAGE);
+        await reloadCanonicalLiveSnapshot();
+        return {
+          ok: false,
+          error: "Could not be saved to the live workspace. No confirmed change was made.",
+        };
+      }
+
+      // Write succeeded - but the only trustworthy copy of what actually landed is
+      // a fresh remote read, not the snapshot we optimistically built client-side.
+      const canonical = await reloadCanonicalLiveSnapshot();
+
+      if (canonical?.ok === false) {
+        return {
+          ok: false,
+          error: "Saved, but the confirmation read failed. Refresh to verify.",
+        };
+      }
+
+      setLastSuccessfulSyncAt(canonical?.meta?.liveVersion ?? new Date().toISOString());
+      return { ok: true, snapshot: canonical };
+    } finally {
+      finishLiveSync();
+    }
+  };
+
   const commitUserAccessSnapshot = async (nextSnapshot) => {
     pendingUserAccessWriteRef.current = true;
     pendingUserAccessSnapshotRef.current = nextSnapshot;
@@ -3778,117 +3847,134 @@ function App() {
     return result;
   };
 
-  const saveRouteProfile = (draft) => {
-    let result = { ok: false, error: "Unable to save the route profile." };
+  // Async and verified, not optimistic: this is the Phase-1 fix for route
+  // persistence. Success is no longer "React state changed" - it is only
+  // reported once commitLiveSnapshotMutation's fresh canonical remote read
+  // actually contains the new/updated route. All prior validation, the route
+  // data shape, and the audit-trail entry are unchanged.
+  const saveRouteProfile = async (draft) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-      if (!PRIVILEGED_ROLES.has(activeRole)) {
-        result = { ok: false, error: "Only management can edit route settings." };
-        return current;
-      }
-      if (!hasModuleUpdateAccess(current, "fleet")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!PRIVILEGED_ROLES.has(activeRole)) {
+      return { ok: false, error: "Only management can edit route settings." };
+    }
+    if (!hasModuleUpdateAccess(current, "fleet")) {
+      return { ok: false, error: getModuleAccessErrorMessage("fleet") };
+    }
 
-      const routeName = String(draft.name ?? "").trim();
-      const routeCode = String(draft.code ?? "").trim().toUpperCase();
-      const routeType = String(draft.type ?? "route_service").trim() || "route_service";
-      const primaryOrigin = String(draft.primaryOrigin ?? "").trim();
-      const primaryDestination = String(draft.primaryDestination ?? "").trim();
+    const routeName = String(draft.name ?? "").trim();
+    const routeCode = String(draft.code ?? "").trim().toUpperCase();
+    const routeType = String(draft.type ?? "route_service").trim() || "route_service";
+    const primaryOrigin = String(draft.primaryOrigin ?? "").trim();
+    const primaryDestination = String(draft.primaryDestination ?? "").trim();
 
-      if (!routeName) {
-        result = { ok: false, error: "Route name is required." };
-        return current;
-      }
-      if (!primaryOrigin || !primaryDestination) {
-        result = { ok: false, error: "Primary origin and destination are required." };
-        return current;
-      }
+    if (!routeName) {
+      return { ok: false, error: "Route name is required." };
+    }
+    if (!primaryOrigin || !primaryDestination) {
+      return { ok: false, error: "Primary origin and destination are required." };
+    }
 
-      const normalizedDraft = normalizeRouteMasterRecord({
-        ...draft,
-        name: routeName,
-        code: routeCode,
-        type: routeType,
-        primaryOrigin,
-        primaryDestination,
-        route: routeName,
-        isActive: draft.isActive ?? true,
-      });
-
-      if (!normalizedDraft) {
-        result = { ok: false, error: "Enter a valid route name." };
-        return current;
-      }
-
-      const currentRoutes = current.routes ?? [];
-      const existingRoute =
-        currentRoutes.find(
-          (route) =>
-            route.id === draft.id ||
-            route.id === normalizedDraft.id ||
-            route.name?.trim().toLowerCase() === normalizedDraft.name.trim().toLowerCase(),
-        ) ?? null;
-      const duplicateCode = currentRoutes.find(
-        (route) =>
-          route.id !== existingRoute?.id &&
-          String(route.code ?? "").trim().toUpperCase() === normalizedDraft.code,
-      );
-
-      if (duplicateCode) {
-        result = { ok: false, error: "This route code is already linked to another route." };
-        return current;
-      }
-
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const nextRoute = {
-        ...existingRoute,
-        ...normalizedDraft,
-        createdAt: existingRoute?.createdAt ?? now,
-        createdBy: existingRoute?.createdBy ?? actorId,
-        createdByRole: existingRoute?.createdByRole ?? activeRole,
-        updatedAt: existingRoute ? now : null,
-        updatedBy: existingRoute ? actorId : null,
-        updatedByRole: existingRoute ? activeRole : null,
-      };
-      const nextRoutesBase = existingRoute
-        ? currentRoutes.map((route) => (route.id === existingRoute.id ? nextRoute : route))
-        : [nextRoute, ...currentRoutes];
-      const nextRoutes = collectRouteMasterRecords({
-        ...current,
-        routes: nextRoutesBase,
-      });
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "fleet",
-          action: existingRoute ? "update" : "create",
-          entityType: "route",
-          entityId: nextRoute.id,
-          title: `Route ${existingRoute ? "updated" : "created"} / ${nextRoute.code}`,
-          detail: `${nextRoute.name} / ${nextRoute.type}`,
-        }),
-      ]);
-
-      result = {
-        ok: true,
-        message: existingRoute ? "Route profile updated." : "Route profile created.",
-        routeId: nextRoute.id,
-      };
-
-      return {
-        ...current,
-        routes: nextRoutes,
-        auditTrail: nextAuditTrail,
-      };
+    const normalizedDraft = normalizeRouteMasterRecord({
+      ...draft,
+      name: routeName,
+      code: routeCode,
+      type: routeType,
+      primaryOrigin,
+      primaryDestination,
+      route: routeName,
+      isActive: draft.isActive ?? true,
     });
 
-    return result;
+    if (!normalizedDraft) {
+      return { ok: false, error: "Enter a valid route name." };
+    }
+
+    const currentRoutes = current.routes ?? [];
+    const existingRoute =
+      currentRoutes.find(
+        (route) =>
+          route.id === draft.id ||
+          route.id === normalizedDraft.id ||
+          route.name?.trim().toLowerCase() === normalizedDraft.name.trim().toLowerCase(),
+      ) ?? null;
+    const duplicateCode = currentRoutes.find(
+      (route) =>
+        route.id !== existingRoute?.id &&
+        String(route.code ?? "").trim().toUpperCase() === normalizedDraft.code,
+    );
+
+    if (duplicateCode) {
+      return { ok: false, error: "This route code is already linked to another route." };
+    }
+
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const nextRoute = {
+      ...existingRoute,
+      ...normalizedDraft,
+      createdAt: existingRoute?.createdAt ?? now,
+      createdBy: existingRoute?.createdBy ?? actorId,
+      createdByRole: existingRoute?.createdByRole ?? activeRole,
+      updatedAt: existingRoute ? now : null,
+      updatedBy: existingRoute ? actorId : null,
+      updatedByRole: existingRoute ? activeRole : null,
+    };
+    const nextRoutesBase = existingRoute
+      ? currentRoutes.map((route) => (route.id === existingRoute.id ? nextRoute : route))
+      : [nextRoute, ...currentRoutes];
+    const nextRoutes = collectRouteMasterRecords({
+      ...current,
+      routes: nextRoutesBase,
+    });
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "fleet",
+        action: existingRoute ? "update" : "create",
+        entityType: "route",
+        entityId: nextRoute.id,
+        title: `Route ${existingRoute ? "updated" : "created"} / ${nextRoute.code}`,
+        detail: `${nextRoute.name} / ${nextRoute.type}`,
+      }),
+    ]);
+
+    const nextSnapshot = {
+      ...current,
+      routes: nextRoutes,
+      auditTrail: nextAuditTrail,
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
+      return {
+        ok: false,
+        error:
+          commitResult.error ??
+          "Route could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    const confirmedRoute = (commitResult.snapshot?.routes ?? []).find(
+      (route) => route.id === nextRoute.id,
+    );
+
+    if (!confirmedRoute) {
+      return {
+        ok: false,
+        error: "Route could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: existingRoute ? "Route profile updated." : "Route profile created.",
+      routeId: confirmedRoute.id,
+    };
   };
 
   const allocateDriverShift = (draft) => {
@@ -7380,6 +7466,7 @@ function FleetPanel({
     createVehicleDraft(snapshot.vehicles[0], snapshot.profile.serviceIntervalKm),
   );
   const [routeDraft, setRouteDraft] = useState(() => createRouteDraft());
+  const [routeSaving, setRouteSaving] = useState(false);
   const [defectDraft, setDefectDraft] = useState(() => createDefectDraft(assignedVehicleId));
   const [resolutionCosts, setResolutionCosts] = useState({});
   const vehicleFormRef = useRef(null);
@@ -7790,12 +7877,26 @@ function FleetPanel({
     routeFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const handleRouteSubmit = (event) => {
+  const handleRouteSubmit = async (event) => {
     event.preventDefault();
-    const response = onSaveRoute(routeDraft);
-    pushFeedback(response);
-    if (response?.ok) {
-      setRouteDraft(createRouteDraft());
+
+    if (routeSaving) {
+      return;
+    }
+
+    setRouteSaving(true);
+
+    try {
+      const response = await onSaveRoute(routeDraft);
+      pushFeedback(response);
+      // Only clear the form once remote persistence is confirmed - clearing on an
+      // optimistic local success previously let a failed/unconfirmed save look
+      // identical to a real one.
+      if (response?.ok === true) {
+        setRouteDraft(createRouteDraft());
+      }
+    } finally {
+      setRouteSaving(false);
     }
   };
 
@@ -8490,13 +8591,14 @@ function FleetPanel({
                   <button
                     type="submit"
                     className="action-button primary"
-                    disabled={!canEditFleetUpdates}
+                    disabled={!canEditFleetUpdates || routeSaving}
                   >
-                    Create route
+                    {routeSaving ? "Saving..." : "Create route"}
                   </button>
                   <button
                     type="button"
                     className="action-button"
+                    disabled={routeSaving}
                     onClick={() => setRouteDraft(createRouteDraft())}
                   >
                     Clear form

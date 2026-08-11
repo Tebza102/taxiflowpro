@@ -13,6 +13,8 @@ import {
   CheckSquare,
   ChevronRight,
   Clock,
+  Eye,
+  EyeOff,
   FileText,
   LayoutDashboard,
   Loader2,
@@ -34,6 +36,7 @@ import { repository } from "./lib/dataGateway";
 import { getSafeDocument, getSafeWindow, safeMatchMedia } from "./lib/browserRuntime";
 import { logStartupError, logStartupEvent } from "./lib/runtimeDiagnostics";
 import { hasSupabaseConfig, supabase } from "./lib/supabaseClient";
+import { MIN_LIVE_LOGIN_PASSWORD_LENGTH } from "./lib/accountPolicy";
 
 import {
   ZAR,
@@ -4131,12 +4134,23 @@ function App() {
       return { ok: false, error: "Driver name is required." };
     }
 
+    // Driver PROFILE requires only a name. Email, route, vehicle, and TaxiFlow
+    // login are all optional - a driver captured purely as an operational record
+    // (licence/PrDP tracking, etc.) must be saveable without any of them. staffId,
+    // not email, remains the driver's primary operational identity.
     const email = normalizeEmailAddress(draft.email);
-    if (!email) {
-      return { ok: false, error: "Driver email is required." };
-    }
-    if (!isValidEmailAddress(email)) {
+    if (email && !isValidEmailAddress(email)) {
       return { ok: false, error: "Enter a valid driver email address." };
+    }
+
+    // TaxiFlow login is an explicit, separate opt-in - never implied merely by a
+    // password being present in the draft (e.g. from a stale form state).
+    const enableLogin = Boolean(draft.enableLogin);
+    if (enableLogin && activeRole !== "Owner") {
+      return { ok: false, error: "Only the owner can enable TaxiFlow login access for a driver." };
+    }
+    if (enableLogin && !email) {
+      return { ok: false, error: "A valid email is required to enable TaxiFlow login." };
     }
 
     // Business rule: a Route is optional. A driver must be creatable before any
@@ -4159,12 +4173,13 @@ function App() {
       (current.drivers ?? []).find(
         (driver) => driver.staffId === String(draft.staffId ?? "").trim(),
       ) ??
-      (current.drivers ?? []).find(
-        (driver) => normalizeEmailAddress(driver.email) === email,
-      ) ??
+      (email
+        ? (current.drivers ?? []).find((driver) => normalizeEmailAddress(driver.email) === email)
+        : null) ??
       null;
-    const existingUserByEmail =
-      currentUsers.find((user) => normalizeEmailAddress(user.email) === email) ?? null;
+    const existingUserByEmail = email
+      ? currentUsers.find((user) => normalizeEmailAddress(user.email) === email) ?? null
+      : null;
     const linkedDriverByUserEmail =
       !existingDriver && existingUserByEmail?.staffId
         ? (current.drivers ?? []).find((driver) => driver.staffId === existingUserByEmail.staffId) ??
@@ -4175,12 +4190,14 @@ function App() {
       currentUsers.find(
         (user) =>
           user.staffId === resolvedExistingDriver?.staffId ||
-          normalizeEmailAddress(user.email) === normalizeEmailAddress(resolvedExistingDriver?.email),
+          (resolvedExistingDriver?.email &&
+            normalizeEmailAddress(user.email) === normalizeEmailAddress(resolvedExistingDriver.email)),
       ) ??
       existingUserByEmail ??
       null;
 
     if (
+      email &&
       currentUsers.some(
         (user) =>
           normalizeEmailAddress(user.email) === email &&
@@ -4190,11 +4207,43 @@ function App() {
       return { ok: false, error: "This email is already linked to another TaxiFlow account." };
     }
 
+    // Business rule 9: changing the email of an already login-enabled driver could
+    // silently orphan or duplicate the Supabase Auth identity if not coordinated.
+    // Rather than attempt that coordination here, block the specific case with a
+    // clear message - the login's email can still be changed through a dedicated
+    // account-management action later.
+    if (
+      existingUser &&
+      resolvedExistingDriver?.email &&
+      email &&
+      normalizeEmailAddress(resolvedExistingDriver.email) !== email
+    ) {
+      return {
+        ok: false,
+        error:
+          "This driver already has TaxiFlow login access under a different email. Change the login email through account management, not the driver profile form.",
+      };
+    }
+
     // Driver PROFILE and TaxiFlow LOGIN are separate concerns: a password is only
-    // relevant when login access is explicitly being requested (this field being
-    // filled in), never a requirement of the profile itself.
+    // relevant when login access is explicitly enabled, never a requirement of the
+    // profile itself. An already-login-enabled driver does not need a password
+    // re-entered just to save profile edits - only a NEW login requires one.
     const requestedPassword = String(draft.accessPassword ?? "").trim();
-    if (requestedPassword && requestedPassword.length < 6) {
+    if (effectiveBackendMode === "live") {
+      if (enableLogin && !existingUser && !requestedPassword) {
+        return { ok: false, error: "Enter a password to create TaxiFlow login access for this driver." };
+      }
+      if (
+        requestedPassword &&
+        requestedPassword.length < MIN_LIVE_LOGIN_PASSWORD_LENGTH
+      ) {
+        return {
+          ok: false,
+          error: `Driver password must be at least ${MIN_LIVE_LOGIN_PASSWORD_LENGTH} characters long.`,
+        };
+      }
+    } else if (requestedPassword && requestedPassword.length < 6) {
       return { ok: false, error: "Driver password must be at least 6 characters long." };
     }
 
@@ -4282,8 +4331,16 @@ function App() {
         ? `${confirmedDriver.name} updated in the driver roster.`
         : `${confirmedDriver.name} added to the driver roster.`;
 
-      if (!requestedPassword) {
-        return { ok: true, message: profileMessage, staffId: confirmedDriver.staffId };
+      // Login is only touched when explicitly enabled AND a password was actually
+      // supplied (a new login, or an explicit password reset for an existing one).
+      // Enabling login for an already-login-enabled driver without a new password
+      // just keeps the existing login as-is - nothing to call the server for.
+      if (!enableLogin || !requestedPassword) {
+        return {
+          ok: true,
+          message: existingUser ? `${profileMessage} TaxiFlow login: Active.` : profileMessage,
+          staffId: confirmedDriver.staffId,
+        };
       }
 
       const lifecycleResult = await callUserLifecycleApi({
@@ -4298,7 +4355,7 @@ function App() {
       if (!lifecycleResult.ok) {
         return {
           ok: true,
-          message: `${profileMessage} Driver profile saved, but app login was not created: ${lifecycleResult.error}`,
+          message: `Driver profile saved, but TaxiFlow login was not created: ${lifecycleResult.error}`,
           staffId: confirmedDriver.staffId,
         };
       }
@@ -4307,7 +4364,7 @@ function App() {
 
       return {
         ok: true,
-        message: `${profileMessage} TaxiFlow login access confirmed.`,
+        message: `${profileMessage} TaxiFlow login enabled.`,
         staffId: confirmedDriver.staffId,
       };
     }
@@ -4315,7 +4372,7 @@ function App() {
     // Mock/demo mode: unchanged local-only behaviour, including local sign-in,
     // which does need a password on first creation since there is no real Auth
     // system backing it in this mode.
-    if (!resolvedExistingDriver && !requestedPassword) {
+    if (!resolvedExistingDriver && enableLogin && !requestedPassword) {
       return { ok: false, error: "Create a password for this driver before saving." };
     }
 
@@ -10356,7 +10413,26 @@ function DriversPanel({
   const [driverRouteView, setDriverRouteView] = useState(null);
   const [feedback, setFeedback] = useState(null);
   const [showDriverForm, setShowDriverForm] = useState(false);
+  const [driverFormSaving, setDriverFormSaving] = useState(false);
   const [driverDraft, setDriverDraft] = useState(() => createDriverDraft());
+  // Never persisted, never pre-filled from a saved password - only reflects what is
+  // currently being typed into this form, and resets to hidden whenever the form is
+  // reset or closed (see the Cancel handler and post-submit reset below).
+  const [showDriverPassword, setShowDriverPassword] = useState(false);
+  const driverHasActiveLogin = useMemo(() => {
+    const email = normalizeEmailAddress(driverDraft.email);
+    const staffId = String(driverDraft.staffId ?? "").trim();
+    if (!email && !staffId) {
+      return false;
+    }
+    return (snapshot.appUsers ?? []).some(
+      (user) =>
+        user.role === "Driver" &&
+        user.active !== false &&
+        ((staffId && user.staffId === staffId) ||
+          (email && normalizeEmailAddress(user.email) === email)),
+    );
+  }, [driverDraft.email, driverDraft.staffId, snapshot.appUsers]);
   const buildAllocationDraft = (staffId = allocatableDrivers[0]?.staffId ?? "") =>
     createDriverAllocationDraft(staffId, driverVehicleMap.get(staffId)?.id ?? "");
   const [allocationDraft, setAllocationDraft] = useState(() => buildAllocationDraft());
@@ -10991,29 +11067,42 @@ function DriversPanel({
 
   const handleAddDriver = () => {
     setDriverDraft(createDriverDraft());
+    setShowDriverPassword(false);
     setShowDriverForm(true);
     driverFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const handleDriverSubmit = async (event) => {
     event.preventDefault();
-    const response = await onSaveDriver(driverDraft);
 
-    setFeedback({
-      tone: response.ok ? "success" : "danger",
-      message: response.message ?? response.error,
-    });
+    if (driverFormSaving) {
+      return;
+    }
 
-    if (response.ok) {
-      setDriverDraft(createDriverDraft());
-      setShowDriverForm(false);
+    setDriverFormSaving(true);
 
-      if (activeRole !== "Driver") {
-        await onRevalidateLiveWorkspace?.({
-          reason: "driver-profile-update",
-          force: true,
-        });
+    try {
+      const response = await onSaveDriver(driverDraft);
+
+      setFeedback({
+        tone: response.ok ? "success" : "danger",
+        message: response.message ?? response.error,
+      });
+
+      if (response.ok) {
+        setDriverDraft(createDriverDraft());
+        setShowDriverPassword(false);
+        setShowDriverForm(false);
+
+        if (activeRole !== "Driver") {
+          await onRevalidateLiveWorkspace?.({
+            reason: "driver-profile-update",
+            force: true,
+          });
+        }
       }
+    } finally {
+      setDriverFormSaving(false);
     }
   };
 
@@ -12177,20 +12266,62 @@ function DriversPanel({
                           }
                         />
                       </label>
-                      <label className="finance-field">
-                        <span>Password</span>
-                        <input
-                          autoComplete="new-password"
-                          type="password"
-                          value={driverDraft.accessPassword}
-                          onChange={(event) =>
-                            setDriverDraft((current) => ({
-                              ...current,
-                              accessPassword: event.target.value,
-                            }))
-                          }
-                        />
-                      </label>
+                    </div>
+                    <div className="finance-form-login-section">
+                      {activeRole === "Owner" ? (
+                        <>
+                          <label className="finance-field finance-field-check">
+                            <span>Enable TaxiFlow login</span>
+                            <input
+                              type="checkbox"
+                              checked={driverDraft.enableLogin}
+                              onChange={(event) =>
+                                setDriverDraft((current) => ({
+                                  ...current,
+                                  enableLogin: event.target.checked,
+                                  accessPassword: event.target.checked ? current.accessPassword : "",
+                                }))
+                              }
+                            />
+                          </label>
+                          {driverHasActiveLogin && (
+                            <span className="status-chip" data-tone="success">
+                              TaxiFlow login: Active
+                            </span>
+                          )}
+                          {driverDraft.enableLogin && (
+                            <label className="finance-field">
+                              <span>{driverHasActiveLogin ? "New password (leave blank to keep current)" : "Password"}</span>
+                              <div className="finance-field-password">
+                                <input
+                                  autoComplete="new-password"
+                                  type={showDriverPassword ? "text" : "password"}
+                                  value={driverDraft.accessPassword}
+                                  onChange={(event) =>
+                                    setDriverDraft((current) => ({
+                                      ...current,
+                                      accessPassword: event.target.value,
+                                    }))
+                                  }
+                                />
+                                <button
+                                  type="button"
+                                  className="finance-field-password-toggle"
+                                  aria-label={showDriverPassword ? "Hide password" : "Show password"}
+                                  onClick={() => setShowDriverPassword((current) => !current)}
+                                >
+                                  {showDriverPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                                </button>
+                              </div>
+                            </label>
+                          )}
+                        </>
+                      ) : (
+                        <span className="status-chip" data-tone="neutral">
+                          {driverHasActiveLogin ? "TaxiFlow login: Active. " : ""}
+                          Owner manages TaxiFlow login access.
+                        </span>
+                      )}
                     </div>
                     <div className="finance-form-meta">
                       <span className="status-chip" data-tone="info">
@@ -12198,24 +12329,30 @@ function DriversPanel({
                       </span>
                       <span
                         className="status-chip"
-                        data-tone={driverDraft.accessPassword ? "success" : "neutral"}
+                        data-tone={driverDraft.enableLogin || driverHasActiveLogin ? "success" : "neutral"}
                       >
-                        {driverDraft.accessPassword ? "Login access will be set" : "No login access (profile only)"}
+                        {driverHasActiveLogin
+                          ? "Login access will be set"
+                          : driverDraft.enableLogin
+                            ? "Login access will be set"
+                            : "No login access (profile only)"}
                       </span>
                     </div>
                     <div className="finance-form-actions">
                       <button
                         type="submit"
                         className="action-button primary"
-                        disabled={!canManageDrivers}
+                        disabled={!canManageDrivers || driverFormSaving}
                       >
-                        Save driver
+                        {driverFormSaving ? "Saving..." : "Save driver"}
                       </button>
                       <button
                         type="button"
                         className="action-button"
+                        disabled={driverFormSaving}
                         onClick={() => {
                           setDriverDraft(createDriverDraft());
+                          setShowDriverPassword(false);
                           setShowDriverForm(false);
                         }}
                       >
@@ -12230,11 +12367,11 @@ function DriversPanel({
                         ? "No routes exist yet - you can save this driver now and assign a route later from Fleet & Operations."
                         : "A route is optional - leave it unassigned to add one later. Use Ctrl or Command to select more than one, then use shift allocation below to place the driver on a vehicle."}
                       {" "}
-                      {driverDraft.accessPassword
+                      {driverDraft.enableLogin
                         ? hasSupabaseConfig && Boolean(supabase)
                           ? "TaxiFlow login access will be created using the real Supabase sign-in system."
                           : "The saved password works for local TaxiFlow sign-in."
-                        : "Leave the password blank to save a profile-only driver with no TaxiFlow login - access can be enabled later."}
+                        : "Leave TaxiFlow login off to save a profile-only driver - access can be enabled later."}
                     </p>
                   </form>
                 )}
@@ -12347,7 +12484,7 @@ function DriversPanel({
                       className="status-chip"
                       data-tone={driverVehicleMap.has(driver.staffId) ? "success" : "info"}
                     >
-                      {driverVehicleMap.get(driver.staffId)?.registration ?? "Unassigned"}
+                      {driverVehicleMap.get(driver.staffId)?.registration ?? "Vehicle not assigned"}
                     </span>
                     <span
                       className="status-chip"

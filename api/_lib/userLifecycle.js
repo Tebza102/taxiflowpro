@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { MIN_LIVE_LOGIN_PASSWORD_LENGTH } from "../../src/lib/accountPolicy.js";
 
 // Mirrors src/lib/appRuntime.js's MODULE_VIEW_ACCESS role table for the purpose of
 // seeding a new user's default module access. Duplicated (rather than imported) so
@@ -194,7 +195,7 @@ export const createUser = async ({
     return { ok: false, status: 400, error: "Valid role required for user creation." };
   }
 
-  if (!password || password.length < 8) {
+  if (!password || password.length < MIN_LIVE_LOGIN_PASSWORD_LENGTH) {
     return {
       ok: false,
       status: 400,
@@ -440,7 +441,7 @@ export const resetPassword = async ({
     return { ok: false, status: 403, error: "Only an owner can reset an owner account password." };
   }
 
-  if (!password || password.length < 8) {
+  if (!password || password.length < MIN_LIVE_LOGIN_PASSWORD_LENGTH) {
     return { ok: false, status: 400, error: "Reset password must be at least 8 characters long." };
   }
 

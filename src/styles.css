@@ -865,6 +865,47 @@ button {
   accent-color: var(--navy);
 }
 
+.finance-form-login-section {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.4rem 0;
+}
+
+.finance-field-password {
+  position: relative;
+  display: flex;
+}
+
+.finance-field-password input {
+  flex: 1;
+  padding-right: 2.6rem;
+}
+
+.finance-field-password-toggle {
+  position: absolute;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 0.6rem;
+}
+
+.finance-field-password-toggle:hover,
+.finance-field-password-toggle:focus-visible {
+  color: var(--navy);
+  background: rgba(11, 37, 69, 0.08);
+}
+
 .finance-form-meta,
 .finance-form-actions,
 .record-actions,

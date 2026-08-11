@@ -1465,7 +1465,7 @@ const normalizeDriverRouteAssignments = (driver = {}, routes = []) => {
 
 const getDriverRouteSummary = (driver) =>
   String(driver?.routeSummary ?? driver?.routeNames?.join(" / ") ?? driver?.route ?? "")
-    .trim() || "No route assigned";
+    .trim() || "Route not assigned";
 
 const resolveVehicleRouteSelection = (draft = {}, routes = []) => {
   const selectedRouteId = String(draft.currentRouteId ?? "").trim();
@@ -3782,7 +3782,8 @@ const createDriverDraft = (driver) => ({
   licenseExpiryDate: driver?.licenseExpiryDate ?? "",
   prdpNumber: driver?.prdpNumber ?? "",
   prdpExpiryDate: driver?.prdpExpiryDate ?? "",
-  accessPassword: driver?.accessPassword ?? "",
+  accessPassword: "",
+  enableLogin: false,
 });
 
 const createDriverAllocationDraft = (staffId = "", vehicleId = "") => ({

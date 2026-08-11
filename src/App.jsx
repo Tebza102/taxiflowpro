@@ -2405,618 +2405,645 @@ function App() {
     });
   };
 
-  const saveStandardIncome = (draft) => {
-    let result = { ok: false, error: "Unable to save the standard shift." };
+  // Async and verified, not optimistic: same confirmed-mutation principle already
+  // proven for Route/Driver/Fleet persistence, now applied to Driver Standard
+  // Income capture. Success is only reported once commitLiveSnapshotMutation's
+  // fresh canonical remote read actually contains the new/updated record. All
+  // prior validation (trip logbook, odometer rules, driver edit-reason rule) and
+  // the record data shape are unchanged.
+  const saveStandardIncome = async (draft) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
 
-      const existing = (current.financeTransactions ?? []).find(
-        (record) => record.id === draft.id,
-      );
-      const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
-      const tripDate = String(draft.tripDate ?? "").trim();
-      const timeIn = String(draft.timeIn ?? "").trim();
-      const timeOut = String(draft.timeOut ?? "").trim();
-      const tripLogbook = Array.isArray(draft.tripLogbook) ? draft.tripLogbook : [];
-      const openingOdo = Number(draft.openingOdo);
-      const closingOdo = Number(draft.closingOdo);
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const isUpdate = Boolean(existing);
-      const driverEditReason =
-        isUpdate && activeRole === "Driver" ? String(draft.editReason ?? "").trim() : "";
-      const driverStaffId =
-        activeRole === "Driver"
-          ? String(current.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null
-          : String(existing?.driverStaffId ?? "").trim() || null;
-      const driverName =
-        activeRole === "Driver"
-          ? String(
-              current.driverTerminal?.activeDriver ??
-                current.drivers.find((driver) => driver.staffId === driverStaffId)?.name ??
-                "",
-            ).trim() || null
-          : String(existing?.driverName ?? "").trim() || null;
+    const existing = (current.financeTransactions ?? []).find(
+      (record) => record.id === draft.id,
+    );
+    const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
+    const tripDate = String(draft.tripDate ?? "").trim();
+    const timeIn = String(draft.timeIn ?? "").trim();
+    const timeOut = String(draft.timeOut ?? "").trim();
+    const tripLogbook = Array.isArray(draft.tripLogbook) ? draft.tripLogbook : [];
+    const openingOdo = Number(draft.openingOdo);
+    const closingOdo = Number(draft.closingOdo);
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const isUpdate = Boolean(existing);
+    const driverEditReason =
+      isUpdate && activeRole === "Driver" ? String(draft.editReason ?? "").trim() : "";
+    const driverStaffId =
+      activeRole === "Driver"
+        ? String(current.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null
+        : String(existing?.driverStaffId ?? "").trim() || null;
+    const driverName =
+      activeRole === "Driver"
+        ? String(
+            current.driverTerminal?.activeDriver ??
+              current.drivers.find((driver) => driver.staffId === driverStaffId)?.name ??
+              "",
+          ).trim() || null
+        : String(existing?.driverName ?? "").trim() || null;
 
-      if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
-        return current;
-      }
-      if (existing?.status === "banked") {
-        result = { ok: false, error: "Deposited records can no longer be changed." };
-        return current;
-      }
-      if (isUpdate && activeRole === "Driver" && !driverEditReason) {
-        result = {
-          ok: false,
-          error: "Add a note explaining why you are updating this daily taking.",
-        };
-        return current;
-      }
-      if (!vehicle) {
-        result = { ok: false, error: "Select a valid vehicle before submitting." };
-        return current;
-      }
-      if (!tripDate || !parseDateInputValue(tripDate)) {
-        result = { ok: false, error: "Select the trip date." };
-        return current;
-      }
-      if (!parseTimeInputValue(timeIn) || !parseTimeInputValue(timeOut)) {
-        result = { ok: false, error: "Enter a valid time in and time out." };
-        return current;
-      }
-      if ((getTimeInputMinutes(timeOut) ?? 0) <= (getTimeInputMinutes(timeIn) ?? 0)) {
-        result = { ok: false, error: "Time out must be later than time in." };
-        return current;
-      }
-      if (!Number.isFinite(openingOdo) || !Number.isFinite(closingOdo)) {
-        result = { ok: false, error: "Opening and closing odometer readings are required." };
-        return current;
-      }
-      if (closingOdo - openingOdo <= 0) {
-        result = { ok: false, error: "Closing odometer must be greater than opening odometer." };
-        return current;
-      }
-
-      if (tripLogbook.length === 0) {
-        result = { ok: false, error: "Add at least one trip to the daily logbook." };
-        return current;
-      }
-
-      const normalizedTripLogbook = [];
-      for (const [index, entry] of tripLogbook.entries()) {
-        const normalizedEntry = createDailyTripLogEntry(draft.route ?? vehicle.route, entry);
-        const fromLocation = String(normalizedEntry.fromLocation ?? "").trim();
-        const toLocation = String(normalizedEntry.toLocation ?? "").trim();
-        const passengerValue = String(entry?.passengerCount ?? "").trim();
-        const amountValue = String(entry?.amountCollected ?? "").trim();
-        const passengerCount = Number(entry?.passengerCount);
-        const amountCollected = Number(entry?.amountCollected);
-
-        if (!fromLocation || !toLocation) {
-          result = { ok: false, error: `Complete the from and to stops for trip ${index + 1}.` };
-          return current;
-        }
-        if (fromLocation.toLowerCase() === toLocation.toLowerCase()) {
-          result = { ok: false, error: `Trip ${index + 1} must use two different stops.` };
-          return current;
-        }
-        if (!passengerValue) {
-          result = { ok: false, error: `Enter the passenger count for trip ${index + 1}.` };
-          return current;
-        }
-        if (!Number.isInteger(passengerCount) || passengerCount < 0) {
-          result = {
-            ok: false,
-            error: `Passenger count for trip ${index + 1} must be zero or more.`,
-          };
-          return current;
-        }
-        if (!amountValue) {
-          result = { ok: false, error: `Enter the amount collected for trip ${index + 1}.` };
-          return current;
-        }
-        if (!Number.isFinite(amountCollected) || amountCollected < 0) {
-          result = {
-            ok: false,
-            error: `Amount collected for trip ${index + 1} must be zero or more.`,
-          };
-          return current;
-        }
-
-        normalizedTripLogbook.push({
-          id: normalizedEntry.id ?? createRecordId("trip-leg"),
-          fromLocation,
-          toLocation,
-          departingFromPoint: String(
-            normalizedEntry.departingFromPoint ?? fromLocation,
-          ).trim(),
-          goingToPoint: String(normalizedEntry.goingToPoint ?? toLocation).trim(),
-          passengerCount,
-          amountCollected,
-          ...buildTripAnalyticsFields(normalizedEntry),
-        });
-      }
-
-      const tripLogTotals = getDailyTripLogbookTotals(normalizedTripLogbook);
-      const amountClaimed = tripLogTotals.totalAmount;
-
-      const expectedOpening = getExpectedOpeningOdo(
-        current.financeTransactions ?? [],
-        current.vehicles ?? [],
-        draft.vehicleId,
-        draft.id ?? null,
-      );
-      const recordAnalytics = buildTripAnalyticsFields({
-        ...existing,
-        timeIn,
-        timeOut,
-        odometerStart: draft.odometerStart ?? existing?.odometerStart ?? openingOdo,
-        odometerEnd: draft.odometerEnd ?? existing?.odometerEnd ?? closingOdo,
-      });
-      const dailyAnalytics = buildDailyAnalyticsFields({
-        ...existing,
-        dayStartOdometer: draft.dayStartOdometer ?? existing?.dayStartOdometer ?? openingOdo,
-        dayEndOdometer: draft.dayEndOdometer ?? existing?.dayEndOdometer ?? closingOdo,
-        notes: draft.notes ?? existing?.notes,
-      });
-      const baseNextRecord = {
-        ...existing,
-        id: draft.id ?? createRecordId("txn-inc"),
-        type: "income",
-        incomeKind: "standard",
-        vehicleId: draft.vehicleId,
-        vehicle: vehicle.registration,
-        route: vehicle.route,
-        tripDate,
-        timeIn,
-        timeOut,
-        tripLogbook: normalizedTripLogbook,
-        tripCount: tripLogTotals.tripCount,
-        totalPassengers: tripLogTotals.totalPassengers,
-        openingOdo,
-        closingOdo,
-        ...recordAnalytics,
-        ...dailyAnalytics,
-        amountClaimed,
-        actualCashReceived: null,
-        amount: amountClaimed,
-        driverStaffId,
-        driverName,
-        discrepancy: openingOdo !== expectedOpening,
-        isSpecial: false,
-        status: "pending",
-        timestamp: createTimestampFromDateTimeInput(tripDate, timeIn, existing?.timestamp ?? now),
-        createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
-        createdBy: existing?.createdBy ?? actorId,
-        createdByRole: existing?.createdByRole ?? activeRole,
-        updatedAt: isUpdate ? now : null,
-        updatedBy: isUpdate ? actorId : null,
-        updatedByRole: isUpdate ? activeRole : null,
-        verifiedAt: null,
-        verifiedBy: null,
-        verifiedByRole: null,
-        depositId: null,
-      };
-      const driverEditTracking = buildDriverRecordEditTracking({
-        existingRecord: existing,
-        nextRecord: baseNextRecord,
-        reason: driverEditReason,
-        timestamp: now,
-        actorId,
-        actorRole: activeRole,
-      });
-      const nextRecord = {
-        ...baseNextRecord,
-        ...driverEditTracking.trackingFields,
-      };
-      const nextTransactions = draft.id
-        ? current.financeTransactions.map((record) =>
-            record.id === draft.id
-              ? nextRecord
-              : record,
-          )
-        : [nextRecord, ...(current.financeTransactions ?? [])];
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "finance",
-          action: isUpdate ? "update" : "create",
-          entityType: "income",
-          entityId: nextRecord.id,
-          title: `${isUpdate ? "Trip income updated" : "Trip income added"} / ${vehicle.registration}`,
-          detail: `${vehicle.route} / ${tripLogTotals.tripCount} trips / ${tripLogTotals.totalPassengers} passengers / ${formatMoney(
-            amountClaimed,
-          )}${
-            driverEditTracking.editEntry
-              ? ` / Driver note: ${driverEditTracking.editEntry.reason} / ${driverEditTracking.editEntry.summary}`
-              : ""
-          }`,
-        }),
-      ]);
-
-      result = {
-        ok: true,
-        message: isUpdate
-          ? nextRecord.discrepancy
-            ? "Trip update saved and logged for owner review. The opening odometer still does not match the last record."
-            : "Trip update saved and logged for owner review."
-          : nextRecord.discrepancy
-            ? "Trip saved and added to the daily total, but the opening odometer does not match the last record."
-            : "Trip saved and added to the daily total. Use Checking to wrap up the day for cash-in.",
-        nextOpeningOdo: closingOdo,
-      };
-
+    if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
+      return { ok: false, error: getModuleAccessErrorMessage("finance") };
+    }
+    if (existing?.status === "banked") {
+      return { ok: false, error: "Deposited records can no longer be changed." };
+    }
+    if (isUpdate && activeRole === "Driver" && !driverEditReason) {
       return {
-        ...current,
-        financeTransactions: nextTransactions,
-        auditTrail: nextAuditTrail,
+        ok: false,
+        error: "Add a note explaining why you are updating this daily taking.",
       };
-    });
+    }
+    if (!vehicle) {
+      return { ok: false, error: "Select a valid vehicle before submitting." };
+    }
+    if (!tripDate || !parseDateInputValue(tripDate)) {
+      return { ok: false, error: "Select the trip date." };
+    }
+    if (!parseTimeInputValue(timeIn) || !parseTimeInputValue(timeOut)) {
+      return { ok: false, error: "Enter a valid time in and time out." };
+    }
+    if ((getTimeInputMinutes(timeOut) ?? 0) <= (getTimeInputMinutes(timeIn) ?? 0)) {
+      return { ok: false, error: "Time out must be later than time in." };
+    }
+    if (!Number.isFinite(openingOdo) || !Number.isFinite(closingOdo)) {
+      return { ok: false, error: "Opening and closing odometer readings are required." };
+    }
+    if (closingOdo - openingOdo <= 0) {
+      return { ok: false, error: "Closing odometer must be greater than opening odometer." };
+    }
 
-    return result;
-  };
+    if (tripLogbook.length === 0) {
+      return { ok: false, error: "Add at least one trip to the daily logbook." };
+    }
 
-  const saveSpecialIncome = (draft) => {
-    let result = { ok: false, error: "Unable to save the extra trip." };
+    const normalizedTripLogbook = [];
+    for (const [index, entry] of tripLogbook.entries()) {
+      const normalizedEntry = createDailyTripLogEntry(draft.route ?? vehicle.route, entry);
+      const fromLocation = String(normalizedEntry.fromLocation ?? "").trim();
+      const toLocation = String(normalizedEntry.toLocation ?? "").trim();
+      const passengerValue = String(entry?.passengerCount ?? "").trim();
+      const amountValue = String(entry?.amountCollected ?? "").trim();
+      const passengerCount = Number(entry?.passengerCount);
+      const amountCollected = Number(entry?.amountCollected);
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
+      if (!fromLocation || !toLocation) {
+        return { ok: false, error: `Complete the from and to stops for trip ${index + 1}.` };
       }
-
-      const existing = (current.financeTransactions ?? []).find(
-        (record) => record.id === draft.id,
-      );
-      const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
-      const tripDate = String(draft.tripDate ?? "").trim();
-      const openingOdo = Number(draft.openingOdo);
-      const closingOdo = Number(draft.closingOdo);
-      const fromLocation = draft.fromLocation?.trim() ?? "";
-      const toLocation = draft.toLocation?.trim() ?? "";
-      const travelReason = draft.travelReason?.trim() ?? "";
-      const fuelOilCost = Number(draft.fuelOilCost ?? 0);
-      const repairMaintenanceCost = Number(draft.repairMaintenanceCost ?? 0);
-      const amount = Number(draft.amount);
-      const businessKm = closingOdo - openingOdo;
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const isUpdate = Boolean(existing);
-      const driverEditReason =
-        isUpdate && activeRole === "Driver" ? String(draft.editReason ?? "").trim() : "";
-      const driverStaffId =
-        activeRole === "Driver"
-          ? String(current.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null
-          : String(existing?.driverStaffId ?? "").trim() || null;
-      const driverName =
-        activeRole === "Driver"
-          ? String(
-              current.driverTerminal?.activeDriver ??
-                current.drivers.find((driver) => driver.staffId === driverStaffId)?.name ??
-                "",
-            ).trim() || null
-          : String(existing?.driverName ?? "").trim() || null;
-
-      if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
-        return current;
+      if (fromLocation.toLowerCase() === toLocation.toLowerCase()) {
+        return { ok: false, error: `Trip ${index + 1} must use two different stops.` };
       }
-      if (existing?.status === "banked") {
-        result = { ok: false, error: "Deposited records can no longer be changed." };
-        return current;
+      if (!passengerValue) {
+        return { ok: false, error: `Enter the passenger count for trip ${index + 1}.` };
       }
-      if (isUpdate && activeRole === "Driver" && !driverEditReason) {
-        result = {
+      if (!Number.isInteger(passengerCount) || passengerCount < 0) {
+        return {
           ok: false,
-          error: "Add a note explaining why you are updating this extra trip.",
+          error: `Passenger count for trip ${index + 1} must be zero or more.`,
         };
-        return current;
       }
-      if (!vehicle) {
-        result = { ok: false, error: "Select a valid vehicle before submitting." };
-        return current;
+      if (!amountValue) {
+        return { ok: false, error: `Enter the amount collected for trip ${index + 1}.` };
       }
-      if (!tripDate || !parseDateInputValue(tripDate)) {
-        result = { ok: false, error: "Select the travel date." };
-        return current;
-      }
-      if (!Number.isFinite(openingOdo) || !Number.isFinite(closingOdo)) {
-        result = { ok: false, error: "Opening and closing odometer readings are required." };
-        return current;
-      }
-      if (closingOdo - openingOdo <= 0) {
-        result = { ok: false, error: "Closing odometer must be greater than opening odometer." };
-        return current;
-      }
-      if (!fromLocation || !toLocation || !travelReason) {
-        result = { ok: false, error: "Complete the business travel details before saving." };
-        return current;
-      }
-      if (!Number.isFinite(fuelOilCost) || fuelOilCost < 0) {
-        result = { ok: false, error: "Enter a valid fuel and oil cost." };
-        return current;
-      }
-      if (!Number.isFinite(repairMaintenanceCost) || repairMaintenanceCost < 0) {
-        result = { ok: false, error: "Enter a valid repairs and maintenance cost." };
-        return current;
-      }
-      if (!Number.isFinite(amount) || amount <= 0) {
-        result = { ok: false, error: "Enter the amount earned for the extra trip." };
-        return current;
+      if (!Number.isFinite(amountCollected) || amountCollected < 0) {
+        return {
+          ok: false,
+          error: `Amount collected for trip ${index + 1} must be zero or more.`,
+        };
       }
 
-      const recordAnalytics = buildTripAnalyticsFields({
-        ...existing,
-        timeIn: draft.timeIn ?? existing?.timeIn,
-        timeOut: draft.timeOut ?? existing?.timeOut,
-        odometerStart: draft.odometerStart ?? existing?.odometerStart ?? openingOdo,
-        odometerEnd: draft.odometerEnd ?? existing?.odometerEnd ?? closingOdo,
-        kmComputed: draft.kmComputed ?? existing?.kmComputed ?? businessKm,
-        tripDurationMin: draft.tripDurationMin ?? existing?.tripDurationMin,
-      });
-      const baseNextRecord = {
-        ...existing,
-        id: draft.id ?? createRecordId("txn-sp"),
-        type: "income",
-        incomeKind: "special",
-        vehicleId: draft.vehicleId,
-        vehicle: vehicle.registration,
-        route: `${fromLocation} to ${toLocation}`,
-        assignedRoute: vehicle.route,
-        description: travelReason,
-        tripDate,
-        openingOdo,
-        closingOdo,
-        businessKm,
-        ...recordAnalytics,
+      normalizedTripLogbook.push({
+        id: normalizedEntry.id ?? createRecordId("trip-leg"),
         fromLocation,
         toLocation,
-        departingFromPoint: fromLocation,
-        goingToPoint: toLocation,
-        travelReason,
-        fuelOilCost,
-        repairMaintenanceCost,
-        amount,
-        amountClaimed: amount,
-        actualCashReceived: null,
-        driverStaffId,
-        driverName,
-        discrepancy: false,
-        isSpecial: true,
-        status: "pending",
-        timestamp: createTimestampFromDateInput(tripDate, existing?.timestamp ?? now),
-        createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
-        createdBy: existing?.createdBy ?? actorId,
-        createdByRole: existing?.createdByRole ?? activeRole,
-        updatedAt: isUpdate ? now : null,
-        updatedBy: isUpdate ? actorId : null,
-        updatedByRole: isUpdate ? activeRole : null,
-        verifiedAt: null,
-        verifiedBy: null,
-        verifiedByRole: null,
-        depositId: null,
-      };
-      const driverEditTracking = buildDriverRecordEditTracking({
-        existingRecord: existing,
-        nextRecord: baseNextRecord,
-        reason: driverEditReason,
-        timestamp: now,
-        actorId,
-        actorRole: activeRole,
+        departingFromPoint: String(
+          normalizedEntry.departingFromPoint ?? fromLocation,
+        ).trim(),
+        goingToPoint: String(normalizedEntry.goingToPoint ?? toLocation).trim(),
+        passengerCount,
+        amountCollected,
+        ...buildTripAnalyticsFields(normalizedEntry),
       });
-      const nextRecord = {
-        ...baseNextRecord,
-        ...driverEditTracking.trackingFields,
-      };
-      const nextTransactions = draft.id
-        ? current.financeTransactions.map((record) =>
-            record.id === draft.id ? nextRecord : record,
-          )
-        : [nextRecord, ...(current.financeTransactions ?? [])];
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "finance",
-          action: isUpdate ? "update" : "create",
-          entityType: "income",
-          entityId: nextRecord.id,
-          title: `${isUpdate ? "Extra trip updated" : "Extra trip added"} / ${
-            nextRecord.vehicle
-          }`,
-          detail: `${formatTripRoute(nextRecord)} / ${travelReason} / ${businessKm.toLocaleString()} km / ${formatMoney(
-            amount,
-          )}${
-            driverEditTracking.editEntry
-              ? ` / Driver note: ${driverEditTracking.editEntry.reason} / ${driverEditTracking.editEntry.summary}`
-              : ""
-          }`,
-        }),
-      ]);
+    }
 
-      result = {
-        ok: true,
-        message: isUpdate
-          ? "Extra trip update saved and logged for owner review."
-          : "Extra trip saved and added to the daily total. Use Checking to wrap up the day for cash-in.",
-      };
+    const tripLogTotals = getDailyTripLogbookTotals(normalizedTripLogbook);
+    const amountClaimed = tripLogTotals.totalAmount;
 
-      return {
-        ...current,
-        financeTransactions: nextTransactions,
-        auditTrail: nextAuditTrail,
-      };
+    const expectedOpening = getExpectedOpeningOdo(
+      current.financeTransactions ?? [],
+      current.vehicles ?? [],
+      draft.vehicleId,
+      draft.id ?? null,
+    );
+    const recordAnalytics = buildTripAnalyticsFields({
+      ...existing,
+      timeIn,
+      timeOut,
+      odometerStart: draft.odometerStart ?? existing?.odometerStart ?? openingOdo,
+      odometerEnd: draft.odometerEnd ?? existing?.odometerEnd ?? closingOdo,
     });
+    const dailyAnalytics = buildDailyAnalyticsFields({
+      ...existing,
+      dayStartOdometer: draft.dayStartOdometer ?? existing?.dayStartOdometer ?? openingOdo,
+      dayEndOdometer: draft.dayEndOdometer ?? existing?.dayEndOdometer ?? closingOdo,
+      notes: draft.notes ?? existing?.notes,
+    });
+    const baseNextRecord = {
+      ...existing,
+      id: draft.id ?? createRecordId("txn-inc"),
+      type: "income",
+      incomeKind: "standard",
+      vehicleId: draft.vehicleId,
+      vehicle: vehicle.registration,
+      route: vehicle.route,
+      tripDate,
+      timeIn,
+      timeOut,
+      tripLogbook: normalizedTripLogbook,
+      tripCount: tripLogTotals.tripCount,
+      totalPassengers: tripLogTotals.totalPassengers,
+      openingOdo,
+      closingOdo,
+      ...recordAnalytics,
+      ...dailyAnalytics,
+      amountClaimed,
+      actualCashReceived: null,
+      amount: amountClaimed,
+      driverStaffId,
+      driverName,
+      discrepancy: openingOdo !== expectedOpening,
+      isSpecial: false,
+      status: "pending",
+      timestamp: createTimestampFromDateTimeInput(tripDate, timeIn, existing?.timestamp ?? now),
+      createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
+      createdBy: existing?.createdBy ?? actorId,
+      createdByRole: existing?.createdByRole ?? activeRole,
+      updatedAt: isUpdate ? now : null,
+      updatedBy: isUpdate ? actorId : null,
+      updatedByRole: isUpdate ? activeRole : null,
+      verifiedAt: null,
+      verifiedBy: null,
+      verifiedByRole: null,
+      depositId: null,
+    };
+    const driverEditTracking = buildDriverRecordEditTracking({
+      existingRecord: existing,
+      nextRecord: baseNextRecord,
+      reason: driverEditReason,
+      timestamp: now,
+      actorId,
+      actorRole: activeRole,
+    });
+    const nextRecord = {
+      ...baseNextRecord,
+      ...driverEditTracking.trackingFields,
+    };
+    const nextTransactions = draft.id
+      ? current.financeTransactions.map((record) =>
+          record.id === draft.id
+            ? nextRecord
+            : record,
+        )
+      : [nextRecord, ...(current.financeTransactions ?? [])];
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "finance",
+        action: isUpdate ? "update" : "create",
+        entityType: "income",
+        entityId: nextRecord.id,
+        title: `${isUpdate ? "Trip income updated" : "Trip income added"} / ${vehicle.registration}`,
+        detail: `${vehicle.route} / ${tripLogTotals.tripCount} trips / ${tripLogTotals.totalPassengers} passengers / ${formatMoney(
+          amountClaimed,
+        )}${
+          driverEditTracking.editEntry
+            ? ` / Driver note: ${driverEditTracking.editEntry.reason} / ${driverEditTracking.editEntry.summary}`
+            : ""
+        }`,
+      }),
+    ]);
 
-    return result;
+    const nextSnapshot = {
+      ...current,
+      financeTransactions: nextTransactions,
+      auditTrail: nextAuditTrail,
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
+      return {
+        ok: false,
+        error:
+          commitResult.error ??
+          "Trip income could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    const confirmedRecord = (commitResult.snapshot?.financeTransactions ?? []).find(
+      (record) => record.id === nextRecord.id,
+    );
+
+    if (!confirmedRecord) {
+      return {
+        ok: false,
+        error: "Trip income could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: isUpdate
+        ? nextRecord.discrepancy
+          ? "Trip update saved and logged for owner review. The opening odometer still does not match the last record."
+          : "Trip update saved and logged for owner review."
+        : nextRecord.discrepancy
+          ? "Trip saved and added to the daily total, but the opening odometer does not match the last record."
+          : "Trip saved and added to the daily total. Use Checking to wrap up the day for cash-in.",
+      nextOpeningOdo: closingOdo,
+    };
   };
 
-  const saveExpense = (draft) => {
-    let result = { ok: false, error: "Unable to save the expense." };
+  const saveSpecialIncome = async (draft) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
 
-      const existing = (current.financeTransactions ?? []).find(
-        (record) => record.id === draft.id,
-      );
-      const amount = Number(draft.amount);
-      const expenseKind = draft.expenseKind;
-      const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
-      const status =
-        activeRole !== "Driver" && hasModuleUpdateAccess(current, "finance")
-          ? "verified"
-          : "pending";
-      const now = new Date().toISOString();
-      const expenseDate = String(draft.expenseDate ?? "").trim();
-      const description = draft.description?.trim() ?? "";
-      const reference = draft.reference?.trim() ?? "";
-      const actorId = resolveCurrentActorId(current);
-      const isUpdate = Boolean(existing);
-      const driverEditReason =
-        isUpdate && activeRole === "Driver" ? String(draft.editReason ?? "").trim() : "";
-      const driverStaffId =
-        activeRole === "Driver"
-          ? String(current.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null
-          : String(existing?.driverStaffId ?? "").trim() || null;
-      const driverName =
-        activeRole === "Driver"
-          ? String(
-              current.driverTerminal?.activeDriver ??
-                current.drivers.find((driver) => driver.staffId === driverStaffId)?.name ??
-                "",
-            ).trim() || null
-          : String(existing?.driverName ?? "").trim() || null;
+    const existing = (current.financeTransactions ?? []).find(
+      (record) => record.id === draft.id,
+    );
+    const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
+    const tripDate = String(draft.tripDate ?? "").trim();
+    const openingOdo = Number(draft.openingOdo);
+    const closingOdo = Number(draft.closingOdo);
+    const fromLocation = draft.fromLocation?.trim() ?? "";
+    const toLocation = draft.toLocation?.trim() ?? "";
+    const travelReason = draft.travelReason?.trim() ?? "";
+    const fuelOilCost = Number(draft.fuelOilCost ?? 0);
+    const repairMaintenanceCost = Number(draft.repairMaintenanceCost ?? 0);
+    const amount = Number(draft.amount);
+    const businessKm = closingOdo - openingOdo;
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const isUpdate = Boolean(existing);
+    const driverEditReason =
+      isUpdate && activeRole === "Driver" ? String(draft.editReason ?? "").trim() : "";
+    const driverStaffId =
+      activeRole === "Driver"
+        ? String(current.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null
+        : String(existing?.driverStaffId ?? "").trim() || null;
+    const driverName =
+      activeRole === "Driver"
+        ? String(
+            current.driverTerminal?.activeDriver ??
+              current.drivers.find((driver) => driver.staffId === driverStaffId)?.name ??
+              "",
+          ).trim() || null
+        : String(existing?.driverName ?? "").trim() || null;
 
-      if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
-        return current;
-      }
-      if (existing?.status === "banked") {
-        result = { ok: false, error: "Deposited records can no longer be changed." };
-        return current;
-      }
-      if (isUpdate && activeRole === "Driver" && !driverEditReason) {
-        result = {
-          ok: false,
-          error: "Add a note explaining why you are updating this expense.",
-        };
-        return current;
-      }
-      if (!draft.category?.trim()) {
-        result = { ok: false, error: "Enter an expense category." };
-        return current;
-      }
-      if (!description) {
-        result = { ok: false, error: "Enter an expense description." };
-        return current;
-      }
-      if (!expenseDate) {
-        result = { ok: false, error: "Select the expense date." };
-        return current;
-      }
-      if (!Number.isFinite(amount) || amount <= 0) {
-        result = { ok: false, error: "Enter a valid expense amount." };
-        return current;
-      }
-      if (expenseKind === "asset" && !vehicle) {
-        result = { ok: false, error: "Vehicle costs need a valid vehicle." };
-        return current;
-      }
-
-      const baseNextRecord = {
-        ...existing,
-        id: draft.id ?? createRecordId("txn-exp"),
-        type: "expense",
-        expenseKind,
-        category: draft.category.trim(),
-        description,
-        expenseDate,
-        reference: reference || null,
-        vehicleId: expenseKind === "asset" ? draft.vehicleId : null,
-        vehicle: expenseKind === "asset" ? vehicle.registration : "General",
-        amount,
-        cashExpense: Boolean(draft.cashExpense),
-        driverStaffId,
-        driverName,
-        status,
-        timestamp: createTimestampFromDateInput(expenseDate, existing?.timestamp ?? now),
-        createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
-        createdBy: existing?.createdBy ?? actorId,
-        createdByRole: existing?.createdByRole ?? activeRole,
-        updatedAt: isUpdate ? now : null,
-        updatedBy: isUpdate ? actorId : null,
-        updatedByRole: isUpdate ? activeRole : null,
-        depositId: null,
-      };
-      const driverEditTracking = buildDriverRecordEditTracking({
-        existingRecord: existing,
-        nextRecord: baseNextRecord,
-        reason: driverEditReason,
-        timestamp: now,
-        actorId,
-        actorRole: activeRole,
-      });
-      const nextRecord = {
-        ...baseNextRecord,
-        ...driverEditTracking.trackingFields,
-      };
-      const nextTransactions = draft.id
-        ? current.financeTransactions.map((record) =>
-            record.id === draft.id ? nextRecord : record,
-          )
-        : [nextRecord, ...(current.financeTransactions ?? [])];
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "finance",
-          action: isUpdate ? "update" : "create",
-          entityType: "expense",
-          entityId: nextRecord.id,
-          title: `${isUpdate ? "Expense updated" : "Expense added"} / ${nextRecord.category}`,
-          detail: `${nextRecord.description} / ${formatMoney(amount)}${
-            nextRecord.reference ? ` / Receipt ${nextRecord.reference}` : ""
-          }${
-            driverEditTracking.editEntry
-              ? ` / Driver note: ${driverEditTracking.editEntry.reason} / ${driverEditTracking.editEntry.summary}`
-              : ""
-          }`,
-        }),
-      ]);
-
-      result = {
-        ok: true,
-        message: isUpdate && activeRole === "Driver"
-          ? "Expense update saved and logged for owner review."
-          : status === "verified"
-            ? "Expense saved and checked."
-            : "Expense saved and sent to a manager for review.",
-      };
-
+    if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
+      return { ok: false, error: getModuleAccessErrorMessage("finance") };
+    }
+    if (existing?.status === "banked") {
+      return { ok: false, error: "Deposited records can no longer be changed." };
+    }
+    if (isUpdate && activeRole === "Driver" && !driverEditReason) {
       return {
-        ...current,
-        financeTransactions: nextTransactions,
-        auditTrail: nextAuditTrail,
+        ok: false,
+        error: "Add a note explaining why you are updating this extra trip.",
       };
-    });
+    }
+    if (!vehicle) {
+      return { ok: false, error: "Select a valid vehicle before submitting." };
+    }
+    if (!tripDate || !parseDateInputValue(tripDate)) {
+      return { ok: false, error: "Select the travel date." };
+    }
+    if (!Number.isFinite(openingOdo) || !Number.isFinite(closingOdo)) {
+      return { ok: false, error: "Opening and closing odometer readings are required." };
+    }
+    if (closingOdo - openingOdo <= 0) {
+      return { ok: false, error: "Closing odometer must be greater than opening odometer." };
+    }
+    if (!fromLocation || !toLocation || !travelReason) {
+      return { ok: false, error: "Complete the business travel details before saving." };
+    }
+    if (!Number.isFinite(fuelOilCost) || fuelOilCost < 0) {
+      return { ok: false, error: "Enter a valid fuel and oil cost." };
+    }
+    if (!Number.isFinite(repairMaintenanceCost) || repairMaintenanceCost < 0) {
+      return { ok: false, error: "Enter a valid repairs and maintenance cost." };
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { ok: false, error: "Enter the amount earned for the extra trip." };
+    }
 
-    return result;
+    const recordAnalytics = buildTripAnalyticsFields({
+      ...existing,
+      timeIn: draft.timeIn ?? existing?.timeIn,
+      timeOut: draft.timeOut ?? existing?.timeOut,
+      odometerStart: draft.odometerStart ?? existing?.odometerStart ?? openingOdo,
+      odometerEnd: draft.odometerEnd ?? existing?.odometerEnd ?? closingOdo,
+      kmComputed: draft.kmComputed ?? existing?.kmComputed ?? businessKm,
+      tripDurationMin: draft.tripDurationMin ?? existing?.tripDurationMin,
+    });
+    const baseNextRecord = {
+      ...existing,
+      id: draft.id ?? createRecordId("txn-sp"),
+      type: "income",
+      incomeKind: "special",
+      vehicleId: draft.vehicleId,
+      vehicle: vehicle.registration,
+      route: `${fromLocation} to ${toLocation}`,
+      assignedRoute: vehicle.route,
+      description: travelReason,
+      tripDate,
+      openingOdo,
+      closingOdo,
+      businessKm,
+      ...recordAnalytics,
+      fromLocation,
+      toLocation,
+      departingFromPoint: fromLocation,
+      goingToPoint: toLocation,
+      travelReason,
+      fuelOilCost,
+      repairMaintenanceCost,
+      amount,
+      amountClaimed: amount,
+      actualCashReceived: null,
+      driverStaffId,
+      driverName,
+      discrepancy: false,
+      isSpecial: true,
+      status: "pending",
+      timestamp: createTimestampFromDateInput(tripDate, existing?.timestamp ?? now),
+      createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
+      createdBy: existing?.createdBy ?? actorId,
+      createdByRole: existing?.createdByRole ?? activeRole,
+      updatedAt: isUpdate ? now : null,
+      updatedBy: isUpdate ? actorId : null,
+      updatedByRole: isUpdate ? activeRole : null,
+      verifiedAt: null,
+      verifiedBy: null,
+      verifiedByRole: null,
+      depositId: null,
+    };
+    const driverEditTracking = buildDriverRecordEditTracking({
+      existingRecord: existing,
+      nextRecord: baseNextRecord,
+      reason: driverEditReason,
+      timestamp: now,
+      actorId,
+      actorRole: activeRole,
+    });
+    const nextRecord = {
+      ...baseNextRecord,
+      ...driverEditTracking.trackingFields,
+    };
+    const nextTransactions = draft.id
+      ? current.financeTransactions.map((record) =>
+          record.id === draft.id ? nextRecord : record,
+        )
+      : [nextRecord, ...(current.financeTransactions ?? [])];
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "finance",
+        action: isUpdate ? "update" : "create",
+        entityType: "income",
+        entityId: nextRecord.id,
+        title: `${isUpdate ? "Extra trip updated" : "Extra trip added"} / ${
+          nextRecord.vehicle
+        }`,
+        detail: `${formatTripRoute(nextRecord)} / ${travelReason} / ${businessKm.toLocaleString()} km / ${formatMoney(
+          amount,
+        )}${
+          driverEditTracking.editEntry
+            ? ` / Driver note: ${driverEditTracking.editEntry.reason} / ${driverEditTracking.editEntry.summary}`
+            : ""
+        }`,
+      }),
+    ]);
+
+    const nextSnapshot = {
+      ...current,
+      financeTransactions: nextTransactions,
+      auditTrail: nextAuditTrail,
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
+      return {
+        ok: false,
+        error:
+          commitResult.error ??
+          "Extra trip could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    const confirmedRecord = (commitResult.snapshot?.financeTransactions ?? []).find(
+      (record) => record.id === nextRecord.id,
+    );
+
+    if (!confirmedRecord) {
+      return {
+        ok: false,
+        error: "Extra trip could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: isUpdate
+        ? "Extra trip update saved and logged for owner review."
+        : "Extra trip saved and added to the daily total. Use Checking to wrap up the day for cash-in.",
+    };
   };
 
-  const submitDriverCashUp = () => {
-    if (!snapshot) {
+  const saveExpense = async (draft) => {
+    const current = currentSnapshot;
+
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+
+    const existing = (current.financeTransactions ?? []).find(
+      (record) => record.id === draft.id,
+    );
+    const amount = Number(draft.amount);
+    const expenseKind = draft.expenseKind;
+    const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
+    const status =
+      activeRole !== "Driver" && hasModuleUpdateAccess(current, "finance")
+        ? "verified"
+        : "pending";
+    const now = new Date().toISOString();
+    const expenseDate = String(draft.expenseDate ?? "").trim();
+    const description = draft.description?.trim() ?? "";
+    const reference = draft.reference?.trim() ?? "";
+    const actorId = resolveCurrentActorId(current);
+    const isUpdate = Boolean(existing);
+    const driverEditReason =
+      isUpdate && activeRole === "Driver" ? String(draft.editReason ?? "").trim() : "";
+    const driverStaffId =
+      activeRole === "Driver"
+        ? String(current.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null
+        : String(existing?.driverStaffId ?? "").trim() || null;
+    const driverName =
+      activeRole === "Driver"
+        ? String(
+            current.driverTerminal?.activeDriver ??
+              current.drivers.find((driver) => driver.staffId === driverStaffId)?.name ??
+              "",
+          ).trim() || null
+        : String(existing?.driverName ?? "").trim() || null;
+
+    if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
+      return { ok: false, error: getModuleAccessErrorMessage("finance") };
+    }
+    if (existing?.status === "banked") {
+      return { ok: false, error: "Deposited records can no longer be changed." };
+    }
+    if (isUpdate && activeRole === "Driver" && !driverEditReason) {
+      return {
+        ok: false,
+        error: "Add a note explaining why you are updating this expense.",
+      };
+    }
+    if (!draft.category?.trim()) {
+      return { ok: false, error: "Enter an expense category." };
+    }
+    if (!description) {
+      return { ok: false, error: "Enter an expense description." };
+    }
+    if (!expenseDate) {
+      return { ok: false, error: "Select the expense date." };
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { ok: false, error: "Enter a valid expense amount." };
+    }
+    if (expenseKind === "asset" && !vehicle) {
+      return { ok: false, error: "Vehicle costs need a valid vehicle." };
+    }
+
+    const baseNextRecord = {
+      ...existing,
+      id: draft.id ?? createRecordId("txn-exp"),
+      type: "expense",
+      expenseKind,
+      category: draft.category.trim(),
+      description,
+      expenseDate,
+      reference: reference || null,
+      vehicleId: expenseKind === "asset" ? draft.vehicleId : null,
+      vehicle: expenseKind === "asset" ? vehicle.registration : "General",
+      amount,
+      cashExpense: Boolean(draft.cashExpense),
+      driverStaffId,
+      driverName,
+      status,
+      timestamp: createTimestampFromDateInput(expenseDate, existing?.timestamp ?? now),
+      createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
+      createdBy: existing?.createdBy ?? actorId,
+      createdByRole: existing?.createdByRole ?? activeRole,
+      updatedAt: isUpdate ? now : null,
+      updatedBy: isUpdate ? actorId : null,
+      updatedByRole: isUpdate ? activeRole : null,
+      depositId: null,
+    };
+    const driverEditTracking = buildDriverRecordEditTracking({
+      existingRecord: existing,
+      nextRecord: baseNextRecord,
+      reason: driverEditReason,
+      timestamp: now,
+      actorId,
+      actorRole: activeRole,
+    });
+    const nextRecord = {
+      ...baseNextRecord,
+      ...driverEditTracking.trackingFields,
+    };
+    const nextTransactions = draft.id
+      ? current.financeTransactions.map((record) =>
+          record.id === draft.id ? nextRecord : record,
+        )
+      : [nextRecord, ...(current.financeTransactions ?? [])];
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "finance",
+        action: isUpdate ? "update" : "create",
+        entityType: "expense",
+        entityId: nextRecord.id,
+        title: `${isUpdate ? "Expense updated" : "Expense added"} / ${nextRecord.category}`,
+        detail: `${nextRecord.description} / ${formatMoney(amount)}${
+          nextRecord.reference ? ` / Receipt ${nextRecord.reference}` : ""
+        }${
+          driverEditTracking.editEntry
+            ? ` / Driver note: ${driverEditTracking.editEntry.reason} / ${driverEditTracking.editEntry.summary}`
+            : ""
+        }`,
+      }),
+    ]);
+
+    const nextSnapshot = {
+      ...current,
+      financeTransactions: nextTransactions,
+      auditTrail: nextAuditTrail,
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
+      return {
+        ok: false,
+        error:
+          commitResult.error ??
+          "Expense could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    const confirmedRecord = (commitResult.snapshot?.financeTransactions ?? []).find(
+      (record) => record.id === nextRecord.id,
+    );
+
+    if (!confirmedRecord) {
+      return {
+        ok: false,
+        error: "Expense could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: isUpdate && activeRole === "Driver"
+        ? "Expense update saved and logged for owner review."
+        : status === "verified"
+          ? "Expense saved and checked."
+          : "Expense saved and sent to a manager for review.",
+    };
+  };
+
+  const submitDriverCashUp = async () => {
+    const current = currentSnapshot;
+
+    if (!current) {
       return { ok: false, error: "Unable to send the day checking." };
     }
     if (activeRole !== "Driver") {
       return { ok: false, error: "Only a driver can wrap up the day with checking." };
     }
 
-    const actorId = resolveCurrentActorId(snapshot);
-    const derived = deriveSnapshot(snapshot);
+    const actorId = resolveCurrentActorId(current);
+    const derived = deriveSnapshot(current);
     const driverStaffId =
       String(derived.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null;
     const daySummary = buildDriverDayCashSummary(derived, { driverStaffId });
@@ -3030,7 +3057,7 @@ function App() {
 
     const timestamp = new Date().toISOString();
     const existingCashUp =
-      (snapshot.dailyCashUps ?? []).find(
+      (current.dailyCashUps ?? []).find(
         (entry) =>
           String(entry.driverStaffId ?? "").trim() === driverStaffId &&
           String(entry.workDate ?? "").trim() === daySummary.workDate,
@@ -3084,12 +3111,12 @@ function App() {
       bankedAt: null,
     };
     const nextCashUps = existingCashUp
-      ? (snapshot.dailyCashUps ?? []).map((entry) =>
+      ? (current.dailyCashUps ?? []).map((entry) =>
           entry.id === existingCashUp.id ? nextCashUp : entry,
         )
-      : [nextCashUp, ...(snapshot.dailyCashUps ?? [])];
+      : [nextCashUp, ...(current.dailyCashUps ?? [])];
     const nextTransactions = syncTransactionsForDriverCashUp(
-      snapshot.financeTransactions ?? [],
+      current.financeTransactions ?? [],
       daySummary,
       (record) => ({
         ...record,
@@ -3105,8 +3132,8 @@ function App() {
         bankedAt: null,
       }),
     );
-    const nextAuditTrail = appendAuditTrail(snapshot.auditTrail, [
-      buildCurrentAuditEvent(snapshot, {
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
         timestamp,
         scope: "finance",
         action: existingCashUp ? "update" : "create",
@@ -3121,12 +3148,34 @@ function App() {
       }),
     ]);
 
-    setSnapshot({
-      ...snapshot,
+    const nextSnapshot = {
+      ...current,
       financeTransactions: nextTransactions,
       dailyCashUps: nextCashUps,
       auditTrail: nextAuditTrail,
-    });
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
+      return {
+        ok: false,
+        error:
+          commitResult.error ??
+          "Checking could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    const confirmedCashUp = (commitResult.snapshot?.dailyCashUps ?? []).find(
+      (entry) => entry.id === nextCashUp.id,
+    );
+
+    if (!confirmedCashUp) {
+      return {
+        ok: false,
+        error: "Checking could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
 
     return {
       ok: true,
@@ -3223,67 +3272,256 @@ function App() {
     return result;
   };
 
-  const verifyIncome = (transactionId, actualCashReceived) => {
-    let result = { ok: false, error: "Unable to update this cash hand-in record." };
+  // Async and verified, not optimistic: same confirmed-mutation principle already
+  // proven for Route/Driver/Fleet persistence, applied to the Admin-counted /
+  // Manager-verified cash workflow. Every branch below still only ever performs
+  // ONE of the two contract-defined transitions (pending -> counted, or
+  // counted -> verified) - never skips a status - exactly as before. Success is
+  // only reported once commitLiveSnapshotMutation's fresh canonical remote read
+  // actually contains the transitioned record.
+  const verifyIncome = async (transactionId, actualCashReceived) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+
+    const amount = Number(actualCashReceived);
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const cashUpTarget =
+      (current.dailyCashUps ?? []).find(
+        (entry) => getDailyCashUpStableId(entry) === transactionId,
+      ) ?? null;
+
+    if (cashUpTarget) {
+      const derived = deriveSnapshot(current);
+      const daySummary = buildDriverDayCashSummary(derived, {
+        driverStaffId: String(cashUpTarget.driverStaffId ?? "").trim() || null,
+        workDate: String(cashUpTarget.workDate ?? "").trim() || null,
+      });
+      const workflowStatus = getDriverCashUpWorkflowStatus(cashUpTarget, daySummary);
+
+      if (workflowStatus === "banked") {
+        return { ok: false, error: "Deposited day checkings can no longer be changed." };
       }
 
-      const amount = Number(actualCashReceived);
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const cashUpTarget =
-        (current.dailyCashUps ?? []).find(
-          (entry) => getDailyCashUpStableId(entry) === transactionId,
-        ) ?? null;
-
-      if (cashUpTarget) {
-        const derived = deriveSnapshot(current);
-        const daySummary = buildDriverDayCashSummary(derived, {
-          driverStaffId: String(cashUpTarget.driverStaffId ?? "").trim() || null,
-          workDate: String(cashUpTarget.workDate ?? "").trim() || null,
-        });
-        const workflowStatus = getDriverCashUpWorkflowStatus(cashUpTarget, daySummary);
-
-        if (workflowStatus === "banked") {
-          result = { ok: false, error: "Deposited day checkings can no longer be changed." };
-          return current;
+      if (workflowStatus === "pending") {
+        if (!canRecordCashHandoverForRole(activeRole)) {
+          return {
+            ok: false,
+            error: "Administrator must record the day hand-in before manager verification.",
+          };
+        }
+        if (!Number.isFinite(amount) || amount < 0) {
+          return {
+            ok: false,
+            error: "Enter the cash received before recording the day hand-in.",
+          };
         }
 
-        if (workflowStatus === "pending") {
-          if (!canRecordCashHandoverForRole(activeRole)) {
-            result = {
-              ok: false,
-              error: "Administrator must record the day hand-in before manager verification.",
-            };
-            return current;
-          }
-          if (!Number.isFinite(amount) || amount < 0) {
-            result = {
-              ok: false,
-              error: "Enter the cash received before recording the day hand-in.",
-            };
-            return current;
-          }
-
-          const nextCashUp = {
-            ...cashUpTarget,
+        const nextCashUp = {
+          ...cashUpTarget,
+          status: "counted",
+          actualCashReceived: amount,
+          countedAt: now,
+          countedBy: actorId,
+          countedByRole: activeRole,
+          verifiedAt: null,
+          verifiedBy: null,
+          verifiedByRole: null,
+        };
+        const nextTransactions = syncTransactionsForDriverCashUp(
+          current.financeTransactions ?? [],
+          daySummary,
+          (record) => ({
+            ...record,
             status: "counted",
-            actualCashReceived: amount,
             countedAt: now,
             countedBy: actorId,
             countedByRole: activeRole,
             verifiedAt: null,
             verifiedBy: null,
             verifiedByRole: null,
+            depositId: null,
+            bankedAt: null,
+          }),
+        );
+        const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+          buildCurrentAuditEvent(current, {
+            timestamp: now,
+            scope: "finance",
+            action: "update",
+            entityType: "driver-checking",
+            entityId: transactionId,
+            title: `Day hand-in recorded / ${cashUpTarget.driverName ?? "Driver"}`,
+            detail: `${cashUpTarget.workDate} / ${formatMoney(amount)} handed in to admin`,
+          }),
+        ]);
+
+        const nextSnapshot = {
+          ...current,
+          dailyCashUps: (current.dailyCashUps ?? []).map((entry) =>
+            entry.id === transactionId ? nextCashUp : entry,
+          ),
+          financeTransactions: nextTransactions,
+          auditTrail: nextAuditTrail,
+        };
+
+        const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+        if (!commitResult.ok) {
+          return {
+            ok: false,
+            error:
+              commitResult.error ??
+              "Day hand-in could not be saved to the live workspace. No confirmed change was made.",
           };
-          const nextTransactions = syncTransactionsForDriverCashUp(
-            current.financeTransactions ?? [],
-            daySummary,
-            (record) => ({
+        }
+
+        const confirmedCashUp = (commitResult.snapshot?.dailyCashUps ?? []).find(
+          (entry) => entry.id === transactionId && entry.status === "counted",
+        );
+
+        if (!confirmedCashUp) {
+          return {
+            ok: false,
+            error: "Day hand-in could not be saved to the live workspace. No confirmed change was made.",
+          };
+        }
+
+        return {
+          ok: true,
+          message: "Day checking recorded and waiting for manager verification.",
+          shortage: Math.max(Number(daySummary.expectedCashIn ?? 0) - amount, 0),
+        };
+      }
+
+      if (workflowStatus === "counted") {
+        if (!canVerifyCashCheckForRole(activeRole)) {
+          return {
+            ok: false,
+            error: "Manager must verify the admin day checking before banking.",
+          };
+        }
+
+        const finalAmount =
+          Number.isFinite(amount) && amount >= 0
+            ? amount
+            : Number(cashUpTarget.actualCashReceived ?? NaN);
+        if (!Number.isFinite(finalAmount) || finalAmount < 0) {
+          return {
+            ok: false,
+            error: "Administrator must record the day hand-in before manager verification.",
+          };
+        }
+
+        const nextCashUp = {
+          ...cashUpTarget,
+          status: "verified",
+          actualCashReceived: finalAmount,
+          verifiedAt: now,
+          verifiedBy: actorId,
+          verifiedByRole: activeRole,
+        };
+        const nextTransactions = syncTransactionsForDriverCashUp(
+          current.financeTransactions ?? [],
+          daySummary,
+          (record) => ({
+            ...record,
+            status: "verified",
+            verifiedAt: now,
+            verifiedBy: actorId,
+            verifiedByRole: activeRole,
+          }),
+        );
+        const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+          buildCurrentAuditEvent(current, {
+            timestamp: now,
+            scope: "finance",
+            action: "verify",
+            entityType: "driver-checking",
+            entityId: transactionId,
+            title: `Day checking verified / ${cashUpTarget.driverName ?? "Driver"}`,
+            detail: `${cashUpTarget.workDate} / ${formatMoney(finalAmount)} manager checked`,
+          }),
+        ]);
+
+        const nextSnapshot = {
+          ...current,
+          dailyCashUps: (current.dailyCashUps ?? []).map((entry) =>
+            entry.id === transactionId ? nextCashUp : entry,
+          ),
+          financeTransactions: nextTransactions,
+          auditTrail: nextAuditTrail,
+        };
+
+        const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+        if (!commitResult.ok) {
+          return {
+            ok: false,
+            error:
+              commitResult.error ??
+              "Day checking could not be verified in the live workspace. No confirmed change was made.",
+          };
+        }
+
+        const confirmedCashUp = (commitResult.snapshot?.dailyCashUps ?? []).find(
+          (entry) => entry.id === transactionId && entry.status === "verified",
+        );
+
+        if (!confirmedCashUp) {
+          return {
+            ok: false,
+            error: "Day checking could not be verified in the live workspace. No confirmed change was made.",
+          };
+        }
+
+        return {
+          ok: true,
+          message: "Day checking verified and added to cash ready for banking.",
+          shortage: Math.max(Number(daySummary.expectedCashIn ?? 0) - finalAmount, 0),
+        };
+      }
+
+      return {
+        ok: false,
+        error:
+          workflowStatus === "verified"
+            ? "This day checking has already been verified."
+            : "This day checking is not ready for another cash action.",
+      };
+    }
+
+    const target = current.financeTransactions.find((record) => record.id === transactionId);
+
+    if (!target || target.type !== "income") {
+      return { ok: false, error: "Income record not found." };
+    }
+    if (target.status === "banked") {
+      return { ok: false, error: "Deposited records can no longer be changed." };
+    }
+
+    if (target.status === "pending") {
+      if (!canRecordCashHandoverForRole(activeRole)) {
+        return {
+          ok: false,
+          error: "Administrator must record the cash hand-in before manager verification.",
+        };
+      }
+      if (!Number.isFinite(amount) || amount < 0) {
+        return {
+          ok: false,
+          error: "Enter the cash received before recording the hand-in.",
+        };
+      }
+
+      const nextTransactions = current.financeTransactions.map((record) =>
+        record.id === transactionId
+          ? {
               ...record,
+              actualCashReceived: amount,
               status: "counted",
               countedAt: now,
               countedBy: actorId,
@@ -3291,450 +3529,382 @@ function App() {
               verifiedAt: null,
               verifiedBy: null,
               verifiedByRole: null,
-              depositId: null,
-              bankedAt: null,
-            }),
-          );
-          const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-            buildCurrentAuditEvent(current, {
-              timestamp: now,
-              scope: "finance",
-              action: "update",
-              entityType: "driver-checking",
-              entityId: transactionId,
-              title: `Day hand-in recorded / ${cashUpTarget.driverName ?? "Driver"}`,
-              detail: `${cashUpTarget.workDate} / ${formatMoney(amount)} handed in to admin`,
-            }),
-          ]);
+            }
+          : record,
+      );
+      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp: now,
+          scope: "finance",
+          action: "update",
+          entityType: "income",
+          entityId: transactionId,
+          title: `Cash hand-in recorded / ${target.vehicle ?? "General"}`,
+          detail: `${formatMoney(amount)} handed in to admin`,
+        }),
+      ]);
 
-          result = {
-            ok: true,
-            message: "Day checking recorded and waiting for manager verification.",
-            shortage: Math.max(Number(daySummary.expectedCashIn ?? 0) - amount, 0),
-          };
+      const nextSnapshot = {
+        ...current,
+        financeTransactions: nextTransactions,
+        auditTrail: nextAuditTrail,
+      };
 
-          return {
-            ...current,
-            dailyCashUps: (current.dailyCashUps ?? []).map((entry) =>
-              entry.id === transactionId ? nextCashUp : entry,
-            ),
-            financeTransactions: nextTransactions,
-            auditTrail: nextAuditTrail,
-          };
-        }
+      const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
 
-        if (workflowStatus === "counted") {
-          if (!canVerifyCashCheckForRole(activeRole)) {
-            result = {
-              ok: false,
-              error: "Manager must verify the admin day checking before banking.",
-            };
-            return current;
-          }
+      if (!commitResult.ok) {
+        return {
+          ok: false,
+          error:
+            commitResult.error ??
+            "Cash hand-in could not be saved to the live workspace. No confirmed change was made.",
+        };
+      }
 
-          const finalAmount =
-            Number.isFinite(amount) && amount >= 0
-              ? amount
-              : Number(cashUpTarget.actualCashReceived ?? NaN);
-          if (!Number.isFinite(finalAmount) || finalAmount < 0) {
-            result = {
-              ok: false,
-              error: "Administrator must record the day hand-in before manager verification.",
-            };
-            return current;
-          }
+      const confirmedRecord = (commitResult.snapshot?.financeTransactions ?? []).find(
+        (record) => record.id === transactionId && record.status === "counted",
+      );
 
-          const nextCashUp = {
-            ...cashUpTarget,
-            status: "verified",
-            actualCashReceived: finalAmount,
-            verifiedAt: now,
-            verifiedBy: actorId,
-            verifiedByRole: activeRole,
-          };
-          const nextTransactions = syncTransactionsForDriverCashUp(
-            current.financeTransactions ?? [],
-            daySummary,
-            (record) => ({
+      if (!confirmedRecord) {
+        return {
+          ok: false,
+          error: "Cash hand-in could not be saved to the live workspace. No confirmed change was made.",
+        };
+      }
+
+      return {
+        ok: true,
+        message: "Cash hand-in recorded and waiting for manager verification.",
+        shortage: Math.max(Number(target.amountClaimed ?? target.amount ?? 0) - amount, 0),
+      };
+    }
+
+    if (target.status === "counted") {
+      if (!canVerifyCashCheckForRole(activeRole)) {
+        return {
+          ok: false,
+          error: "Manager must verify the admin cash checking before banking.",
+        };
+      }
+
+      const finalAmount =
+        Number.isFinite(amount) && amount >= 0 ? amount : Number(target.actualCashReceived ?? NaN);
+      if (!Number.isFinite(finalAmount) || finalAmount < 0) {
+        return {
+          ok: false,
+          error: "Administrator must record the cash hand-in before manager verification.",
+        };
+      }
+
+      const nextTransactions = current.financeTransactions.map((record) =>
+        record.id === transactionId
+          ? {
               ...record,
+              actualCashReceived: finalAmount,
               status: "verified",
               verifiedAt: now,
               verifiedBy: actorId,
               verifiedByRole: activeRole,
-            }),
-          );
-          const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-            buildCurrentAuditEvent(current, {
-              timestamp: now,
-              scope: "finance",
-              action: "verify",
-              entityType: "driver-checking",
-              entityId: transactionId,
-              title: `Day checking verified / ${cashUpTarget.driverName ?? "Driver"}`,
-              detail: `${cashUpTarget.workDate} / ${formatMoney(finalAmount)} manager checked`,
-            }),
-          ]);
-
-          result = {
-            ok: true,
-            message: "Day checking verified and added to cash ready for banking.",
-            shortage: Math.max(Number(daySummary.expectedCashIn ?? 0) - finalAmount, 0),
-          };
-
-          return {
-            ...current,
-            dailyCashUps: (current.dailyCashUps ?? []).map((entry) =>
-              entry.id === transactionId ? nextCashUp : entry,
-            ),
-            financeTransactions: nextTransactions,
-            auditTrail: nextAuditTrail,
-          };
-        }
-
-        result = {
-          ok: false,
-          error:
-            workflowStatus === "verified"
-              ? "This day checking has already been verified."
-              : "This day checking is not ready for another cash action.",
-        };
-        return current;
-      }
-
-      const target = current.financeTransactions.find((record) => record.id === transactionId);
-
-      if (!target || target.type !== "income") {
-        result = { ok: false, error: "Income record not found." };
-        return current;
-      }
-      if (target.status === "banked") {
-        result = { ok: false, error: "Deposited records can no longer be changed." };
-        return current;
-      }
-
-      if (target.status === "pending") {
-        if (!canRecordCashHandoverForRole(activeRole)) {
-          result = {
-            ok: false,
-            error: "Administrator must record the cash hand-in before manager verification.",
-          };
-          return current;
-        }
-        if (!Number.isFinite(amount) || amount < 0) {
-          result = {
-            ok: false,
-            error: "Enter the cash received before recording the hand-in.",
-          };
-          return current;
-        }
-
-        const nextTransactions = current.financeTransactions.map((record) =>
-          record.id === transactionId
-            ? {
-                ...record,
-                actualCashReceived: amount,
-                status: "counted",
-                countedAt: now,
-                countedBy: actorId,
-                countedByRole: activeRole,
-                verifiedAt: null,
-                verifiedBy: null,
-                verifiedByRole: null,
-              }
-            : record,
-        );
-        const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-          buildCurrentAuditEvent(current, {
-            timestamp: now,
-            scope: "finance",
-            action: "update",
-            entityType: "income",
-            entityId: transactionId,
-            title: `Cash hand-in recorded / ${target.vehicle ?? "General"}`,
-            detail: `${formatMoney(amount)} handed in to admin`,
-          }),
-        ]);
-
-        result = {
-          ok: true,
-          message: "Cash hand-in recorded and waiting for manager verification.",
-          shortage: Math.max(Number(target.amountClaimed ?? target.amount ?? 0) - amount, 0),
-        };
-
-        return {
-          ...current,
-          financeTransactions: nextTransactions,
-          auditTrail: nextAuditTrail,
-        };
-      }
-
-      if (target.status === "counted") {
-        if (!canVerifyCashCheckForRole(activeRole)) {
-          result = {
-            ok: false,
-            error: "Manager must verify the admin cash checking before banking.",
-          };
-          return current;
-        }
-
-        const finalAmount =
-          Number.isFinite(amount) && amount >= 0 ? amount : Number(target.actualCashReceived ?? NaN);
-        if (!Number.isFinite(finalAmount) || finalAmount < 0) {
-          result = {
-            ok: false,
-            error: "Administrator must record the cash hand-in before manager verification.",
-          };
-          return current;
-        }
-
-        const nextTransactions = current.financeTransactions.map((record) =>
-          record.id === transactionId
-            ? {
-                ...record,
-                actualCashReceived: finalAmount,
-                status: "verified",
-                verifiedAt: now,
-                verifiedBy: actorId,
-                verifiedByRole: activeRole,
-              }
-            : record,
-        );
-        const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-          buildCurrentAuditEvent(current, {
-            timestamp: now,
-            scope: "finance",
-            action: "verify",
-            entityType: "income",
-            entityId: transactionId,
-            title: `Cash checking verified / ${target.vehicle ?? "General"}`,
-            detail: `${formatMoney(finalAmount)} manager checked`,
-          }),
-        ]);
-
-        result = {
-          ok: true,
-          message: "Cash checking verified and added to cash ready for banking.",
-          shortage: Math.max(Number(target.amountClaimed ?? target.amount ?? 0) - finalAmount, 0),
-        };
-
-        return {
-          ...current,
-          financeTransactions: nextTransactions,
-          auditTrail: nextAuditTrail,
-        };
-      }
-
-      result = {
-        ok: false,
-        error:
-          target.status === "verified"
-            ? "This cash checking has already been verified."
-            : "This income record is not ready for another cash action.",
-      };
-      return current;
-    });
-
-    return result;
-  };
-
-  const deleteTransaction = (transactionId) => {
-    let result = { ok: false, error: "Unable to delete the record." };
-
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-
-      const target = current.financeTransactions.find((record) => record.id === transactionId);
-
-      if (!hasModuleUpdateAccess(current, "finance")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
-        return current;
-      }
-      if (!target) {
-        result = { ok: false, error: "Record not found." };
-        return current;
-      }
-      if (target.status === "banked") {
-        result = { ok: false, error: "Deposited records are final and cannot be deleted." };
-        return current;
-      }
-
-      result = { ok: true, message: "Record removed." };
+            }
+          : record,
+      );
       const nextAuditTrail = appendAuditTrail(current.auditTrail, [
         buildCurrentAuditEvent(current, {
+          timestamp: now,
           scope: "finance",
-          action: "delete",
-          entityType: target.type,
-          entityId: target.id,
-          title:
-            target.type === "income"
-              ? `${target.isSpecial ? "Extra trip removed" : "Trip income removed"} / ${
-                  target.vehicle ?? "General"
-                }`
-              : `Expense removed / ${target.category}`,
-          detail:
-            target.type === "income"
-              ? target.isSpecial
-                ? `${formatMoney(target.amountClaimed ?? target.amount ?? 0)} / ${formatTripRoute(
-                    target,
-                  )} / ${formatTripLogMeta(target)}`
-                : `${formatMoney(target.amountClaimed ?? target.amount ?? 0)} / ${
-                    target.route ?? "Pending route"
-                  }`
-              : `${formatMoney(target.amount ?? 0)} / ${target.vehicle ?? "General"}`,
+          action: "verify",
+          entityType: "income",
+          entityId: transactionId,
+          title: `Cash checking verified / ${target.vehicle ?? "General"}`,
+          detail: `${formatMoney(finalAmount)} manager checked`,
         }),
       ]);
 
-      return {
+      const nextSnapshot = {
         ...current,
-        financeTransactions: current.financeTransactions.filter(
-          (record) => record.id !== transactionId,
-        ),
+        financeTransactions: nextTransactions,
         auditTrail: nextAuditTrail,
       };
-    });
 
-    return result;
+      const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+      if (!commitResult.ok) {
+        return {
+          ok: false,
+          error:
+            commitResult.error ??
+            "Cash checking could not be verified in the live workspace. No confirmed change was made.",
+        };
+      }
+
+      const confirmedRecord = (commitResult.snapshot?.financeTransactions ?? []).find(
+        (record) => record.id === transactionId && record.status === "verified",
+      );
+
+      if (!confirmedRecord) {
+        return {
+          ok: false,
+          error: "Cash checking could not be verified in the live workspace. No confirmed change was made.",
+        };
+      }
+
+      return {
+        ok: true,
+        message: "Cash checking verified and added to cash ready for banking.",
+        shortage: Math.max(Number(target.amountClaimed ?? target.amount ?? 0) - finalAmount, 0),
+      };
+    }
+
+    return {
+      ok: false,
+      error:
+        target.status === "verified"
+          ? "This cash checking has already been verified."
+          : "This income record is not ready for another cash action.",
+    };
   };
 
-  const lockDeposit = () => {
-    let result = { ok: false, error: "No manager-checked records are ready to finalise." };
+  const deleteTransaction = async (transactionId) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
 
-      if (!hasModuleUpdateAccess(current, "finance")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
-        return current;
-      }
-      if (!canFinishDepositForRole(activeRole)) {
-        result = {
-          ok: false,
-          error: "Only the manager or owner can finalise a verified deposit batch.",
-        };
-        return current;
-      }
-      const derived = deriveSnapshot(current);
-      const driverCashUpQueue = buildDriverCashUpQueue({
-        ...derived,
-        vehicles: derived.vehicles,
-        financeTransactions: derived.financeTransactions,
-        dailyCashUps: Array.isArray(current.dailyCashUps) ? current.dailyCashUps : [],
-      });
-      const verifiedDriverCashUps = driverCashUpQueue.filter(
-        (entry) => entry.workflowStatus === "verified",
-      );
-      const verifiedDriverCashUpIds = new Set(
-        verifiedDriverCashUps.map((entry) => entry.id).filter(Boolean),
-      );
-      const verifiedDriverCashUpTransactionIds = new Set(
-        verifiedDriverCashUps.flatMap((entry) => buildCashUpTransactionIds(entry)),
-      );
-      const standaloneVerifiedTransactions = (current.financeTransactions ?? []).filter(
-        (record) => record.status === "verified" && !verifiedDriverCashUpTransactionIds.has(record.id),
-      );
-      const recordsLocked = verifiedDriverCashUps.length + standaloneVerifiedTransactions.length;
+    const target = current.financeTransactions.find((record) => record.id === transactionId);
 
-      if (recordsLocked === 0) {
-        return current;
-      }
+    if (!hasModuleUpdateAccess(current, "finance")) {
+      return { ok: false, error: getModuleAccessErrorMessage("finance") };
+    }
+    if (!target) {
+      return { ok: false, error: "Record not found." };
+    }
+    if (target.status === "banked") {
+      return { ok: false, error: "Deposited records are final and cannot be deleted." };
+    }
 
-      const now = new Date();
-      const actorId = resolveCurrentActorId(current);
-      const depositId = `dep-${now.getTime()}`;
-      const reference = buildDepositReference((current.deposits?.length ?? 0) + 1, now);
-      const verifiedTakings =
-        sumBy(verifiedDriverCashUps, (entry) => entry.totalIncome) +
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        scope: "finance",
+        action: "delete",
+        entityType: target.type,
+        entityId: target.id,
+        title:
+          target.type === "income"
+            ? `${target.isSpecial ? "Extra trip removed" : "Trip income removed"} / ${
+                target.vehicle ?? "General"
+              }`
+            : `Expense removed / ${target.category}`,
+        detail:
+          target.type === "income"
+            ? target.isSpecial
+              ? `${formatMoney(target.amountClaimed ?? target.amount ?? 0)} / ${formatTripRoute(
+                  target,
+                )} / ${formatTripLogMeta(target)}`
+              : `${formatMoney(target.amountClaimed ?? target.amount ?? 0)} / ${
+                  target.route ?? "Pending route"
+                }`
+            : `${formatMoney(target.amount ?? 0)} / ${target.vehicle ?? "General"}`,
+      }),
+    ]);
+
+    const nextSnapshot = {
+      ...current,
+      financeTransactions: current.financeTransactions.filter(
+        (record) => record.id !== transactionId,
+      ),
+      auditTrail: nextAuditTrail,
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
+      return {
+        ok: false,
+        error:
+          commitResult.error ??
+          "Record could not be deleted in the live workspace. No confirmed change was made.",
+      };
+    }
+
+    const stillPresent = (commitResult.snapshot?.financeTransactions ?? []).some(
+      (record) => record.id === transactionId,
+    );
+
+    if (stillPresent) {
+      return {
+        ok: false,
+        error: "Record could not be deleted in the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return { ok: true, message: "Record removed." };
+  };
+
+  // Async and verified, not optimistic: same confirmed-mutation principle already
+  // proven for Route/Driver/Fleet persistence, applied to Manager/Owner deposit
+  // finalisation - the last, highest-finality step of the money workflow. Success
+  // is only reported once commitLiveSnapshotMutation's fresh canonical remote read
+  // actually contains the new deposit AND every linked record/cash-up shows
+  // status "banked".
+  const lockDeposit = async () => {
+    const current = currentSnapshot;
+
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!hasModuleUpdateAccess(current, "finance")) {
+      return { ok: false, error: getModuleAccessErrorMessage("finance") };
+    }
+    if (!canFinishDepositForRole(activeRole)) {
+      return {
+        ok: false,
+        error: "Only the manager or owner can finalise a verified deposit batch.",
+      };
+    }
+    const derived = deriveSnapshot(current);
+    const driverCashUpQueue = buildDriverCashUpQueue({
+      ...derived,
+      vehicles: derived.vehicles,
+      financeTransactions: derived.financeTransactions,
+      dailyCashUps: Array.isArray(current.dailyCashUps) ? current.dailyCashUps : [],
+    });
+    const verifiedDriverCashUps = driverCashUpQueue.filter(
+      (entry) => entry.workflowStatus === "verified",
+    );
+    const verifiedDriverCashUpIds = new Set(
+      verifiedDriverCashUps.map((entry) => entry.id).filter(Boolean),
+    );
+    const verifiedDriverCashUpTransactionIds = new Set(
+      verifiedDriverCashUps.flatMap((entry) => buildCashUpTransactionIds(entry)),
+    );
+    const standaloneVerifiedTransactions = (current.financeTransactions ?? []).filter(
+      (record) => record.status === "verified" && !verifiedDriverCashUpTransactionIds.has(record.id),
+    );
+    const recordsLocked = verifiedDriverCashUps.length + standaloneVerifiedTransactions.length;
+
+    if (recordsLocked === 0) {
+      return { ok: false, error: "No manager-checked records are ready to finalise." };
+    }
+
+    const now = new Date();
+    const actorId = resolveCurrentActorId(current);
+    const depositId = `dep-${now.getTime()}`;
+    const reference = buildDepositReference((current.deposits?.length ?? 0) + 1, now);
+    const verifiedTakings =
+      sumBy(verifiedDriverCashUps, (entry) => entry.totalIncome) +
+      sumBy(
+        standaloneVerifiedTransactions.filter((record) => record.type === "income"),
+        getIncomeCashValue,
+      );
+    const cashExpenses = sumBy(
+      standaloneVerifiedTransactions.filter(
+        (record) => record.type === "expense" && record.cashExpense,
+      ),
+      (record) => record.amount,
+    ) + sumBy(verifiedDriverCashUps, (entry) => entry.cashExpenses);
+    const depositRecord = {
+      depositId,
+      reference,
+      timestamp: now.toISOString(),
+      recordsLocked,
+      verifiedTakings,
+      cashExpenses,
+      depositAmount:
+        sumBy(
+          verifiedDriverCashUps,
+          (entry) => entry.actualCashReceived ?? entry.expectedCashIn,
+        ) +
         sumBy(
           standaloneVerifiedTransactions.filter((record) => record.type === "income"),
           getIncomeCashValue,
-        );
-      const cashExpenses = sumBy(
-        standaloneVerifiedTransactions.filter(
-          (record) => record.type === "expense" && record.cashExpense,
-        ),
-        (record) => record.amount,
-      ) + sumBy(verifiedDriverCashUps, (entry) => entry.cashExpenses);
-      const depositRecord = {
-        depositId,
-        reference,
-        timestamp: now.toISOString(),
-        recordsLocked,
-        verifiedTakings,
-        cashExpenses,
-        depositAmount:
-          sumBy(
-            verifiedDriverCashUps,
-            (entry) => entry.actualCashReceived ?? entry.expectedCashIn,
-          ) +
-          sumBy(
-            standaloneVerifiedTransactions.filter((record) => record.type === "income"),
-            getIncomeCashValue,
-          ) -
-          sumBy(
-            standaloneVerifiedTransactions.filter(
-              (record) => record.type === "expense" && record.cashExpense,
-            ),
-            (record) => record.amount,
+        ) -
+        sumBy(
+          standaloneVerifiedTransactions.filter(
+            (record) => record.type === "expense" && record.cashExpense,
           ),
-        transactionIds: [
-          ...verifiedDriverCashUpTransactionIds,
-          ...standaloneVerifiedTransactions.map((record) => record.id),
-        ],
-        cashUpIds: [...verifiedDriverCashUpIds],
-        lockedBy: actorId,
-        lockedByRole: activeRole,
-      };
-      const timestamp = now.toISOString();
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp,
-          scope: "finance",
-          action: "lock",
-          entityType: "deposit",
-          entityId: depositId,
-          title: `Deposit finished / ${reference}`,
-          detail: `${recordsLocked} records / ${formatMoney(depositRecord.depositAmount)}`,
-        }),
-      ]);
+          (record) => record.amount,
+        ),
+      transactionIds: [
+        ...verifiedDriverCashUpTransactionIds,
+        ...standaloneVerifiedTransactions.map((record) => record.id),
+      ],
+      cashUpIds: [...verifiedDriverCashUpIds],
+      lockedBy: actorId,
+      lockedByRole: activeRole,
+    };
+    const timestamp = now.toISOString();
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp,
+        scope: "finance",
+        action: "lock",
+        entityType: "deposit",
+        entityId: depositId,
+        title: `Deposit finished / ${reference}`,
+        detail: `${recordsLocked} records / ${formatMoney(depositRecord.depositAmount)}`,
+      }),
+    ]);
 
-      result = {
-        ok: true,
-        message: `${recordsLocked} manager-checked records were added to ${reference}.`,
-        reference,
-      };
+    const nextSnapshot = {
+      ...current,
+      deposits: [depositRecord, ...(current.deposits ?? [])],
+      dailyCashUps: (current.dailyCashUps ?? []).map((entry) =>
+        verifiedDriverCashUpIds.has(entry.id)
+          ? {
+              ...entry,
+              status: "banked",
+              depositId,
+              bankedAt: timestamp,
+            }
+          : entry,
+      ),
+      financeTransactions: current.financeTransactions.map((record) =>
+        record.status === "verified" || verifiedDriverCashUpTransactionIds.has(record.id)
+          ? {
+              ...record,
+              status: "banked",
+              depositId,
+              bankedAt: timestamp,
+            }
+          : record,
+      ),
+      auditTrail: nextAuditTrail,
+    };
 
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
       return {
-        ...current,
-        deposits: [depositRecord, ...(current.deposits ?? [])],
-        dailyCashUps: (current.dailyCashUps ?? []).map((entry) =>
-          verifiedDriverCashUpIds.has(entry.id)
-            ? {
-                ...entry,
-                status: "banked",
-                depositId,
-                bankedAt: timestamp,
-              }
-            : entry,
-        ),
-        financeTransactions: current.financeTransactions.map((record) =>
-          record.status === "verified" || verifiedDriverCashUpTransactionIds.has(record.id)
-            ? {
-                ...record,
-                status: "banked",
-                depositId,
-                bankedAt: timestamp,
-              }
-            : record,
-        ),
-        auditTrail: nextAuditTrail,
+        ok: false,
+        error:
+          commitResult.error ??
+          "Deposit could not be finalised in the live workspace. No confirmed change was made.",
       };
-    });
+    }
 
-    return result;
+    const confirmedDeposit = (commitResult.snapshot?.deposits ?? []).find(
+      (entry) => entry.depositId === depositId,
+    );
+    const confirmedTransactionsBanked = (commitResult.snapshot?.financeTransactions ?? [])
+      .filter((record) => record.depositId === depositId)
+      .every((record) => record.status === "banked");
+    const confirmedCashUpsBanked = (commitResult.snapshot?.dailyCashUps ?? [])
+      .filter((entry) => entry.depositId === depositId)
+      .every((entry) => entry.status === "banked");
+
+    if (!confirmedDeposit || !confirmedTransactionsBanked || !confirmedCashUpsBanked) {
+      return {
+        ok: false,
+        error: "Deposit could not be finalised in the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: `${recordsLocked} manager-checked records were added to ${reference}.`,
+      reference,
+    };
   };
 
   // Async and verified, not optimistic: same confirmed-mutation principle already
@@ -5258,6 +5428,7 @@ function OverviewPanel({
   onSetAdminModuleAccess,
 }) {
   const [driverCashFeedback, setDriverCashFeedback] = useState(null);
+  const [cashUpSaving, setCashUpSaving] = useState(false);
   const isDriver = activeRole === "Driver";
   const linkedVehicles = getDriverLinkedVehicles(snapshot);
   const linkedVehicleIds = new Set(linkedVehicles.map((vehicle) => vehicle.id));
@@ -5299,17 +5470,27 @@ function OverviewPanel({
   const driverDayCashSummary =
     snapshot.driverTerminal?.dayCashSummary ?? createEmptyDriverDayCashSummary();
   const pendingDriverCashUps = snapshot.finance.pendingDriverCashUps ?? [];
-  const handleDriverCashUp = () => {
-    const response = onSubmitDriverCashUp?.();
-
-    if (!response) {
+  const handleDriverCashUp = async () => {
+    if (cashUpSaving) {
       return;
     }
 
-    setDriverCashFeedback({
-      tone: response.ok ? "success" : "danger",
-      message: response.message ?? response.error,
-    });
+    setCashUpSaving(true);
+
+    try {
+      const response = await onSubmitDriverCashUp?.();
+
+      if (!response) {
+        return;
+      }
+
+      setDriverCashFeedback({
+        tone: response.ok ? "success" : "danger",
+        message: response.message ?? response.error,
+      });
+    } finally {
+      setCashUpSaving(false);
+    }
   };
   const bankingSeries = [
     { label: "In", value: snapshot.finance.bankingBatch.verifiedTakings },
@@ -5423,6 +5604,7 @@ function OverviewPanel({
         <DriverCashSummaryBoard
           summary={driverDayCashSummary}
           onOpenCashUp={handleDriverCashUp}
+          cashUpLoading={cashUpSaving}
         />
 
         <div className="overview-board-grid">
@@ -5868,6 +6050,12 @@ function FinancePanel({
   const [feedback, setFeedback] = useState(null);
   const [verificationInputs, setVerificationInputs] = useState({});
   const [pendingRevenueTarget, setPendingRevenueTarget] = useState(null);
+  const [standardSaving, setStandardSaving] = useState(false);
+  const [specialSaving, setSpecialSaving] = useState(false);
+  const [expenseSaving, setExpenseSaving] = useState(false);
+  const [verifyingRecordId, setVerifyingRecordId] = useState(null);
+  const [deletingRecordId, setDeletingRecordId] = useState(null);
+  const [depositLocking, setDepositLocking] = useState(false);
   const standardEntryRef = useRef(null);
   const specialEntryRef = useRef(null);
   const depositLockRef = useRef(null);
@@ -6002,38 +6190,71 @@ function FinancePanel({
     setExpensePresetDraft(createExpensePresetDraft(nextExpenseKind));
   };
 
-  const handleStandardSubmit = (event) => {
+  const handleStandardSubmit = async (event) => {
     event.preventDefault();
-    const response = onSaveStandardIncome(standardDraft);
-    pushFeedback(response);
-    if (response.ok) {
-      setStandardDraft(
-        createStandardDraft(
-          standardDraft.vehicleId,
-          response.nextOpeningOdo,
-          selectedStandardVehicleRoute,
-        ),
-      );
+
+    if (standardSaving) {
+      return;
+    }
+
+    setStandardSaving(true);
+
+    try {
+      const response = await onSaveStandardIncome(standardDraft);
+      pushFeedback(response);
+      if (response.ok) {
+        setStandardDraft(
+          createStandardDraft(
+            standardDraft.vehicleId,
+            response.nextOpeningOdo,
+            selectedStandardVehicleRoute,
+          ),
+        );
+      }
+    } finally {
+      setStandardSaving(false);
     }
   };
 
-  const handleSpecialSubmit = (event) => {
+  const handleSpecialSubmit = async (event) => {
     event.preventDefault();
-    const response = onSaveSpecialIncome(specialDraft);
-    pushFeedback(response);
-    if (response.ok) {
-      setSpecialDraft(createSpecialDraft(specialDraft.vehicleId || defaultVehicleId));
+
+    if (specialSaving) {
+      return;
+    }
+
+    setSpecialSaving(true);
+
+    try {
+      const response = await onSaveSpecialIncome(specialDraft);
+      pushFeedback(response);
+      if (response.ok) {
+        setSpecialDraft(createSpecialDraft(specialDraft.vehicleId || defaultVehicleId));
+      }
+    } finally {
+      setSpecialSaving(false);
     }
   };
 
-  const handleExpenseSubmit = (event) => {
+  const handleExpenseSubmit = async (event) => {
     event.preventDefault();
-    const response = onSaveExpense(expenseDraft);
-    pushFeedback(response);
-    if (response.ok) {
-      setExpenseDraft(
-        createExpenseDraft(expenseKind, defaultVehicleId, finance.expenseCatalog),
-      );
+
+    if (expenseSaving) {
+      return;
+    }
+
+    setExpenseSaving(true);
+
+    try {
+      const response = await onSaveExpense(expenseDraft);
+      pushFeedback(response);
+      if (response.ok) {
+        setExpenseDraft(
+          createExpenseDraft(expenseKind, defaultVehicleId, finance.expenseCatalog),
+        );
+      }
+    } finally {
+      setExpenseSaving(false);
     }
   };
 
@@ -6049,20 +6270,54 @@ function FinancePanel({
     }
   };
 
-  const handleVerify = (recordId) => {
-    const response = onVerifyIncome(recordId, verificationInputs[recordId]);
-    pushFeedback(response);
-    if (response.ok) {
-      setVerificationInputs((current) => {
-        const next = { ...current };
-        delete next[recordId];
-        return next;
-      });
+  const handleVerify = async (recordId) => {
+    if (verifyingRecordId) {
+      return;
+    }
+
+    setVerifyingRecordId(recordId);
+
+    try {
+      const response = await onVerifyIncome(recordId, verificationInputs[recordId]);
+      pushFeedback(response);
+      if (response.ok) {
+        setVerificationInputs((current) => {
+          const next = { ...current };
+          delete next[recordId];
+          return next;
+        });
+      }
+    } finally {
+      setVerifyingRecordId(null);
     }
   };
 
-  const handleDelete = (recordId) => {
-    pushFeedback(onDeleteTransaction(recordId));
+  const handleDelete = async (recordId) => {
+    if (deletingRecordId) {
+      return;
+    }
+
+    setDeletingRecordId(recordId);
+
+    try {
+      pushFeedback(await onDeleteTransaction(recordId));
+    } finally {
+      setDeletingRecordId(null);
+    }
+  };
+
+  const handleLockDeposit = async () => {
+    if (depositLocking) {
+      return;
+    }
+
+    setDepositLocking(true);
+
+    try {
+      pushFeedback(await onLockDeposit());
+    } finally {
+      setDepositLocking(false);
+    }
   };
 
   const handleEditIncome = (record) => {
@@ -6470,9 +6725,9 @@ function FinancePanel({
                   <button
                     type="submit"
                     className="action-button primary"
-                    disabled={Boolean(standardValidationError) || !canEditFinanceUpdates}
+                    disabled={Boolean(standardValidationError) || !canEditFinanceUpdates || standardSaving}
                   >
-                    {standardDraft.id ? "Update trip" : "Save trip"}
+                    {standardSaving ? "Saving..." : standardDraft.id ? "Update trip" : "Save trip"}
                   </button>
                   {standardDraft.id && (
                     <button
@@ -6684,9 +6939,9 @@ function FinancePanel({
                   <button
                     type="submit"
                     className="action-button primary"
-                    disabled={Boolean(specialValidationError) || !canEditFinanceUpdates}
+                    disabled={Boolean(specialValidationError) || !canEditFinanceUpdates || specialSaving}
                   >
-                    {specialDraft.id ? "Update trip" : "Save trip"}
+                    {specialSaving ? "Saving..." : specialDraft.id ? "Update trip" : "Save trip"}
                   </button>
                   {specialDraft.id && (
                     <button
@@ -6750,10 +7005,14 @@ function FinancePanel({
                       <button
                         type="button"
                         className="record-button danger"
-                        disabled={record.status === "banked" || !canEditFinanceUpdates}
+                        disabled={
+                          record.status === "banked" ||
+                          !canEditFinanceUpdates ||
+                          deletingRecordId === record.id
+                        }
                         onClick={() => handleDelete(record.id)}
                       >
-                        Delete
+                        {deletingRecordId === record.id ? "Deleting..." : "Delete"}
                       </button>
                     </div>
                   </article>
@@ -7118,9 +7377,9 @@ function FinancePanel({
                   <button
                     type="submit"
                     className="action-button primary"
-                    disabled={!canEditFinanceUpdates}
+                    disabled={!canEditFinanceUpdates || expenseSaving}
                   >
-                    {expenseDraft.id ? "Update expense" : "Save expense"}
+                    {expenseSaving ? "Saving..." : expenseDraft.id ? "Update expense" : "Save expense"}
                   </button>
                   {expenseDraft.id && (
                     <button
@@ -7182,10 +7441,14 @@ function FinancePanel({
                       <button
                         type="button"
                         className="record-button danger"
-                        disabled={record.status === "banked" || !canEditFinanceUpdates}
+                        disabled={
+                          record.status === "banked" ||
+                          !canEditFinanceUpdates ||
+                          deletingRecordId === record.id
+                        }
                         onClick={() => handleDelete(record.id)}
                       >
-                        Delete
+                        {deletingRecordId === record.id ? "Deleting..." : "Delete"}
                       </button>
                     </div>
                   </article>
@@ -7306,10 +7569,10 @@ function FinancePanel({
                   <button
                     type="button"
                     className="action-button primary"
-                    disabled={lockableCount === 0 || !canFinishDeposit}
-                    onClick={() => pushFeedback(onLockDeposit())}
+                    disabled={lockableCount === 0 || !canFinishDeposit || depositLocking}
+                    onClick={handleLockDeposit}
                   >
-                    Finish deposit
+                    {depositLocking ? "Saving..." : "Finish deposit"}
                   </button>
                 </div>
               </div>
@@ -7571,10 +7834,10 @@ function FinancePanel({
                       <button
                         type="button"
                         className="action-button primary"
-                        disabled={!(canRecordHandIn || canVerifyCheck)}
+                        disabled={!(canRecordHandIn || canVerifyCheck) || verifyingRecordId === record.id}
                         onClick={() => handleVerify(record.id)}
                       >
-                        {actionLabel}
+                        {verifyingRecordId === record.id ? "Saving..." : actionLabel}
                       </button>
                       <button
                         type="button"
@@ -7590,11 +7853,14 @@ function FinancePanel({
                         type="button"
                         className="record-button danger"
                         disabled={
-                          isDriverCashUp || sourceRecord.status === "banked" || !canEditFinanceUpdates
+                          isDriverCashUp ||
+                          sourceRecord.status === "banked" ||
+                          !canEditFinanceUpdates ||
+                          deletingRecordId === sourceRecord.id
                         }
                         onClick={() => !isDriverCashUp && handleDelete(sourceRecord.id)}
                       >
-                        Delete entry
+                        {deletingRecordId === sourceRecord.id ? "Deleting..." : "Delete entry"}
                       </button>
                     </div>
                     {isDriverCashUp && (

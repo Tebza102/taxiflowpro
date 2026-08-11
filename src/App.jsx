@@ -3737,117 +3737,136 @@ function App() {
     return result;
   };
 
-  const saveVehicleProfile = (draft) => {
-    let result = { ok: false, error: "Unable to save the vehicle profile." };
+  // Async and verified, not optimistic: same confirmed-mutation principle already
+  // proven for Route/Driver persistence. Success is only reported once
+  // commitLiveSnapshotMutation's fresh canonical remote read actually contains the
+  // new/updated vehicle. All prior validation, the vehicle data shape, and the
+  // audit-trail entry are unchanged.
+  const saveVehicleProfile = async (draft) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-      if (!PRIVILEGED_ROLES.has(activeRole)) {
-        result = { ok: false, error: "Only management can edit vehicle settings." };
-        return current;
-      }
-      const routeCatalog = collectRouteMasterRecords(current);
-      const routeSelection = resolveVehicleRouteSelection(draft, routeCatalog);
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!PRIVILEGED_ROLES.has(activeRole)) {
+      return { ok: false, error: "Only management can edit vehicle settings." };
+    }
+    const routeCatalog = collectRouteMasterRecords(current);
+    const routeSelection = resolveVehicleRouteSelection(draft, routeCatalog);
 
-      if (!draft.registration?.trim() || !draft.model?.trim() || !routeSelection.route) {
-        result = { ok: false, error: "Registration, model, and route are required." };
-        return current;
-      }
+    if (!draft.registration?.trim() || !draft.model?.trim() || !routeSelection.route) {
+      return { ok: false, error: "Registration, model, and route are required." };
+    }
 
-      const existing = current.vehicles.find((vehicle) => vehicle.id === draft.id);
-      const assignedDriver =
-        draft.assignedDriverId != null && draft.assignedDriverId !== ""
-          ? current.drivers.find((driver) => driver.staffId === draft.assignedDriverId)
-          : null;
-      if (!hasModuleUpdateAccess(current, "fleet")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
-        return current;
-      }
-      if (draft.assignedDriverId && !assignedDriver) {
-        result = { ok: false, error: "Select a valid driver for this vehicle." };
-        return current;
-      }
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const capabilityFields = normalizeVehicleCapabilityHooks({
-        ...existing,
-        ...draft,
-        route: routeSelection.route,
-        currentRouteId: routeSelection.currentRouteId,
-      });
-      const nextVehicle = {
-        ...existing,
-        id: draft.id ?? createRecordId("veh"),
-        registration: draft.registration.trim().toUpperCase(),
-        model: draft.model.trim(),
-        route: routeSelection.route,
-        status: draft.status ?? "active",
-        utilisation: Number(draft.utilisation ?? 0),
-        currentOdometer: Number(draft.currentOdometer ?? 0),
-        lastServiceOdo: Number(draft.lastServiceOdo ?? 0),
-        serviceIntervalKm: Number(draft.serviceIntervalKm ?? current.profile.serviceIntervalKm),
-        permitExpiryDate: draft.permitExpiryDate || null,
-        discExpiryDate: draft.discExpiryDate || null,
-        assignedDriverId: draft.assignedDriverId || null,
-        canDoRouteService: capabilityFields.canDoRouteService,
-        canDoSpecialTrips: capabilityFields.canDoSpecialTrips,
-        canDoContracts: capabilityFields.canDoContracts,
-        seatCapacity: capabilityFields.seatCapacity,
-        currentRouteId: routeSelection.currentRouteId ?? capabilityFields.currentRouteId,
-        createdAt: existing?.createdAt ?? now,
-        createdBy: existing?.createdBy ?? actorId,
-        createdByRole: existing?.createdByRole ?? activeRole,
-        updatedAt: existing ? now : null,
-        updatedBy: existing ? actorId : null,
-        updatedByRole: existing ? activeRole : null,
-        archivedAt: existing?.archivedAt ?? null,
-        archivedBy: existing?.archivedBy ?? null,
-        archivedByRole: existing?.archivedByRole ?? null,
-      };
-      const currentVehicles = current.vehicles ?? [];
-      const nextVehiclesBase = draft.id
-        ? currentVehicles.map((vehicle) =>
-            vehicle.id === draft.id ? { ...vehicle, ...nextVehicle } : vehicle,
-          )
-        : [nextVehicle, ...currentVehicles];
-      const nextVehicles = nextVehicle.assignedDriverId
-        ? nextVehiclesBase.map((vehicle) =>
-            vehicle.id !== nextVehicle.id && vehicle.assignedDriverId === nextVehicle.assignedDriverId
-              ? {
-                  ...vehicle,
-                  assignedDriverId: null,
-                }
-              : vehicle,
-          )
-        : nextVehiclesBase;
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "fleet",
-          action: existing ? "update" : "create",
-          entityType: "vehicle",
-          entityId: nextVehicle.id,
-          title: `Vehicle ${existing ? "updated" : "created"} / ${nextVehicle.registration}`,
-          detail: `${nextVehicle.model} / ${nextVehicle.route}`,
-        }),
-      ]);
-
-      result = {
-        ok: true,
-        message: draft.id ? "Vehicle profile updated." : "Vehicle profile created.",
-        vehicleId: nextVehicle.id,
-      };
-
-      return {
-        ...current,
-        vehicles: nextVehicles,
-        auditTrail: nextAuditTrail,
-      };
+    const existing = current.vehicles.find((vehicle) => vehicle.id === draft.id);
+    const assignedDriver =
+      draft.assignedDriverId != null && draft.assignedDriverId !== ""
+        ? current.drivers.find((driver) => driver.staffId === draft.assignedDriverId)
+        : null;
+    if (!hasModuleUpdateAccess(current, "fleet")) {
+      return { ok: false, error: getModuleAccessErrorMessage("fleet") };
+    }
+    if (draft.assignedDriverId && !assignedDriver) {
+      return { ok: false, error: "Select a valid driver for this vehicle." };
+    }
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const capabilityFields = normalizeVehicleCapabilityHooks({
+      ...existing,
+      ...draft,
+      route: routeSelection.route,
+      currentRouteId: routeSelection.currentRouteId,
     });
+    const nextVehicle = {
+      ...existing,
+      id: draft.id ?? createRecordId("veh"),
+      registration: draft.registration.trim().toUpperCase(),
+      model: draft.model.trim(),
+      route: routeSelection.route,
+      status: draft.status ?? "active",
+      utilisation: Number(draft.utilisation ?? 0),
+      currentOdometer: Number(draft.currentOdometer ?? 0),
+      lastServiceOdo: Number(draft.lastServiceOdo ?? 0),
+      serviceIntervalKm: Number(draft.serviceIntervalKm ?? current.profile.serviceIntervalKm),
+      permitExpiryDate: draft.permitExpiryDate || null,
+      discExpiryDate: draft.discExpiryDate || null,
+      assignedDriverId: draft.assignedDriverId || null,
+      canDoRouteService: capabilityFields.canDoRouteService,
+      canDoSpecialTrips: capabilityFields.canDoSpecialTrips,
+      canDoContracts: capabilityFields.canDoContracts,
+      seatCapacity: capabilityFields.seatCapacity,
+      currentRouteId: routeSelection.currentRouteId ?? capabilityFields.currentRouteId,
+      createdAt: existing?.createdAt ?? now,
+      createdBy: existing?.createdBy ?? actorId,
+      createdByRole: existing?.createdByRole ?? activeRole,
+      updatedAt: existing ? now : null,
+      updatedBy: existing ? actorId : null,
+      updatedByRole: existing ? activeRole : null,
+      archivedAt: existing?.archivedAt ?? null,
+      archivedBy: existing?.archivedBy ?? null,
+      archivedByRole: existing?.archivedByRole ?? null,
+    };
+    const currentVehicles = current.vehicles ?? [];
+    const nextVehiclesBase = draft.id
+      ? currentVehicles.map((vehicle) =>
+          vehicle.id === draft.id ? { ...vehicle, ...nextVehicle } : vehicle,
+        )
+      : [nextVehicle, ...currentVehicles];
+    const nextVehicles = nextVehicle.assignedDriverId
+      ? nextVehiclesBase.map((vehicle) =>
+          vehicle.id !== nextVehicle.id && vehicle.assignedDriverId === nextVehicle.assignedDriverId
+            ? {
+                ...vehicle,
+                assignedDriverId: null,
+              }
+            : vehicle,
+        )
+      : nextVehiclesBase;
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "fleet",
+        action: existing ? "update" : "create",
+        entityType: "vehicle",
+        entityId: nextVehicle.id,
+        title: `Vehicle ${existing ? "updated" : "created"} / ${nextVehicle.registration}`,
+        detail: `${nextVehicle.model} / ${nextVehicle.route}`,
+      }),
+    ]);
 
-    return result;
+    const nextSnapshot = {
+      ...current,
+      vehicles: nextVehicles,
+      auditTrail: nextAuditTrail,
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
+      return {
+        ok: false,
+        error:
+          commitResult.error ??
+          "Vehicle profile could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    const confirmedVehicle = (commitResult.snapshot?.vehicles ?? []).find(
+      (vehicle) => vehicle.id === nextVehicle.id,
+    );
+
+    if (!confirmedVehicle) {
+      return {
+        ok: false,
+        error: "Vehicle profile could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: draft.id ? "Vehicle profile updated." : "Vehicle profile created.",
+      vehicleId: confirmedVehicle.id,
+    };
   };
 
   // Async and verified, not optimistic: this is the Phase-1 fix for route
@@ -4422,273 +4441,316 @@ function App() {
     };
   };
 
-  const archiveVehicle = (vehicleId) => {
-    let result = { ok: false, error: "Unable to archive this vehicle." };
+  const archiveVehicle = async (vehicleId) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-      if (!PRIVILEGED_ROLES.has(activeRole)) {
-        result = { ok: false, error: "Only management can archive vehicles." };
-        return current;
-      }
-      if (!hasModuleUpdateAccess(current, "fleet")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!PRIVILEGED_ROLES.has(activeRole)) {
+      return { ok: false, error: "Only management can archive vehicles." };
+    }
+    if (!hasModuleUpdateAccess(current, "fleet")) {
+      return { ok: false, error: getModuleAccessErrorMessage("fleet") };
+    }
 
-      const target = current.vehicles.find((vehicle) => vehicle.id === vehicleId);
-      if (!target) {
-        result = { ok: false, error: "Vehicle not found." };
-        return current;
-      }
-      if (target.status === "archived") {
-        result = { ok: false, error: "Vehicle is already archived." };
-        return current;
-      }
+    const target = current.vehicles.find((vehicle) => vehicle.id === vehicleId);
+    if (!target) {
+      return { ok: false, error: "Vehicle not found." };
+    }
+    if (target.status === "archived") {
+      return { ok: false, error: "Vehicle is already archived." };
+    }
 
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      result = { ok: true, message: `${target.registration} archived for audit retention.` };
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "fleet",
-          action: "archive",
-          entityType: "vehicle",
-          entityId: target.id,
-          title: `Vehicle archived / ${target.registration}`,
-          detail: `${target.model} kept in the owner history`,
-        }),
-      ]);
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "fleet",
+        action: "archive",
+        entityType: "vehicle",
+        entityId: target.id,
+        title: `Vehicle archived / ${target.registration}`,
+        detail: `${target.model} kept in the owner history`,
+      }),
+    ]);
 
+    const nextSnapshot = {
+      ...current,
+      vehicles: current.vehicles.map((vehicle) =>
+        vehicle.id === vehicleId
+          ? {
+              ...vehicle,
+              status: "archived",
+              archivedAt: now,
+              archivedBy: actorId,
+              archivedByRole: activeRole,
+              updatedAt: now,
+              updatedBy: actorId,
+              updatedByRole: activeRole,
+            }
+          : vehicle,
+      ),
+      auditTrail: nextAuditTrail,
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
       return {
-        ...current,
-        vehicles: current.vehicles.map((vehicle) =>
-          vehicle.id === vehicleId
-            ? {
-                ...vehicle,
-                status: "archived",
-                archivedAt: now,
-                archivedBy: actorId,
-                archivedByRole: activeRole,
-                updatedAt: now,
-                updatedBy: actorId,
-                updatedByRole: activeRole,
-              }
-            : vehicle,
-        ),
-        auditTrail: nextAuditTrail,
+        ok: false,
+        error:
+          commitResult.error ??
+          "Vehicle could not be archived in the live workspace. No confirmed change was made.",
       };
-    });
+    }
 
-    return result;
+    const confirmedVehicle = (commitResult.snapshot?.vehicles ?? []).find(
+      (vehicle) => vehicle.id === vehicleId,
+    );
+
+    if (!confirmedVehicle || confirmedVehicle.status !== "archived") {
+      return {
+        ok: false,
+        error: "Vehicle could not be archived in the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return { ok: true, message: `${target.registration} archived for audit retention.` };
   };
 
-  const logDefect = (draft) => {
-    let result = { ok: false, error: "Unable to save the problem report." };
+  const logDefect = async (draft) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-      const existing = current.defects.find((defect) => defect.id === draft.id);
-      if (!draft.vehicleId) {
-        result = { ok: false, error: "Select a vehicle before reporting a problem." };
-        return current;
-      }
-      if (!DEFECT_CATEGORIES.includes(draft.category)) {
-        result = { ok: false, error: "Select a valid problem category." };
-        return current;
-      }
-      if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "fleet")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
-        return current;
-      }
-      if (existing && !["Owner", "Admin", "Manager"].includes(activeRole)) {
-        result = { ok: false, error: "Only management can update reported problems." };
-        return current;
-      }
-      if (existing?.status === "resolved") {
-        result = { ok: false, error: "Fixed problems can no longer be changed." };
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    const existing = (current.defects ?? []).find((defect) => defect.id === draft.id);
+    if (!draft.vehicleId) {
+      return { ok: false, error: "Select a vehicle before reporting a problem." };
+    }
+    if (!DEFECT_CATEGORIES.includes(draft.category)) {
+      return { ok: false, error: "Select a valid problem category." };
+    }
+    if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "fleet")) {
+      return { ok: false, error: getModuleAccessErrorMessage("fleet") };
+    }
+    if (existing && !["Owner", "Admin", "Manager"].includes(activeRole)) {
+      return { ok: false, error: "Only management can update reported problems." };
+    }
+    if (existing?.status === "resolved") {
+      return { ok: false, error: "Fixed problems can no longer be changed." };
+    }
 
-      const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
-      if (!vehicle) {
-        result = { ok: false, error: "Vehicle not found." };
-        return current;
-      }
+    const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
+    if (!vehicle) {
+      return { ok: false, error: "Vehicle not found." };
+    }
 
-      const severity =
-        draft.category === "Engine" || draft.category === "Tires" || draft.category === "Windscreen"
-          ? "High"
-          : draft.category === "Seats"
-            ? "Medium"
-            : "Low";
-      const detail = draft.detail?.trim() || draft.category;
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const defectRecord = {
-        ...existing,
-        id: draft.id ?? createRecordId("def"),
-        vehicleId: draft.vehicleId,
-        category: draft.category,
-        issue: detail,
+    const severity =
+      draft.category === "Engine" || draft.category === "Tires" || draft.category === "Windscreen"
+        ? "High"
+        : draft.category === "Seats"
+          ? "Medium"
+          : "Low";
+    const detail = draft.detail?.trim() || draft.category;
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const defectRecord = {
+      ...existing,
+      id: draft.id ?? createRecordId("def"),
+      vehicleId: draft.vehicleId,
+      category: draft.category,
+      issue: detail,
+      detail,
+      severity,
+      reportedAt: existing?.reportedAt ?? now,
+      reportedByStaffId: existing?.reportedByStaffId ?? actorId,
+      reportedByRole: existing?.reportedByRole ?? activeRole,
+      updatedAt: existing ? now : null,
+      updatedBy: existing ? actorId : null,
+      updatedByRole: existing ? activeRole : null,
+      status: "open",
+      costEstimate: existing?.costEstimate ?? 0,
+      repairCost: null,
+      resolvedAt: null,
+      resolvedExpenseId: null,
+      resolvedBy: null,
+      resolvedByRole: null,
+    };
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "fleet",
+        action: existing ? "update" : "report",
+        entityType: "defect",
+        entityId: defectRecord.id,
+        title: `Problem ${existing ? "updated" : "reported"} / ${vehicle.registration}`,
         detail,
-        severity,
-        reportedAt: existing?.reportedAt ?? now,
-        reportedByStaffId: existing?.reportedByStaffId ?? actorId,
-        reportedByRole: existing?.reportedByRole ?? activeRole,
-        updatedAt: existing ? now : null,
-        updatedBy: existing ? actorId : null,
-        updatedByRole: existing ? activeRole : null,
-        status: "open",
-        costEstimate: existing?.costEstimate ?? 0,
-        repairCost: null,
-        resolvedAt: null,
-        resolvedExpenseId: null,
-        resolvedBy: null,
-        resolvedByRole: null,
-      };
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "fleet",
-          action: existing ? "update" : "report",
-          entityType: "defect",
-          entityId: defectRecord.id,
-          title: `Problem ${existing ? "updated" : "reported"} / ${vehicle.registration}`,
-          detail,
-        }),
-      ]);
+      }),
+    ]);
 
-      result = {
-        ok: true,
-        message: existing
-          ? "Reported problem updated in the vehicle history."
-          : "Problem added to the vehicle history.",
-      };
+    const nextSnapshot = {
+      ...current,
+      defects: existing
+        ? current.defects.map((defect) =>
+            defect.id === draft.id ? { ...defect, ...defectRecord } : defect,
+          )
+        : [defectRecord, ...(current.defects ?? [])],
+      auditTrail: nextAuditTrail,
+    };
 
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
       return {
-        ...current,
-        defects: existing
-          ? current.defects.map((defect) =>
-              defect.id === draft.id ? { ...defect, ...defectRecord } : defect,
-            )
-          : [defectRecord, ...(current.defects ?? [])],
-        auditTrail: nextAuditTrail,
+        ok: false,
+        error:
+          commitResult.error ??
+          "Problem report could not be saved to the live workspace. No confirmed change was made.",
       };
-    });
+    }
 
-    return result;
+    const confirmedDefect = (commitResult.snapshot?.defects ?? []).find(
+      (defect) => defect.id === defectRecord.id,
+    );
+
+    if (!confirmedDefect) {
+      return {
+        ok: false,
+        error: "Problem report could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: existing
+        ? "Reported problem updated in the vehicle history."
+        : "Problem added to the vehicle history.",
+    };
   };
 
-  const resolveDefect = (defectId, repairCost) => {
-    let result = { ok: false, error: "Unable to mark this problem as fixed." };
+  const resolveDefect = async (defectId, repairCost) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-      if (!["Owner", "Admin", "Manager"].includes(activeRole)) {
-        result = { ok: false, error: "Only management can mark problems as fixed." };
-        return current;
-      }
-      if (!hasModuleUpdateAccess(current, "fleet")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!["Owner", "Admin", "Manager"].includes(activeRole)) {
+      return { ok: false, error: "Only management can mark problems as fixed." };
+    }
+    if (!hasModuleUpdateAccess(current, "fleet")) {
+      return { ok: false, error: getModuleAccessErrorMessage("fleet") };
+    }
 
-      const target = (current.defects ?? []).find((defect) => defect.id === defectId);
-      const amount = Number(repairCost);
-      if (!target) {
-        result = { ok: false, error: "Problem not found." };
-        return current;
-      }
-      if (target.status === "resolved") {
-        result = { ok: false, error: "Fixed problems can no longer be changed." };
-        return current;
-      }
-      if (!Number.isFinite(amount) || amount < 0) {
-        result = { ok: false, error: "Enter the repair cost before marking this as fixed." };
-        return current;
-      }
+    const target = (current.defects ?? []).find((defect) => defect.id === defectId);
+    const amount = Number(repairCost);
+    if (!target) {
+      return { ok: false, error: "Problem not found." };
+    }
+    if (target.status === "resolved") {
+      return { ok: false, error: "Fixed problems can no longer be changed." };
+    }
+    if (!Number.isFinite(amount) || amount < 0) {
+      return { ok: false, error: "Enter the repair cost before marking this as fixed." };
+    }
 
-      const vehicle = current.vehicles.find((item) => item.id === target.vehicleId);
-      const expenseId = createRecordId("txn-exp");
-      const timestamp = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const expenseRecord = {
-        id: expenseId,
-        type: "expense",
-        expenseKind: "asset",
-        category: `Repair / ${target.category}`,
-        vehicleId: target.vehicleId,
-        vehicle: vehicle?.registration ?? "Vehicle",
-        amount,
-        cashExpense: true,
-        status: "verified",
+    const vehicle = current.vehicles.find((item) => item.id === target.vehicleId);
+    const expenseId = createRecordId("txn-exp");
+    const timestamp = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const expenseRecord = {
+      id: expenseId,
+      type: "expense",
+      expenseKind: "asset",
+      category: `Repair / ${target.category}`,
+      vehicleId: target.vehicleId,
+      vehicle: vehicle?.registration ?? "Vehicle",
+      amount,
+      cashExpense: true,
+      status: "verified",
+      timestamp,
+      createdAt: timestamp,
+      createdBy: actorId,
+      createdByRole: activeRole,
+      verifiedAt: timestamp,
+      verifiedBy: actorId,
+      verifiedByRole: activeRole,
+      depositId: null,
+    };
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
         timestamp,
-        createdAt: timestamp,
-        createdBy: actorId,
-        createdByRole: activeRole,
-        verifiedAt: timestamp,
-        verifiedBy: actorId,
-        verifiedByRole: activeRole,
-        depositId: null,
-      };
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp,
-          scope: "fleet",
-          action: "resolve",
-          entityType: "defect",
-          entityId: defectId,
-          title: `Problem fixed / ${vehicle?.registration ?? "Vehicle"}`,
-          detail: `${target.detail ?? target.issue} / ${formatMoney(amount)}`,
-        }),
-        buildCurrentAuditEvent(current, {
-          timestamp,
-          scope: "finance",
-          action: "create",
-          entityType: "expense",
-          entityId: expenseId,
-          title: `Repair cost added / ${vehicle?.registration ?? "Vehicle"}`,
-          detail: `${target.category} / ${formatMoney(amount)}`,
-        }),
-      ]);
+        scope: "fleet",
+        action: "resolve",
+        entityType: "defect",
+        entityId: defectId,
+        title: `Problem fixed / ${vehicle?.registration ?? "Vehicle"}`,
+        detail: `${target.detail ?? target.issue} / ${formatMoney(amount)}`,
+      }),
+      buildCurrentAuditEvent(current, {
+        timestamp,
+        scope: "finance",
+        action: "create",
+        entityType: "expense",
+        entityId: expenseId,
+        title: `Repair cost added / ${vehicle?.registration ?? "Vehicle"}`,
+        detail: `${target.category} / ${formatMoney(amount)}`,
+      }),
+    ]);
 
-      result = {
-        ok: true,
-        message: "Problem marked as fixed and the repair cost was added to expenses.",
-      };
+    const nextSnapshot = {
+      ...current,
+      defects: current.defects.map((defect) =>
+        defect.id === defectId
+          ? {
+              ...defect,
+              status: "resolved",
+              repairCost: amount,
+              resolvedAt: timestamp,
+              resolvedExpenseId: expenseId,
+              resolvedBy: actorId,
+              resolvedByRole: activeRole,
+              updatedAt: timestamp,
+              updatedBy: actorId,
+              updatedByRole: activeRole,
+            }
+          : defect,
+      ),
+      financeTransactions: [expenseRecord, ...(current.financeTransactions ?? [])],
+      auditTrail: nextAuditTrail,
+    };
 
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
       return {
-        ...current,
-        defects: current.defects.map((defect) =>
-          defect.id === defectId
-            ? {
-                ...defect,
-                status: "resolved",
-                repairCost: amount,
-                resolvedAt: timestamp,
-                resolvedExpenseId: expenseId,
-                resolvedBy: actorId,
-                resolvedByRole: activeRole,
-                updatedAt: timestamp,
-                updatedBy: actorId,
-                updatedByRole: activeRole,
-              }
-            : defect,
-        ),
-        financeTransactions: [expenseRecord, ...(current.financeTransactions ?? [])],
-        auditTrail: nextAuditTrail,
+        ok: false,
+        error:
+          commitResult.error ??
+          "Repair could not be saved to the live workspace. No confirmed change was made.",
       };
-    });
+    }
 
-    return result;
+    const confirmedDefect = (commitResult.snapshot?.defects ?? []).find(
+      (defect) => defect.id === defectId,
+    );
+    const confirmedExpense = (commitResult.snapshot?.financeTransactions ?? []).find(
+      (record) => record.id === expenseId,
+    );
+
+    if (!confirmedDefect || confirmedDefect.status !== "resolved" || !confirmedExpense) {
+      return {
+        ok: false,
+        error: "Repair could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: "Problem marked as fixed and the repair cost was added to expenses.",
+    };
   };
 
   const handleDriverShortcut = (shortcut) => {
@@ -7595,9 +7657,13 @@ function FleetPanel({
   const [vehicleDraft, setVehicleDraft] = useState(() =>
     createVehicleDraft(snapshot.vehicles[0], snapshot.profile.serviceIntervalKm),
   );
+  const [vehicleSaving, setVehicleSaving] = useState(false);
+  const [archivingVehicleId, setArchivingVehicleId] = useState(null);
   const [routeDraft, setRouteDraft] = useState(() => createRouteDraft());
   const [routeSaving, setRouteSaving] = useState(false);
   const [defectDraft, setDefectDraft] = useState(() => createDefectDraft(assignedVehicleId));
+  const [defectSaving, setDefectSaving] = useState(false);
+  const [resolvingDefectId, setResolvingDefectId] = useState(null);
   const [resolutionCosts, setResolutionCosts] = useState({});
   const vehicleFormRef = useRef(null);
   const routeFormRef = useRef(null);
@@ -7967,16 +8033,27 @@ function FleetPanel({
     });
   };
 
-  const handleVehicleSubmit = (event) => {
+  const handleVehicleSubmit = async (event) => {
     event.preventDefault();
+
+    if (vehicleSaving) {
+      return;
+    }
+
     const isNewVehicle = !vehicleDraft.id;
-    const response = onSaveVehicle(vehicleDraft);
-    pushFeedback(response);
-    if (response.ok) {
-      if (isNewVehicle && !isDriver) {
-        setActiveFilter("all");
+    setVehicleSaving(true);
+
+    try {
+      const response = await onSaveVehicle(vehicleDraft);
+      pushFeedback(response);
+      if (response.ok) {
+        if (isNewVehicle && !isDriver) {
+          setActiveFilter("all");
+        }
+        setSelectedVehicleId(response.vehicleId);
       }
-      setSelectedVehicleId(response.vehicleId);
+    } finally {
+      setVehicleSaving(false);
     }
   };
 
@@ -8038,17 +8115,43 @@ function FleetPanel({
     vehicleProfileRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const handleDefectSubmit = (event) => {
+  const handleArchiveVehicle = async (vehicleId) => {
+    if (archivingVehicleId) {
+      return;
+    }
+
+    setArchivingVehicleId(vehicleId);
+
+    try {
+      const response = await onArchiveVehicle(vehicleId);
+      pushFeedback(response);
+    } finally {
+      setArchivingVehicleId(null);
+    }
+  };
+
+  const handleDefectSubmit = async (event) => {
     event.preventDefault();
-    const response = onLogDefect({
-      ...defectDraft,
-      vehicleId: isDriver ? selectedVehicle?.id ?? assignedVehicleId : defectDraft.vehicleId,
-    });
-    pushFeedback(response);
-    if (response.ok) {
-      setDefectDraft(
-        createDefectDraft(isDriver ? selectedVehicle?.id ?? assignedVehicleId : selectedVehicle?.id),
-      );
+
+    if (defectSaving) {
+      return;
+    }
+
+    setDefectSaving(true);
+
+    try {
+      const response = await onLogDefect({
+        ...defectDraft,
+        vehicleId: isDriver ? selectedVehicle?.id ?? assignedVehicleId : defectDraft.vehicleId,
+      });
+      pushFeedback(response);
+      if (response.ok) {
+        setDefectDraft(
+          createDefectDraft(isDriver ? selectedVehicle?.id ?? assignedVehicleId : selectedVehicle?.id),
+        );
+      }
+    } finally {
+      setDefectSaving(false);
     }
   };
 
@@ -8064,13 +8167,26 @@ function FleetPanel({
     defectFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const handleResolve = (defectId) => {
-    pushFeedback(onResolveDefect(defectId, resolutionCosts[defectId]));
-    setResolutionCosts((current) => {
-      const next = { ...current };
-      delete next[defectId];
-      return next;
-    });
+  const handleResolve = async (defectId) => {
+    if (resolvingDefectId) {
+      return;
+    }
+
+    setResolvingDefectId(defectId);
+
+    try {
+      const response = await onResolveDefect(defectId, resolutionCosts[defectId]);
+      pushFeedback(response);
+      if (response?.ok) {
+        setResolutionCosts((current) => {
+          const next = { ...current };
+          delete next[defectId];
+          return next;
+        });
+      }
+    } finally {
+      setResolvingDefectId(null);
+    }
   };
 
   return (
@@ -8574,14 +8690,14 @@ function FleetPanel({
                     <button
                       type="submit"
                       className="action-button primary"
-                      disabled={!canEditFleetUpdates}
+                      disabled={!canEditFleetUpdates || vehicleSaving}
                     >
-                      {vehicleDraft.id ? "Save vehicle" : "Create vehicle"}
+                      {vehicleSaving ? "Saving..." : vehicleDraft.id ? "Save vehicle" : "Create vehicle"}
                     </button>
                     <button
                       type="button"
                       className="action-button"
-                      disabled={!canEditFleetUpdates}
+                      disabled={!canEditFleetUpdates || vehicleSaving}
                       onClick={handleAddVehicle}
                     >
                       Add vehicle
@@ -8593,9 +8709,10 @@ function FleetPanel({
                       <button
                         type="button"
                         className="record-button danger"
-                        onClick={() => pushFeedback(onArchiveVehicle(selectedVehicle.id))}
+                        disabled={archivingVehicleId === selectedVehicle.id}
+                        onClick={() => handleArchiveVehicle(selectedVehicle.id)}
                       >
-                        Archive vehicle
+                        {archivingVehicleId === selectedVehicle.id ? "Archiving..." : "Archive vehicle"}
                       </button>
                       )}
                   </div>
@@ -9181,14 +9298,19 @@ function FleetPanel({
                   <button
                     type="submit"
                     className="action-button primary"
-                    disabled={PRIVILEGED_ROLES.has(activeRole) && !canEditFleetUpdates}
+                    disabled={(PRIVILEGED_ROLES.has(activeRole) && !canEditFleetUpdates) || defectSaving}
                   >
-                    {defectDraft.id ? "Update problem" : "Report problem"}
+                    {defectSaving
+                      ? "Saving..."
+                      : defectDraft.id
+                        ? "Update problem"
+                        : "Report problem"}
                   </button>
                   {defectDraft.id && (
                     <button
                       type="button"
                       className="action-button"
+                      disabled={defectSaving}
                       onClick={() =>
                         setDefectDraft(createDefectDraft(isDriver ? assignedVehicleId : selectedVehicle?.id))
                       }
@@ -9247,9 +9369,10 @@ function FleetPanel({
                           <button
                             type="button"
                             className="action-button primary"
+                            disabled={resolvingDefectId === defect.id}
                             onClick={() => handleResolve(defect.id)}
                           >
-                            Mark as fixed
+                            {resolvingDefectId === defect.id ? "Saving..." : "Mark as fixed"}
                           </button>
                         </div>
                       ) : (

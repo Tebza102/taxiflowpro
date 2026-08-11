@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "postbuild": "node scripts/_preview-selftest.mjs",
     "preview": "vite preview",
     "test:sync-guards": "node tests/liveSyncGuards.test.mjs",
     "dev:daily-log-check": "node scripts/daily-log-regression.mjs",

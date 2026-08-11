@@ -2298,84 +2298,99 @@ function App() {
     };
   };
 
-  const resolvePasswordResetRequest = (requestId) => {
-    let result = { ok: false, error: "Unable to close this password reset request." };
+  const resolvePasswordResetRequest = async (requestId) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!PASSWORD_RESET_ROLES.has(activeRole)) {
+      return { ok: false, error: "Only management can close password reset requests." };
+    }
 
-      if (!PASSWORD_RESET_ROLES.has(activeRole)) {
-        result = { ok: false, error: "Only management can close password reset requests." };
-        return current;
-      }
+    const targetRequest =
+      (current.passwordResetRequests ?? []).find((request) => request.id === requestId) ?? null;
 
-      const targetRequest =
-        (current.passwordResetRequests ?? []).find((request) => request.id === requestId) ?? null;
+    if (!targetRequest) {
+      return { ok: false, error: "Password reset request not found." };
+    }
 
-      if (!targetRequest) {
-        result = { ok: false, error: "Password reset request not found." };
-        return current;
-      }
+    if (String(targetRequest.status ?? "pending").trim().toLowerCase() === "resolved") {
+      return { ok: false, error: "This password reset request is already marked as handled." };
+    }
 
-      if (String(targetRequest.status ?? "pending").trim().toLowerCase() === "resolved") {
-        result = { ok: false, error: "This password reset request is already marked as handled." };
-        return current;
-      }
+    const timestamp = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const nextPasswordResetRequests = (current.passwordResetRequests ?? []).map((request) =>
+      request.id === requestId
+        ? {
+            ...request,
+            status: "resolved",
+            notificationStatus: "sent",
+            notificationSentAt:
+              request.notificationSentAt ?? request.requestedAt ?? timestamp,
+            resolvedAt: timestamp,
+            resolvedBy: actorId,
+            resolvedByRole: activeRole,
+          }
+        : request,
+    );
+    const nextEmailOutbox = (current.emailOutbox ?? []).map((entry) =>
+      entry.relatedRequestId === requestId &&
+      String(entry.status ?? "queued").trim().toLowerCase() === "queued"
+        ? {
+            ...entry,
+            status: "actioned",
+            actionedAt: timestamp,
+            actionedBy: actorId,
+          }
+        : entry,
+    );
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp,
+        scope: "system",
+        action: "update",
+        entityType: "password-reset",
+        entityId: requestId,
+        title: `Password reset handled / ${targetRequest.email}`,
+        detail: "Management confirmed the password reset request was handled.",
+      }),
+    ]);
 
-      const timestamp = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const nextPasswordResetRequests = (current.passwordResetRequests ?? []).map((request) =>
-        request.id === requestId
-          ? {
-              ...request,
-              status: "resolved",
-              notificationStatus: "sent",
-              notificationSentAt:
-                request.notificationSentAt ?? request.requestedAt ?? timestamp,
-              resolvedAt: timestamp,
-              resolvedBy: actorId,
-              resolvedByRole: activeRole,
-            }
-          : request,
-      );
-      const nextEmailOutbox = (current.emailOutbox ?? []).map((entry) =>
-        entry.relatedRequestId === requestId &&
-        String(entry.status ?? "queued").trim().toLowerCase() === "queued"
-          ? {
-              ...entry,
-              status: "actioned",
-              actionedAt: timestamp,
-              actionedBy: actorId,
-            }
-          : entry,
-      );
+    const nextSnapshot = {
+      ...current,
+      passwordResetRequests: nextPasswordResetRequests,
+      emailOutbox: nextEmailOutbox,
+      auditTrail: nextAuditTrail,
+    };
 
-      result = {
-        ok: true,
-        message: `Password reset request marked as handled for ${targetRequest.email}.`,
-      };
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
 
+    if (!commitResult.ok) {
       return {
-        ...current,
-        passwordResetRequests: nextPasswordResetRequests,
-        emailOutbox: nextEmailOutbox,
-        auditTrail: appendAuditTrail(current.auditTrail, [
-          buildCurrentAuditEvent(current, {
-            timestamp,
-            scope: "system",
-            action: "update",
-            entityType: "password-reset",
-            entityId: requestId,
-            title: `Password reset handled / ${targetRequest.email}`,
-            detail: "Management confirmed the password reset request was handled.",
-          }),
-        ]),
+        ok: false,
+        error:
+          commitResult.error ??
+          "Could not be saved to the live workspace. No confirmed change was made.",
       };
-    });
+    }
 
-    return result;
+    const confirmedRequest = (commitResult.snapshot?.passwordResetRequests ?? []).find(
+      (request) => request.id === requestId,
+    );
+
+    if (!confirmedRequest || confirmedRequest.status !== "resolved") {
+      return {
+        ok: false,
+        error: "Could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: `Password reset request marked as handled for ${targetRequest.email}.`,
+    };
   };
 
   const selectDriverVehicle = (vehicleId) => {
@@ -9768,6 +9783,7 @@ function SettingsPanel({
   const [feedback, setFeedback] = useState(null);
   const [factoryResetPassword, setFactoryResetPassword] = useState("");
   const [factoryResetFeedback, setFactoryResetFeedback] = useState(null);
+  const [resolvingRequestId, setResolvingRequestId] = useState(null);
   const isCreatingUser = !draft.id;
 
   useEffect(() => {
@@ -9888,6 +9904,20 @@ function SettingsPanel({
       tone: response?.ok ? "success" : "danger",
       message: response?.message ?? response?.error,
     });
+  };
+
+  const handleResolvePasswordResetRequest = async (requestId) => {
+    if (resolvingRequestId) {
+      return;
+    }
+
+    setResolvingRequestId(requestId);
+
+    try {
+      pushFeedback(await onResolvePasswordResetRequest(requestId));
+    } finally {
+      setResolvingRequestId(null);
+    }
   };
 
   const handleRoleChange = (nextRole) => {
@@ -10383,9 +10413,10 @@ function SettingsPanel({
                       <button
                         type="button"
                         className="finance-sub-pill"
-                        onClick={() => pushFeedback(onResolvePasswordResetRequest(request.id))}
+                        disabled={resolvingRequestId === request.id}
+                        onClick={() => handleResolvePasswordResetRequest(request.id)}
                       >
-                        Mark handled
+                        {resolvingRequestId === request.id ? "Saving..." : "Mark handled"}
                       </button>
                     )}
                   </div>

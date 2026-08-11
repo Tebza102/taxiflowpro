@@ -253,6 +253,16 @@ function App() {
   const [factoryResetSubmitting, setFactoryResetSubmitting] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [authRecoveryFeedback, setAuthRecoveryFeedback] = useState(null);
+  const [passwordResetRequestSubmitting, setPasswordResetRequestSubmitting] = useState(false);
+  // Entered via the Supabase "PASSWORD_RECOVERY" auth event (the user followed a
+  // real recovery email link). Takes over the screen ahead of the normal
+  // authSession/authIdentity routing below - a recovery session must never be
+  // treated as a normal sign-in and dropped straight into the app.
+  const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(false);
+  const [passwordRecoverySubmitting, setPasswordRecoverySubmitting] = useState(false);
+  const [passwordRecoveryFeedback, setPasswordRecoveryFeedback] = useState(null);
+  const [showRecoveryPassword, setShowRecoveryPassword] = useState(false);
+  const [recoveryDraft, setRecoveryDraft] = useState({ newPassword: "", confirmPassword: "" });
   const [liveSyncBusy, setLiveSyncBusy] = useState(false);
   const [lastSuccessfulSyncAt, setLastSuccessfulSyncAt] = useState(null);
   const liveSyncOperationCountRef = useRef(0);
@@ -386,7 +396,7 @@ function App() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((authEvent, session) => {
       if (!isMounted) {
         return;
       }
@@ -397,6 +407,13 @@ function App() {
       setAuthSession(session ?? null);
       setAuthError(null);
       setAuthLoading(false);
+
+      // A real Supabase password-recovery link was followed - take over the
+      // screen with the password-update form instead of treating this like a
+      // normal sign-in (see the passwordRecoveryMode render branch below).
+      if (authEvent === "PASSWORD_RECOVERY") {
+        setPasswordRecoveryMode(true);
+      }
     });
 
     return () => {
@@ -1250,7 +1267,7 @@ function App() {
     setAuthSubmitting(false);
   };
 
-  const handlePasswordResetRequest = () => {
+  const handlePasswordResetRequest = async () => {
     const normalizedEmail = normalizeEmailAddress(authDraft.email);
 
     if (!normalizedEmail) {
@@ -1269,6 +1286,53 @@ function App() {
       return;
     }
 
+    // Live Supabase Auth: real, self-service password recovery via Supabase's
+    // native flow. resetPasswordForEmail requires no authenticated session to
+    // call, and - deliberately - never confirms whether the email maps to a
+    // real account, so the response shown here must stay neutral regardless of
+    // the outcome (do not add a layer that leaks account existence back).
+    if (authEnabled) {
+      if (passwordResetRequestSubmitting) {
+        return;
+      }
+
+      setPasswordResetRequestSubmitting(true);
+      setAuthError(null);
+
+      try {
+        const redirectTo = getSafeWindow()?.location?.origin || undefined;
+        const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+          redirectTo,
+        });
+
+        setAuthRecoveryFeedback({
+          tone: error ? "danger" : "success",
+          message: error
+            ? "Unable to send the recovery email right now. Try again in a moment."
+            : "If the account can receive password recovery email, check your inbox for the reset link.",
+        });
+
+        if (!error) {
+          setAuthDraft((current) => ({
+            ...current,
+            password: "",
+          }));
+        }
+      } catch {
+        setAuthRecoveryFeedback({
+          tone: "danger",
+          message: "Unable to send the recovery email right now. Try again in a moment.",
+        });
+      } finally {
+        setPasswordResetRequestSubmitting(false);
+      }
+
+      return;
+    }
+
+    // Local/mock auth: there is no real Supabase Auth session to send recovery
+    // email through, so this keeps the existing in-app "management will reset
+    // it" notice flow unchanged.
     let response = { ok: false, error: "Unable to send the password reset request." };
 
     setSnapshot((current) => {
@@ -1426,6 +1490,69 @@ function App() {
     });
   };
 
+  // Only reachable once passwordRecoveryMode is true (a real Supabase
+  // PASSWORD_RECOVERY event fired - see the onAuthStateChange listener above),
+  // which means the recovery session Supabase established is already active.
+  // updateUser rotates that session's password directly; it is never written to
+  // workspace_snapshots (password lives only in Supabase Auth, matching the
+  // existing account-lifecycle rule server-side).
+  const handlePasswordRecoverySubmit = async (event) => {
+    event.preventDefault();
+
+    if (passwordRecoverySubmitting) {
+      return;
+    }
+
+    const nextPassword = recoveryDraft.newPassword;
+    const confirmPassword = recoveryDraft.confirmPassword;
+
+    if (!nextPassword || nextPassword.length < MIN_LIVE_LOGIN_PASSWORD_LENGTH) {
+      setPasswordRecoveryFeedback({
+        tone: "danger",
+        message: `Password must be at least ${MIN_LIVE_LOGIN_PASSWORD_LENGTH} characters long.`,
+      });
+      return;
+    }
+    if (nextPassword !== confirmPassword) {
+      setPasswordRecoveryFeedback({ tone: "danger", message: "Passwords do not match." });
+      return;
+    }
+
+    setPasswordRecoverySubmitting(true);
+    setPasswordRecoveryFeedback(null);
+
+    try {
+      const { error } = await supabase.auth.updateUser({ password: nextPassword });
+
+      if (error) {
+        setPasswordRecoveryFeedback({
+          tone: "danger",
+          message: error.message ?? "Unable to update the password right now.",
+        });
+        return;
+      }
+
+      // Return to normal sign-in with the new password rather than continuing
+      // as an authenticated session on the recovered account.
+      await supabase.auth.signOut();
+      setPasswordRecoveryMode(false);
+      setRecoveryDraft({ newPassword: "", confirmPassword: "" });
+      setShowRecoveryPassword(false);
+      setAuthSession(null);
+      setAuthRecoveryFeedback({
+        tone: "success",
+        message: "Password updated. Sign in with your new password.",
+      });
+    } catch (error) {
+      setPasswordRecoveryFeedback({
+        tone: "danger",
+        message: error?.message ?? "Unable to update the password right now.",
+      });
+    } finally {
+      setPasswordRecoverySubmitting(false);
+    }
+  };
+
   const handleSignOut = async () => {
     setAuthSubmitting(true);
 
@@ -1475,6 +1602,27 @@ function App() {
     setAuthSubmitting(false);
   };
 
+  if (passwordRecoveryMode) {
+    return (
+      <PasswordRecoveryShell
+        fleetName={currentSnapshot.profile.fleetName}
+        newPassword={recoveryDraft.newPassword}
+        confirmPassword={recoveryDraft.confirmPassword}
+        showPassword={showRecoveryPassword}
+        submitting={passwordRecoverySubmitting}
+        feedback={passwordRecoveryFeedback}
+        onChangeNewPassword={(value) =>
+          setRecoveryDraft((current) => ({ ...current, newPassword: value }))
+        }
+        onChangeConfirmPassword={(value) =>
+          setRecoveryDraft((current) => ({ ...current, confirmPassword: value }))
+        }
+        onToggleShowPassword={() => setShowRecoveryPassword((current) => !current)}
+        onSubmit={handlePasswordRecoverySubmit}
+      />
+    );
+  }
+
   if (!authSession) {
     return (
       <SignInShell
@@ -1488,6 +1636,7 @@ function App() {
         onSubmit={handleAuthSubmit}
         password={authDraft.password}
         passwordResetFeedback={authRecoveryFeedback}
+        passwordResetSubmitting={passwordResetRequestSubmitting}
         submitting={authSubmitting}
       />
     );
@@ -12987,6 +13136,7 @@ function SignInShell({
   onRequestPasswordReset,
   onSubmit,
   passwordResetFeedback,
+  passwordResetSubmitting,
 }) {
   const [showForgotPasswordHelp, setShowForgotPasswordHelp] = useState(false);
 
@@ -13054,18 +13204,18 @@ function SignInShell({
                 </div>
               </div>
               <p className="backend-mode-note">
-                Management will reset the password for this account. TaxiFlow sends both the
-                in-app management notice in Settings and the management email queue, and a repeat
-                request rebuilds any missing channel.
+                {isLocalAuth
+                  ? "Management will reset the password for this account. TaxiFlow sends both the in-app management notice in Settings and the management email queue, and a repeat request rebuilds any missing channel."
+                  : "Enter your email above, then request a reset. If the account can receive password recovery email, TaxiFlow will send a secure link to set a new password."}
               </p>
               <div className="backend-mode-actions">
                 <button
                   type="button"
                   className="action-button"
                   onClick={onRequestPasswordReset}
-                  disabled={submitting || !String(email ?? "").trim()}
+                  disabled={submitting || passwordResetSubmitting || !String(email ?? "").trim()}
                 >
-                  Send reset request
+                  {passwordResetSubmitting ? "Sending..." : "Send reset request"}
                 </button>
               </div>
               <p
@@ -13073,7 +13223,9 @@ function SignInShell({
                 data-tone={passwordResetFeedback?.tone ?? "warning"}
               >
                 {passwordResetFeedback?.message ??
-                  "Only management can recreate TaxiFlow access. They will reset the password after TaxiFlow sends the in-app and email notices."}
+                  (isLocalAuth
+                    ? "Only management can recreate TaxiFlow access. They will reset the password after TaxiFlow sends the in-app and email notices."
+                    : "If the account can receive password recovery email, check your inbox for the reset link.")}
               </p>
             </div>
           )}
@@ -13082,6 +13234,73 @@ function SignInShell({
               (isLocalAuth
                 ? "Use the password assigned to your TaxiFlow account. Older local accounts still use the default TaxiFlow password."
                 : "Use the Supabase account issued for your TaxiFlow role. Access is routed by designation.")}
+          </p>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function PasswordRecoveryShell({
+  fleetName,
+  newPassword,
+  confirmPassword,
+  showPassword,
+  submitting,
+  feedback,
+  onChangeNewPassword,
+  onChangeConfirmPassword,
+  onToggleShowPassword,
+  onSubmit,
+}) {
+  return (
+    <div className="auth-shell">
+      <div className="auth-card">
+        <div className="brand-lockup auth-brand">
+          <img className="brand-logo auth-logo" src="/taxiflow-logo.png" alt="TaxiFlow logo" />
+        </div>
+        <div className="auth-copy">
+          <p className="eyebrow">Password recovery</p>
+          <h1>{fleetName}</h1>
+          <p>Set a new password for this account to finish recovery.</p>
+        </div>
+        <form className="auth-form" onSubmit={onSubmit}>
+          <label className="finance-field">
+            <span>New password</span>
+            <div className="finance-field-password">
+              <input
+                autoComplete="new-password"
+                type={showPassword ? "text" : "password"}
+                value={newPassword}
+                onChange={(event) => onChangeNewPassword(event.target.value)}
+              />
+              <button
+                type="button"
+                className="finance-field-password-toggle"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                onClick={onToggleShowPassword}
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </label>
+          <label className="finance-field">
+            <span>Confirm password</span>
+            <input
+              autoComplete="new-password"
+              type={showPassword ? "text" : "password"}
+              value={confirmPassword}
+              onChange={(event) => onChangeConfirmPassword(event.target.value)}
+            />
+          </label>
+          <div className="finance-form-actions">
+            <button type="submit" className="action-button primary" disabled={submitting}>
+              {submitting ? "Updating..." : "Update password"}
+            </button>
+          </div>
+          <p className="finance-form-note" data-tone={feedback?.tone ?? "info"}>
+            {feedback?.message ??
+              `Password must be at least ${MIN_LIVE_LOGIN_PASSWORD_LENGTH} characters long.`}
           </p>
         </form>
       </div>

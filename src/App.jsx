@@ -3977,104 +3977,99 @@ function App() {
     };
   };
 
-  const allocateDriverShift = (draft) => {
-    let result = { ok: false, error: "Unable to save the driver allocation." };
+  const allocateDriverShift = async (draft) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-      if (!PRIVILEGED_ROLES.has(activeRole)) {
-        result = { ok: false, error: "Only management can allocate drivers to vehicles." };
-        return current;
-      }
-      if (!hasModuleUpdateAccess(current, "drivers")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("drivers") };
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!PRIVILEGED_ROLES.has(activeRole)) {
+      return { ok: false, error: "Only management can allocate drivers to vehicles." };
+    }
+    if (!hasModuleUpdateAccess(current, "drivers")) {
+      return { ok: false, error: getModuleAccessErrorMessage("drivers") };
+    }
 
-      const derived = deriveSnapshot(current);
-      const driver = derived.drivers.find((item) => item.staffId === draft.staffId);
+    const derived = deriveSnapshot(current);
+    const driver = derived.drivers.find((item) => item.staffId === draft.staffId);
 
-      if (!driver) {
-        result = { ok: false, error: "Select a valid driver before saving the allocation." };
-        return current;
-      }
+    if (!driver) {
+      return { ok: false, error: "Select a valid driver before saving the allocation." };
+    }
 
-      const targetVehicle = draft.vehicleId
-        ? derived.vehicles.find((vehicle) => vehicle.id === draft.vehicleId)
+    // A driver may exist without a vehicle allocation - this only assigns one when
+    // draft.vehicleId is provided.
+    const targetVehicle = draft.vehicleId
+      ? derived.vehicles.find((vehicle) => vehicle.id === draft.vehicleId)
+      : null;
+
+    if (draft.vehicleId && !targetVehicle) {
+      return { ok: false, error: "Select a valid vehicle for the shift allocation." };
+    }
+    if (targetVehicle?.status === "archived") {
+      return { ok: false, error: "Archived vehicles cannot receive a driver allocation." };
+    }
+
+    const currentVehicle =
+      derived.vehicles.find((vehicle) => vehicle.assignedDriverId === driver.staffId) ?? null;
+    const displacedDriver =
+      targetVehicle?.assignedDriverId && targetVehicle.assignedDriverId !== driver.staffId
+        ? derived.drivers.find((item) => item.staffId === targetVehicle.assignedDriverId) ?? null
         : null;
 
-      if (draft.vehicleId && !targetVehicle) {
-        result = { ok: false, error: "Select a valid vehicle for the shift allocation." };
-        return current;
+    if ((currentVehicle?.id ?? "") === (targetVehicle?.id ?? "")) {
+      return {
+        ok: true,
+        message: targetVehicle
+          ? `${driver.name} is already assigned to ${targetVehicle.registration}.`
+          : `${driver.name} is already unassigned.`,
+        staffId: driver.staffId,
+        vehicleId: targetVehicle?.id ?? "",
+      };
+    }
+
+    const now = new Date().toISOString();
+    // Preserve the rules: exactly one current vehicle per driver, and reassigning a
+    // vehicle displaces whichever driver previously held it.
+    const nextVehicles = (current.vehicles ?? []).map((vehicle) => {
+      if (vehicle.id === targetVehicle?.id) {
+        return { ...vehicle, assignedDriverId: driver.staffId };
       }
-      if (targetVehicle?.status === "archived") {
-        result = { ok: false, error: "Archived vehicles cannot receive a driver allocation." };
-        return current;
+      if (vehicle.assignedDriverId === driver.staffId) {
+        return { ...vehicle, assignedDriverId: null };
       }
+      return vehicle;
+    });
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "drivers",
+        action: "update",
+        entityType: "allocation",
+        entityId: `${driver.staffId}:${targetVehicle?.id ?? "unassigned"}`,
+        title: `Shift allocation updated / ${driver.name}`,
+        detail: [
+          targetVehicle
+            ? `${targetVehicle.registration} / ${targetVehicle.route}`
+            : "Removed from vehicle",
+          currentVehicle && currentVehicle.id !== targetVehicle?.id
+            ? `Previous ${currentVehicle.registration}`
+            : null,
+          displacedDriver ? `${displacedDriver.name} removed from vehicle` : null,
+        ]
+          .filter(Boolean)
+          .join(" / "),
+      }),
+    ]);
+    const nextSnapshot = {
+      ...current,
+      vehicles: nextVehicles,
+      auditTrail: nextAuditTrail,
+    };
 
-      const currentVehicle =
-        derived.vehicles.find((vehicle) => vehicle.assignedDriverId === driver.staffId) ?? null;
-      const displacedDriver =
-        targetVehicle?.assignedDriverId && targetVehicle.assignedDriverId !== driver.staffId
-          ? derived.drivers.find((item) => item.staffId === targetVehicle.assignedDriverId) ?? null
-          : null;
-
-      if ((currentVehicle?.id ?? "") === (targetVehicle?.id ?? "")) {
-        result = {
-          ok: true,
-          message: targetVehicle
-            ? `${driver.name} is already assigned to ${targetVehicle.registration}.`
-            : `${driver.name} is already unassigned.`,
-          staffId: driver.staffId,
-          vehicleId: targetVehicle?.id ?? "",
-        };
-        return current;
-      }
-
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const nextVehicles = (current.vehicles ?? []).map((vehicle) => {
-        if (vehicle.id === targetVehicle?.id) {
-          return {
-            ...vehicle,
-            assignedDriverId: driver.staffId,
-          };
-        }
-
-        if (vehicle.assignedDriverId === driver.staffId) {
-          return {
-            ...vehicle,
-            assignedDriverId: null,
-          };
-        }
-
-        return vehicle;
-      });
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "drivers",
-          action: "update",
-          entityType: "allocation",
-          entityId: `${driver.staffId}:${targetVehicle?.id ?? "unassigned"}`,
-          title: `Shift allocation updated / ${driver.name}`,
-          detail: [
-            targetVehicle
-              ? `${targetVehicle.registration} / ${targetVehicle.route}`
-              : "Removed from vehicle",
-            currentVehicle && currentVehicle.id !== targetVehicle?.id
-              ? `Previous ${currentVehicle.registration}`
-              : null,
-            displacedDriver ? `${displacedDriver.name} removed from vehicle` : null,
-          ]
-            .filter(Boolean)
-            .join(" / "),
-        }),
-      ]);
-
-      result = {
+    if (effectiveBackendMode !== "live") {
+      setSnapshot(nextSnapshot);
+      return {
         ok: true,
         message: targetVehicle
           ? `${driver.name} assigned to ${targetVehicle.registration}.`
@@ -4082,214 +4077,292 @@ function App() {
         staffId: driver.staffId,
         vehicleId: targetVehicle?.id ?? "",
       };
+    }
 
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
       return {
-        ...current,
-        vehicles: nextVehicles,
-        auditTrail: nextAuditTrail,
+        ok: false,
+        error:
+          commitResult.error ??
+          "Driver allocation could not be saved to the live workspace. No confirmed change was made.",
       };
-    });
+    }
 
-    return result;
+    const confirmedVehicle = targetVehicle
+      ? (commitResult.snapshot?.vehicles ?? []).find(
+          (vehicle) => vehicle.id === targetVehicle.id && vehicle.assignedDriverId === driver.staffId,
+        )
+      : null;
+
+    if (targetVehicle && !confirmedVehicle) {
+      return {
+        ok: false,
+        error: "Driver allocation could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: targetVehicle
+        ? `${driver.name} assigned to ${targetVehicle.registration}.`
+        : `${driver.name} removed from the shift allocation.`,
+      staffId: driver.staffId,
+      vehicleId: targetVehicle?.id ?? "",
+    };
   };
 
-  const saveDriver = (draft) => {
-    let result = { ok: false, error: "Unable to save the driver profile." };
+  const saveDriver = async (draft) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-      if (!PRIVILEGED_ROLES.has(activeRole)) {
-        result = { ok: false, error: "Only management can add drivers." };
-        return current;
-      }
-      if (!hasModuleUpdateAccess(current, "drivers")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("drivers") };
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!PRIVILEGED_ROLES.has(activeRole)) {
+      return { ok: false, error: "Only management can add drivers." };
+    }
+    if (!hasModuleUpdateAccess(current, "drivers")) {
+      return { ok: false, error: getModuleAccessErrorMessage("drivers") };
+    }
 
-      const driverName = String(draft.name ?? "").trim();
-      if (!driverName) {
-        result = { ok: false, error: "Driver name is required." };
-        return current;
-      }
+    const driverName = String(draft.name ?? "").trim();
+    if (!driverName) {
+      return { ok: false, error: "Driver name is required." };
+    }
 
-      const email = normalizeEmailAddress(draft.email);
-      if (!email) {
-        result = { ok: false, error: "Driver email is required." };
-        return current;
-      }
-      if (!isValidEmailAddress(email)) {
-        result = { ok: false, error: "Enter a valid driver email address." };
-        return current;
-      }
+    const email = normalizeEmailAddress(draft.email);
+    if (!email) {
+      return { ok: false, error: "Driver email is required." };
+    }
+    if (!isValidEmailAddress(email)) {
+      return { ok: false, error: "Enter a valid driver email address." };
+    }
 
-      const routeCatalog = collectRouteMasterRecords(current);
-      const selectedRouteIds = Array.from(
-        new Set(
-          (Array.isArray(draft.routeIds) ? draft.routeIds : [])
-            .map((value) => String(value ?? "").trim())
-            .filter(Boolean),
-        ),
-      );
-      const selectedRoutes = selectedRouteIds
-        .map((routeId) => routeCatalog.find((route) => route.id === routeId) ?? null)
-        .filter(Boolean);
+    // Business rule: a Route is optional. A driver must be creatable before any
+    // Route exists, and remain valid with no route selected - assignment can
+    // happen later from the shift allocation panel.
+    const routeCatalog = collectRouteMasterRecords(current);
+    const selectedRouteIds = Array.from(
+      new Set(
+        (Array.isArray(draft.routeIds) ? draft.routeIds : [])
+          .map((value) => String(value ?? "").trim())
+          .filter(Boolean),
+      ),
+    );
+    const selectedRoutes = selectedRouteIds
+      .map((routeId) => routeCatalog.find((route) => route.id === routeId) ?? null)
+      .filter(Boolean);
 
-      if (selectedRoutes.length === 0) {
-        result = {
-          ok: false,
-          error:
-            routeCatalog.length > 0
-              ? "Select at least one route for this driver."
-              : "Add a route in Fleet & Operations before saving this driver.",
-        };
-        return current;
-      }
+    const currentUsers = getAppUsers(current);
+    const existingDriver =
+      (current.drivers ?? []).find(
+        (driver) => driver.staffId === String(draft.staffId ?? "").trim(),
+      ) ??
+      (current.drivers ?? []).find(
+        (driver) => normalizeEmailAddress(driver.email) === email,
+      ) ??
+      null;
+    const existingUserByEmail =
+      currentUsers.find((user) => normalizeEmailAddress(user.email) === email) ?? null;
+    const linkedDriverByUserEmail =
+      !existingDriver && existingUserByEmail?.staffId
+        ? (current.drivers ?? []).find((driver) => driver.staffId === existingUserByEmail.staffId) ??
+          null
+        : null;
+    const resolvedExistingDriver = existingDriver ?? linkedDriverByUserEmail;
+    const existingUser =
+      currentUsers.find(
+        (user) =>
+          user.staffId === resolvedExistingDriver?.staffId ||
+          normalizeEmailAddress(user.email) === normalizeEmailAddress(resolvedExistingDriver?.email),
+      ) ??
+      existingUserByEmail ??
+      null;
 
-      const existingDriver =
-        (current.drivers ?? []).find(
-          (driver) => driver.staffId === String(draft.staffId ?? "").trim(),
-        ) ??
-        (current.drivers ?? []).find(
-          (driver) => normalizeEmailAddress(driver.email) === email,
-        ) ??
-        null;
-      const currentUsers = getAppUsers(current);
-      const existingUserByEmail =
-        currentUsers.find((user) => normalizeEmailAddress(user.email) === email) ?? null;
-      const linkedDriverByUserEmail =
-        !existingDriver && existingUserByEmail?.staffId
-          ? (current.drivers ?? []).find((driver) => driver.staffId === existingUserByEmail.staffId) ??
-            null
-          : null;
-      const resolvedExistingDriver = existingDriver ?? linkedDriverByUserEmail;
-      const existingUser =
-        currentUsers.find(
-          (user) =>
-            user.staffId === resolvedExistingDriver?.staffId ||
-            normalizeEmailAddress(user.email) === normalizeEmailAddress(resolvedExistingDriver?.email),
-        ) ??
-        existingUserByEmail ??
-        null;
+    if (
+      currentUsers.some(
+        (user) =>
+          normalizeEmailAddress(user.email) === email &&
+          user.staffId !== resolvedExistingDriver?.staffId,
+      )
+    ) {
+      return { ok: false, error: "This email is already linked to another TaxiFlow account." };
+    }
 
-      if (
-        currentUsers.some(
-          (user) =>
-            normalizeEmailAddress(user.email) === email &&
-            user.staffId !== resolvedExistingDriver?.staffId,
+    // Driver PROFILE and TaxiFlow LOGIN are separate concerns: a password is only
+    // relevant when login access is explicitly being requested (this field being
+    // filled in), never a requirement of the profile itself.
+    const requestedPassword = String(draft.accessPassword ?? "").trim();
+    if (requestedPassword && requestedPassword.length < 6) {
+      return { ok: false, error: "Driver password must be at least 6 characters long." };
+    }
+
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const routeNames = selectedRoutes.map((route) => route.name);
+    const primaryRoute = routeNames[0] ?? "";
+    const nextDriver = {
+      ...resolvedExistingDriver,
+      staffId: resolvedExistingDriver?.staffId ?? (draft.staffId?.trim() || createRecordId("drv")),
+      name: driverName,
+      email,
+      route: primaryRoute,
+      routeIds: selectedRouteIds,
+      routeNames,
+      primaryRouteId: selectedRouteIds[0] ?? null,
+      shiftStatus: draft.shiftStatus ?? "Ready for dispatch",
+      avgShiftRevenue: resolvedExistingDriver?.avgShiftRevenue ?? 0,
+      cashAccuracy: resolvedExistingDriver?.cashAccuracy ?? 100,
+      licenseNumber: String(draft.licenseNumber ?? "").trim() || null,
+      licenseCode: String(draft.licenseCode ?? "").trim().toUpperCase() || null,
+      licenseExpiryDate: draft.licenseExpiryDate || null,
+      prdpNumber: String(draft.prdpNumber ?? "").trim() || null,
+      prdpExpiryDate: draft.prdpExpiryDate || null,
+      role: "Driver",
+      createdAt: resolvedExistingDriver?.createdAt ?? now,
+      createdBy: resolvedExistingDriver?.createdBy ?? actorId,
+      createdByRole: resolvedExistingDriver?.createdByRole ?? activeRole,
+      updatedAt: resolvedExistingDriver ? now : null,
+      updatedBy: resolvedExistingDriver ? actorId : null,
+      updatedByRole: resolvedExistingDriver ? activeRole : null,
+    };
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "drivers",
+        action: existingDriver ? "update" : "create",
+        entityType: "driver",
+        entityId: nextDriver.staffId,
+        title: `Driver ${existingDriver ? "updated" : "created"} / ${nextDriver.name}`,
+        detail: `${nextDriver.staffId} / ${getDriverRouteSummary(nextDriver)} / ${nextDriver.email}`,
+      }),
+    ]);
+    const nextDrivers = resolvedExistingDriver
+      ? (current.drivers ?? []).map((driver) =>
+          driver.staffId === resolvedExistingDriver.staffId ? nextDriver : driver,
         )
-      ) {
-        result = {
-          ok: false,
-          error: "This email is already linked to another TaxiFlow account.",
-        };
-        return current;
-      }
+      : [nextDriver, ...(current.drivers ?? [])];
 
-      const accessPassword = String(draft.accessPassword ?? "").trim();
-      if (!resolvedExistingDriver && !accessPassword) {
-        result = { ok: false, error: "Create a password for this driver before saving." };
-        return current;
-      }
-      if (accessPassword && accessPassword.length < 6) {
-        result = {
-          ok: false,
-          error: "Driver password must be at least 6 characters long.",
-        };
-        return current;
-      }
-
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const routeNames = selectedRoutes.map((route) => route.name);
-      const primaryRoute = routeNames[0] ?? "";
-      const nextDriver = {
-        ...resolvedExistingDriver,
-        staffId: resolvedExistingDriver?.staffId ?? (draft.staffId?.trim() || createRecordId("drv")),
-        name: driverName,
-        email,
-        route: primaryRoute,
-        routeIds: selectedRouteIds,
-        routeNames,
-        primaryRouteId: selectedRouteIds[0] ?? null,
-        shiftStatus: draft.shiftStatus ?? "Ready for dispatch",
-        avgShiftRevenue: resolvedExistingDriver?.avgShiftRevenue ?? 0,
-        cashAccuracy: resolvedExistingDriver?.cashAccuracy ?? 100,
-        licenseNumber: String(draft.licenseNumber ?? "").trim() || null,
-        licenseCode: String(draft.licenseCode ?? "").trim().toUpperCase() || null,
-        licenseExpiryDate: draft.licenseExpiryDate || null,
-        prdpNumber: String(draft.prdpNumber ?? "").trim() || null,
-        prdpExpiryDate: draft.prdpExpiryDate || null,
-        accessPassword: accessPassword || resolvedExistingDriver?.accessPassword || null,
-        role: "Driver",
-        createdAt: resolvedExistingDriver?.createdAt ?? now,
-        createdBy: resolvedExistingDriver?.createdBy ?? actorId,
-        createdByRole: resolvedExistingDriver?.createdByRole ?? activeRole,
-        updatedAt: resolvedExistingDriver ? now : null,
-        updatedBy: resolvedExistingDriver ? actorId : null,
-        updatedByRole: resolvedExistingDriver ? activeRole : null,
-      };
-      const nextDriverUser = normalizeAppUser({
-        ...existingUser,
-        email,
-        name: nextDriver.name,
-        role: "Driver",
-        actorId: existingUser?.actorId ?? nextDriver.staffId,
-        staffId: nextDriver.staffId,
-        accessPassword: nextDriver.accessPassword,
-        createdAt: existingUser?.createdAt ?? nextDriver.createdAt,
-        createdBy: existingUser?.createdBy ?? nextDriver.createdBy,
-        createdByRole: existingUser?.createdByRole ?? nextDriver.createdByRole,
-        updatedAt: existingUser ? now : null,
-        updatedBy: existingUser ? actorId : null,
-        updatedByRole: existingUser ? activeRole : null,
-      });
-      const nextDrivers = resolvedExistingDriver
-        ? (current.drivers ?? []).map((driver) =>
-            driver.staffId === resolvedExistingDriver.staffId ? nextDriver : driver,
-          )
-        : [nextDriver, ...(current.drivers ?? [])];
-      const nextUsers = sortAppUsers(
-        existingUser
-          ? currentUsers.map((user) =>
-              user.staffId === nextDriver.staffId ||
-              normalizeEmailAddress(user.email) === normalizeEmailAddress(existingUser.email)
-                ? nextDriverUser
-                : normalizeAppUser(user),
-            )
-          : [...currentUsers, nextDriverUser],
-      );
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "drivers",
-          action: existingDriver ? "update" : "create",
-          entityType: "driver",
-          entityId: nextDriver.staffId,
-          title: `Driver ${existingDriver ? "updated" : "created"} / ${nextDriver.name}`,
-          detail: `${nextDriver.staffId} / ${getDriverRouteSummary(nextDriver)} / ${nextDriver.email}`,
-        }),
-      ]);
-
-      result = {
-        ok: true,
-        message: resolvedExistingDriver
-          ? `${nextDriver.name} updated in the driver roster.`
-          : `${nextDriver.name} added to the driver roster.`,
-        staffId: nextDriver.staffId,
-      };
-
-      return {
+    if (effectiveBackendMode === "live") {
+      // Live mode: the driver PROFILE never carries a password (it is stripped at
+      // the persistence boundary regardless, but it must never be constructed
+      // here in the first place). Login access, if requested, is a separate,
+      // explicit call to the real Auth + appUsers lifecycle - never silently
+      // implied by saving a profile.
+      const nextSnapshot = {
         ...current,
         drivers: nextDrivers,
-        appUsers: nextUsers,
         auditTrail: nextAuditTrail,
       };
+
+      const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+      if (!commitResult.ok) {
+        return {
+          ok: false,
+          error:
+            commitResult.error ??
+            "Driver profile could not be saved to the live workspace. No confirmed change was made.",
+        };
+      }
+
+      const confirmedDriver = (commitResult.snapshot?.drivers ?? []).find(
+        (driver) => driver.staffId === nextDriver.staffId,
+      );
+
+      if (!confirmedDriver) {
+        return {
+          ok: false,
+          error: "Driver profile could not be saved to the live workspace. No confirmed change was made.",
+        };
+      }
+
+      const profileMessage = resolvedExistingDriver
+        ? `${confirmedDriver.name} updated in the driver roster.`
+        : `${confirmedDriver.name} added to the driver roster.`;
+
+      if (!requestedPassword) {
+        return { ok: true, message: profileMessage, staffId: confirmedDriver.staffId };
+      }
+
+      const lifecycleResult = await callUserLifecycleApi({
+        action: existingUser ? "update" : "create",
+        email,
+        name: confirmedDriver.name,
+        role: "Driver",
+        password: requestedPassword,
+        staffId: confirmedDriver.staffId,
+      });
+
+      if (!lifecycleResult.ok) {
+        return {
+          ok: true,
+          message: `${profileMessage} Driver profile saved, but app login was not created: ${lifecycleResult.error}`,
+          staffId: confirmedDriver.staffId,
+        };
+      }
+
+      await reloadCanonicalLiveSnapshot();
+
+      return {
+        ok: true,
+        message: `${profileMessage} TaxiFlow login access confirmed.`,
+        staffId: confirmedDriver.staffId,
+      };
+    }
+
+    // Mock/demo mode: unchanged local-only behaviour, including local sign-in,
+    // which does need a password on first creation since there is no real Auth
+    // system backing it in this mode.
+    if (!resolvedExistingDriver && !requestedPassword) {
+      return { ok: false, error: "Create a password for this driver before saving." };
+    }
+
+    const nextDriverLocal = { ...nextDriver, accessPassword: requestedPassword || resolvedExistingDriver?.accessPassword || null };
+    const nextDriversLocal = resolvedExistingDriver
+      ? nextDrivers.map((driver) => (driver.staffId === nextDriverLocal.staffId ? nextDriverLocal : driver))
+      : [nextDriverLocal, ...(current.drivers ?? [])];
+    const nextDriverUser = normalizeAppUser({
+      ...existingUser,
+      email,
+      name: nextDriverLocal.name,
+      role: "Driver",
+      actorId: existingUser?.actorId ?? nextDriverLocal.staffId,
+      staffId: nextDriverLocal.staffId,
+      accessPassword: nextDriverLocal.accessPassword,
+      createdAt: existingUser?.createdAt ?? nextDriverLocal.createdAt,
+      createdBy: existingUser?.createdBy ?? nextDriverLocal.createdBy,
+      createdByRole: existingUser?.createdByRole ?? nextDriverLocal.createdByRole,
+      updatedAt: existingUser ? now : null,
+      updatedBy: existingUser ? actorId : null,
+      updatedByRole: existingUser ? activeRole : null,
+    });
+    const nextUsersLocal = sortAppUsers(
+      existingUser
+        ? currentUsers.map((user) =>
+            user.staffId === nextDriverLocal.staffId ||
+            normalizeEmailAddress(user.email) === normalizeEmailAddress(existingUser.email)
+              ? nextDriverUser
+              : normalizeAppUser(user),
+          )
+        : [...currentUsers, nextDriverUser],
+    );
+
+    setSnapshot({
+      ...current,
+      drivers: nextDriversLocal,
+      appUsers: nextUsersLocal,
+      auditTrail: nextAuditTrail,
     });
 
-    return result;
+    return {
+      ok: true,
+      message: resolvedExistingDriver
+        ? `${nextDriverLocal.name} updated in the driver roster.`
+        : `${nextDriverLocal.name} added to the driver roster.`,
+      staffId: nextDriverLocal.staffId,
+    };
   };
 
   const archiveVehicle = (vehicleId) => {
@@ -10924,7 +10997,7 @@ function DriversPanel({
 
   const handleDriverSubmit = async (event) => {
     event.preventDefault();
-    const response = onSaveDriver(driverDraft);
+    const response = await onSaveDriver(driverDraft);
 
     setFeedback({
       tone: response.ok ? "success" : "danger",
@@ -10951,7 +11024,7 @@ function DriversPanel({
 
   const handleAllocationSubmit = async (event) => {
     event.preventDefault();
-    const response = onAllocateDriverShift(allocationDraft);
+    const response = await onAllocateDriverShift(allocationDraft);
 
     setFeedback({
       tone: response.ok ? "success" : "danger",
@@ -12125,9 +12198,9 @@ function DriversPanel({
                       </span>
                       <span
                         className="status-chip"
-                        data-tone={driverDraft.accessPassword ? "success" : "warning"}
+                        data-tone={driverDraft.accessPassword ? "success" : "neutral"}
                       >
-                        {driverDraft.accessPassword ? "Password set" : "Password required"}
+                        {driverDraft.accessPassword ? "Login access will be set" : "No login access (profile only)"}
                       </span>
                     </div>
                     <div className="finance-form-actions">
@@ -12151,13 +12224,17 @@ function DriversPanel({
                     </div>
                     <p
                       className="finance-form-note"
-                      data-tone={driverRouteOptions.length === 0 ? "warning" : "info"}
+                      data-tone={driverRouteOptions.length === 0 ? "info" : "info"}
                     >
                       {driverRouteOptions.length === 0
-                        ? "Add a route in Fleet & Operations first, then return here to assign the driver."
-                        : hasSupabaseConfig && Boolean(supabase)
-                          ? "Use Ctrl or Command to select more than one route, then use shift allocation below to place the driver on a vehicle. In live mode, issue the same password on the driver's Supabase sign-in account."
-                          : "Use Ctrl or Command to select more than one route, then use shift allocation below to place the driver on a vehicle. The saved password works for local TaxiFlow sign-in."}
+                        ? "No routes exist yet - you can save this driver now and assign a route later from Fleet & Operations."
+                        : "A route is optional - leave it unassigned to add one later. Use Ctrl or Command to select more than one, then use shift allocation below to place the driver on a vehicle."}
+                      {" "}
+                      {driverDraft.accessPassword
+                        ? hasSupabaseConfig && Boolean(supabase)
+                          ? "TaxiFlow login access will be created using the real Supabase sign-in system."
+                          : "The saved password works for local TaxiFlow sign-in."
+                        : "Leave the password blank to save a profile-only driver with no TaxiFlow login - access can be enabled later."}
                     </p>
                   </form>
                 )}

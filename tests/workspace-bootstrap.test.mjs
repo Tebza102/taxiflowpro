@@ -22,6 +22,38 @@ const createFakeSupabase = ({ authUsers = [], row = null } = {}) => {
     then: (resolve, reject) => Promise.resolve(getResult()).then(resolve, reject),
   });
 
+  // update()/insert() mirror the atomic CAS shape api/_lib/userLifecycle.js's
+  // writeWorkspaceRowAtomic issues (see the identical fake in
+  // tests/user-lifecycle.test.mjs) - createUser runs for real against this fake
+  // in the test below, after bootstrapWorkspace has created the row via its own
+  // (unrelated, out of Phase C scope) upsert path.
+  const buildUpdateChain = (updates) => {
+    const filters = {};
+    const builder = {
+      eq(column, value) {
+        filters[column] = value;
+        return builder;
+      },
+      select: async () => {
+        const matches =
+          workspaceRow && Object.entries(filters).every(([column, value]) => workspaceRow[column] === value);
+        if (matches) {
+          workspaceRow = { ...workspaceRow, ...updates };
+        }
+        return { data: matches ? [{ workspace_key: workspaceRow.workspace_key }] : [], error: null };
+      },
+      then: (resolve, reject) => {
+        const matches =
+          workspaceRow && Object.entries(filters).every(([column, value]) => workspaceRow[column] === value);
+        if (matches) {
+          workspaceRow = { ...workspaceRow, ...updates };
+        }
+        return Promise.resolve({ error: null }).then(resolve, reject);
+      },
+    };
+    return builder;
+  };
+
   const from = (table) => {
     assert.equal(table, "workspace_snapshots");
     return {
@@ -35,6 +67,19 @@ const createFakeSupabase = ({ authUsers = [], row = null } = {}) => {
         };
         return { error: null };
       },
+      insert: async (payload) => {
+        if (workspaceRow) {
+          return { error: { message: "duplicate key value violates unique constraint", code: "23505" } };
+        }
+        workspaceRow = {
+          workspace_key: payload.workspace_key,
+          snapshot: payload.snapshot,
+          updated_at: payload.updated_at,
+          updated_by: payload.updated_by ?? null,
+        };
+        return { error: null };
+      },
+      update: (updates) => buildUpdateChain(updates),
     };
   };
 
@@ -48,6 +93,12 @@ const createFakeSupabase = ({ authUsers = [], row = null } = {}) => {
         const user = { id: `auth-${nextAuthId++}`, email, user_metadata: user_metadata ?? {}, app_metadata: app_metadata ?? {} };
         users.push(user);
         return { data: { user }, error: null };
+      },
+      deleteUser: async (id) => {
+        const before = users.length;
+        users = users.filter((u) => u.id !== id);
+        if (users.length === before) return { error: { message: "not found" } };
+        return { error: null };
       },
     },
   };

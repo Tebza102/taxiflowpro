@@ -74,20 +74,85 @@ const readWorkspaceRow = async (supabase, workspaceKey) => {
   return data ?? null;
 };
 
-const writeWorkspaceRow = async (supabase, workspaceKey, snapshot, updatedByAuthId) => {
+/**
+ * Thrown by writeWorkspaceRowAtomic when the compare-and-swap write did not land
+ * because the row changed between the read this write was based on and the write
+ * itself. Callers distinguish this from other snapshot-write failures (via
+ * `error.conflict === true`) to report a retryable 409 instead of a hard 500.
+ */
+class WorkspaceConflictError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "WorkspaceConflictError";
+    this.conflict = true;
+  }
+}
+
+/**
+ * Atomic, version-guarded write - the server-side counterpart to the identical
+ * compare-and-swap already used client-side in src/lib/dataGateway.js's
+ * persistSupabaseLiveSnapshot. A plain re-read-then-upsert shrinks the race
+ * window but does not close it: an operational write from the client (a Route/
+ * Driver/Fleet/Finance save) landing between the caller's read and this write
+ * would previously be silently discarded by the unconditional upsert. Gating the
+ * write on `updated_at` matching the exact row this caller read makes that race
+ * impossible to lose silently - either this write lands, or 0 rows match and a
+ * WorkspaceConflictError is thrown so the caller can fail closed / compensate.
+ *
+ * `expectedVersion` is the `updated_at` of the row the caller's own read
+ * returned. `null`/`undefined` means "no row existed yet" (the workspace's very
+ * first write), the one case a CAS UPDATE cannot express - that case uses a
+ * guarded insert instead, which fails closed the same way if a row has appeared
+ * in the meantime (unique_violation is treated as a conflict, not a hard error).
+ */
+const writeWorkspaceRowAtomic = async (
+  supabase,
+  workspaceKey,
+  snapshot,
+  updatedByAuthId,
+  expectedVersion,
+) => {
   const nowIso = new Date().toISOString();
-  const { error } = await supabase.from("workspace_snapshots").upsert(
-    {
+
+  if (!expectedVersion) {
+    const { error } = await supabase.from("workspace_snapshots").insert({
       workspace_key: workspaceKey,
       snapshot,
       updated_at: nowIso,
       updated_by: updatedByAuthId ?? null,
-    },
-    { onConflict: "workspace_key" },
-  );
+    });
+
+    if (error) {
+      if (error.code === "23505") {
+        throw new WorkspaceConflictError(
+          "The workspace was created by another process at the same time. No changes were made - retry the request.",
+        );
+      }
+      throw new Error(`Failed to persist workspace snapshot: ${error.message}`);
+    }
+
+    return nowIso;
+  }
+
+  const { data: updatedRows, error } = await supabase
+    .from("workspace_snapshots")
+    .update({
+      snapshot,
+      updated_at: nowIso,
+      updated_by: updatedByAuthId ?? null,
+    })
+    .eq("workspace_key", workspaceKey)
+    .eq("updated_at", expectedVersion)
+    .select("workspace_key");
 
   if (error) {
     throw new Error(`Failed to persist workspace snapshot: ${error.message}`);
+  }
+
+  if (!updatedRows || updatedRows.length === 0) {
+    throw new WorkspaceConflictError(
+      "The workspace changed on another device or process while this account operation was in progress. No changes were made - retry the request.",
+    );
   }
 
   return nowIso;
@@ -259,7 +324,13 @@ export const createUser = async ({
       appUsers: [...freshAppUsers, newAppUser].map(stripCredentialFields),
     };
 
-    await writeWorkspaceRow(supabase, workspaceKey, nextSnapshot, authUser.id);
+    await writeWorkspaceRowAtomic(
+      supabase,
+      workspaceKey,
+      nextSnapshot,
+      authUser.id,
+      freshRow?.updated_at ?? null,
+    );
 
     return {
       ok: true,
@@ -267,6 +338,9 @@ export const createUser = async ({
       appUser: newAppUser,
     };
   } catch (snapshotError) {
+    // Auth account created, but the snapshot CAS write conflicted or otherwise
+    // failed: compensate by deleting the just-created Auth identity so we never
+    // leave an Auth-only orphan behind, then report the conflict/failure.
     const { error: deleteError } = await supabase.auth.admin.deleteUser(authUser.id);
 
     if (deleteError) {
@@ -283,7 +357,7 @@ export const createUser = async ({
 
     return {
       ok: false,
-      status: 500,
+      status: snapshotError.conflict ? 409 : 500,
       error:
         `User creation failed before the account directory could be updated. The ` +
         `partially created Supabase Auth account was removed automatically, so no ` +
@@ -376,10 +450,19 @@ export const updateUser = async ({
       ),
     };
 
-    await writeWorkspaceRow(supabase, workspaceKey, nextSnapshot, authUser?.id ?? null);
+    await writeWorkspaceRowAtomic(
+      supabase,
+      workspaceKey,
+      nextSnapshot,
+      authUser?.id ?? null,
+      freshRow?.updated_at ?? null,
+    );
 
     return { ok: true, appUser: nextAppUser };
   } catch (snapshotError) {
+    // The appUsers CAS write conflicted or otherwise failed after the Auth
+    // metadata was already updated: roll the Auth metadata back so the two
+    // stores don't silently diverge, then report the conflict/failure.
     if (authUser) {
       const { error: rollbackError } = await supabase.auth.admin.updateUserById(authUser.id, {
         user_metadata: authUser.user_metadata ?? {},
@@ -401,7 +484,7 @@ export const updateUser = async ({
 
     return {
       ok: false,
-      status: 500,
+      status: snapshotError.conflict ? 409 : 500,
       error: `Account directory update failed; any Supabase Auth metadata change was rolled back. (${snapshotError.message})`,
     };
   }
@@ -482,11 +565,12 @@ export const resetPassword = async ({
         : user,
     );
 
-    await writeWorkspaceRow(
+    await writeWorkspaceRowAtomic(
       supabase,
       workspaceKey,
       { ...(freshRow?.snapshot ?? {}), appUsers: nextAppUsers },
       authUser.id,
+      freshRow?.updated_at ?? null,
     );
   } catch (snapshotError) {
     // The password reset itself already succeeded and must not be rolled back (a
@@ -541,11 +625,21 @@ export const deleteUser = async ({ supabase, workspaceKey, requesterEmail, email
       ),
     };
 
-    await writeWorkspaceRow(supabase, workspaceKey, nextSnapshot, ownerCheck.requester.actorId ?? null);
+    await writeWorkspaceRowAtomic(
+      supabase,
+      workspaceKey,
+      nextSnapshot,
+      ownerCheck.requester.actorId ?? null,
+      freshRow?.updated_at ?? null,
+    );
   } catch (snapshotError) {
+    // Fails closed: whether this is a genuine conflict (someone else wrote the
+    // workspace between our read and this write) or any other failure, no Auth
+    // mutation has happened yet at this point, so "no changes were made" is
+    // always accurate and it is always safe to ask the caller to retry.
     return {
       ok: false,
-      status: 500,
+      status: snapshotError.conflict ? 409 : 500,
       error: `Failed to remove ${normalizedEmail} from the account directory; no changes were made. (${snapshotError.message})`,
     };
   }

@@ -1,6 +1,18 @@
 # Next Action
 
-## Current Recommended Action
+## Immediate Next Step (updated 2026-10-09 ~22:35)
+
+The local test gaps are closed and committed locally (`a424d84`, `00df61a`, `78d44c2`, `9cc33fa`, plus the Project OS commit). See `current-status.md` → Local commits not yet pushed.
+
+1. **Next (needs Tebogo's go-ahead):** push `agent/owner-first-auth-reset` so PR #2 and its Vercel Preview pick up these commits. Then confirm the Preview build is green before any acceptance testing.
+2. Run the PR #2 Preview acceptance below on that Preview. In addition to the listed gates, check `appUsers` membership and role boundaries per role: Owner, Admin, Manager, Driver (own records only), and Viewer (demo-only). Also check the Reports access rules (Owner/Admin/Manager with Money access; Driver/Viewer never). Supabase Auth succeeding is not enough on its own.
+3. Parked, not part of this gate: the mock/demo "profile-only driver can still sign in locally" gap (see `current-status.md`).
+
+Still blocked or out of scope for this gate: tenant/database isolation (not implemented); `workspace_snapshots` open to every authenticated user via `using (true)`; `anon`/`authenticated` `TRUNCATE` and full grants on 9 tables (RLS does not govern `TRUNCATE`; revoke explicitly in a later, reviewed migration); the held `appUsers` migration; no isolated database for migration/restore drills.
+
+Then continue with the release validation below. Preview UAT steps that sign in with Tebogo's Owner account or need the recovery email must be done by Tebogo; Preview uses the live Supabase project, so any UAT mutation is a live-data change.
+
+## Current Recommended Action (PR #2 release validation)
 
 Finish TaxiFlow PR #2 as a release-validation pass. Do not add product features or redesign the application.
 

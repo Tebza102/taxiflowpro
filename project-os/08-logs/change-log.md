@@ -210,3 +210,60 @@ Pass (local). Not pushed.
 
 **Next action:**
 - `next-action.md` → Immediate Next Step 1 (push on Tebogo's go-ahead).
+### 2026-10-09 22:53 — Push attempt blocked; Preview UAT inventory and backup plan
+
+**Changed by:** Claude Code (agent)
+
+**Files changed:**
+- `project-os/00-start-here/current-status.md`, `next-action.md`, `08-logs/change-log.md` (uncommitted, so a push sends exactly `628121b`)
+
+**Summary:**
+Pre-push checks passed: HEAD `628121b`, clean tree, remote `ad9641e`, fast-forward. Vercel `productionBranch` is `main`, and production is `dpl_4jTd32em9vAqNLNvgPe7YpekSefD` @ `008ce8e`. `git push origin agent/owner-first-auth-reset` was refused by the agent's permission policy, so nothing was pushed and no Preview was built. Inspected the UAT runner and spec without running them, documented their live writes and residue gaps, and wrote a backup approach (gpg AES-256, no plaintext on disk) and an acceptance plan.
+
+**Tests run:**
+- None (no code change). Live UAT was not run.
+
+**Result:**
+Blocked — push needs Tebogo to run it or grant the permission.
+
+**Risks remaining:**
+- The Preview's Supabase project is unverified.
+- UAT writes to the live project; the residue check is finance-only.
+- The production guard only knows `taxiflowpro.vercel.app`.
+
+**Next action:**
+- `next-action.md` → Immediate Next Step 1.
+
+### 2026-10-09 23:11 — UAT tooling safeguards (uncommitted)
+
+**Changed by:** Claude Code (agent)
+
+**Files changed:**
+- `scripts/uat/lib/safeguards.mjs` (new)
+- `scripts/uat/run-preview-uat.mjs` (rewritten around injectable I/O; all writes after the target, baseline and fixture checks)
+- `tests/uat/preview.spec.js` (fixture vehicle by id; stop on live conflict or queued save)
+- `playwright.uat.config.mjs` (refuses direct runs without the runner's preflight flag)
+- `tests/uat-safeguards.test.mjs` (new, 26 mock-only tests)
+- Project OS status, next-action and this log
+
+**Summary:**
+Recorded the verified push (`628121b` on origin; Preview `taxiflowpro-lapropkuh-apprigate.vercel.app`; production still `008ce8e`). UAT now refuses production hosts and aliases, moving aliases, unverified deployments (Vercel API: target, READY, project, commit, production id and aliases) and non-disposable fixtures before any write. It fingerprints the workspace and Auth ids at each stage, stops on unexpected changes or another writer, sorts the final diff into retained, residue and unexpected, never writes or restores a whole snapshot, and reports banked as NOT TESTED.
+
+**Tests run:**
+- `node --test tests/uat-safeguards.test.mjs` — 26/26
+- `node --test tests/*.test.mjs` — 264/264
+- `npm run test:sync-guards` — pass; `npm run build` — pass
+- `npx playwright test --list` — 28 mock tests in 4 files (UAT spec not collected)
+- Live UAT — not run
+
+**Result:**
+Pass (local, mocks only). Not committed, not pushed.
+
+**Risks remaining:**
+- Production detection depends on the Vercel API and a token. Without them the runner refuses (fail-closed); the static host list is only a backstop.
+- Mid-suite conflicts are caught through the app's own banners. A writer that changes nothing the UI reports, and the residue it leaves, is caught only by the final diff, after the write.
+- Legacy-record normalisation on the first UI save may show up as "unexpected" changes (a real side effect, reported rather than masked).
+- The runner's preflight flag guards against accidental direct runs, not deliberate misuse.
+
+**Next action:**
+- `next-action.md` → 1a/1b.

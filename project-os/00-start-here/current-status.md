@@ -26,6 +26,43 @@ Each code/test commit was checked on its own staged tree in a temporary export. 
 
 Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recovery\task02-20261009T2107\` and `...\task05-20261009T2205\`.
 
+### Pushed and deployed (2026-10-09, verified by Tebogo)
+
+- `origin/agent/owner-first-auth-reset` = `628121b68908a1e1fc820bde932699ef7703a9af` (confirmed by `git fetch` at 23:03).
+- Preview: `https://taxiflowpro-lapropkuh-apprigate.vercel.app`, built from `628121b`.
+- Production remains on `008ce8e` (`main`).
+- The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
+
+### UAT safeguards added 2026-10-09 (uncommitted)
+
+`scripts/uat/lib/safeguards.mjs`, `scripts/uat/run-preview-uat.mjs`, `tests/uat/preview.spec.js`, `playwright.uat.config.mjs`, `tests/uat-safeguards.test.mjs`. Before any live write the runner now requires:
+- the exact verified immutable Preview host (`UAT_EXPECTED_DEPLOYMENT_HOST`), refusing known production hosts, branch/project aliases and custom domains;
+- Vercel API confirmation (`VERCEL_TOKEN`) that the host is a READY, non-production deployment of this project at `UAT_EXPECTED_COMMIT_SHA`, and not the production deployment or any of its aliases;
+- a disposable fixture (`UAT_FIXTURE_VEHICLE_ID`): a `UAT-` vehicle that is unassigned, not archived and not referenced by any real record. The spec selects it by id; the first/any real vehicle is never used.
+
+During and after the run:
+- the workspace is fingerprinted (keys and hashes only) before writing, after provisioning (only the disposable account may change), immediately before the browser suite (the version must be unchanged), and at the end;
+- every difference is classified as retained (run audit entries, fixture vehicle), residue (run records left in finance, cash-ups, users, outbox, Auth) or unexpected (anything else, which fails the run);
+- the spec stops at the first "Another device changed this workspace" or "Changes are queued" message;
+- no whole-snapshot write or restore exists in the UAT tooling (statically tested);
+- banked is always "NOT TESTED";
+- running the UAT Playwright config directly is refused unless the runner set its preflight flag.
+
+### Push attempt 2026-10-09 22:50 — refused by the agent's permission policy (superseded: Tebogo pushed)
+
+- Pre-push checks passed: branch `agent/owner-first-auth-reset`, HEAD `628121b68908a1e1fc820bde932699ef7703a9af`, clean tracked tree, origin `Tebza102/taxiflowpro`, remote still `ad9641e` (fast-forward).
+- Vercel project `taxiflowpro` (team `apprigate`) has `productionBranch: main`, linked to `Tebza102/taxiflowpro`; Git deployments enabled. Pushing this feature branch can only create a Preview.
+- Production was unchanged at 22:50: deployment `dpl_4jTd32em9vAqNLNvgPe7YpekSefD`, commit `008ce8ec21ea71c8e81fd1f4f14cdfc76b1d149e` (`main`).
+- `git push origin agent/owner-first-auth-reset` was refused by the agent session's permission policy (auto-mode classifier), not by Git or GitHub. A follow-up read-only Vercel CLI listing was refused the same way. No Preview exists for these commits yet, and the Preview's Supabase project is **unverified**.
+
+### Preview UAT write inventory (from reading `scripts/uat/` and `tests/uat/preview.spec.js`, not run)
+
+- Runner, service role: creates one disposable Auth user plus an `appUsers` entry (`taxiflow-uat+<runId>@<domain>`, default role Manager) through `userLifecycle.createUser`; mints an admin recovery link for it; deletes it at the end. The real Owner's password is never changed.
+- Spec, through the app UI as the Owner: creates one R 1 "Extra trip" on the **first registered vehicle** (odo 1000→1010, To = run tag), records the hand-in (counted), verifies it, then deletes it. Banked leg is blocked by design.
+- Automatic app writes: every sign-out, `pagehide` and tab-hidden event persists the **whole** snapshot even if nothing changed. Writes are compare-and-swap on `updated_at`, so they don't silently overwrite, but they bump the version and can cause conflicts for other open sessions.
+- Residue: the runner checks only `financeTransactions` for the run tag. Audit-trail entries are append-only and remain; vehicle odometer/analytics effects of the 1000→1010 reading and any email-outbox entries are not checked.
+- `assertNeverProduction` only blocks `taxiflowpro.vercel.app`; any custom production domain is not covered (unverified).
+
 ## What Exists
 
 - Production-oriented Supabase Auth with Owner-first access.

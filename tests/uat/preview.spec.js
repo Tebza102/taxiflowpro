@@ -27,6 +27,10 @@ const DISPOSABLE_PASSWORD = required("UAT_DISPOSABLE_PASSWORD");
 const DISPOSABLE_ROLE = process.env.UAT_DISPOSABLE_ROLE || "Manager";
 const RECOVERY_NEW_PASSWORD = required("UAT_RECOVERY_NEW_PASSWORD");
 const RUN_TAG = required("UAT_RUN_TAG");
+// Set by the orchestrator only after it has confirmed this vehicle is a disposable
+// "UAT-" fixture that no real record references. Never chosen by list position.
+const FIXTURE_VEHICLE_ID = required("UAT_FIXTURE_VEHICLE_ID");
+const FIXTURE_VEHICLE_REGISTRATION = required("UAT_FIXTURE_VEHICLE_REGISTRATION");
 // Where this suite writes the captured client-side Supabase project ref for the
 // orchestrator to read back and compare against the server-side ref it derived
 // from its own SUPABASE_URL - the match decision and printing happen there, not
@@ -62,6 +66,19 @@ const expectSessionIdentity = async (page, { role, email }) => {
 
 // The primary module nav's accessible label for the Finance module is "Money"
 // (see MODULE_VIEW_ACCESS.finance.label in src/lib/appRuntime.js), not "Finance".
+// Any live conflict or queued (unconfirmed) save means another writer or a failed
+// write: stop the serial suite here rather than continue writing on stale data.
+const LIVE_SYNC_PROBLEMS = [
+  "Another device changed this workspace",
+  "Changes are queued",
+];
+
+const assertNoLiveSyncProblem = async (page) => {
+  for (const message of LIVE_SYNC_PROBLEMS) {
+    await expect(page.getByText(message, { exact: false }), `live sync problem: ${message}`).toHaveCount(0);
+  }
+};
+
 const openFinanceModule = async (page) => {
   await page.getByRole("button", { name: "Money" }).click();
 };
@@ -84,11 +101,13 @@ const createFinanceUatRecord = async (page, runTag) => {
   const form = page.locator("article", { hasText: "Extra trip entry" });
   await expect(form).toBeVisible({ timeout: 30_000 });
 
-  // Pick whichever vehicle already exists - this suite never assumes fleet
-  // composition, only that at least one vehicle is registered.
+  // Only the verified disposable fixture vehicle, selected by id.
   const vehicleSelect = form.getByLabel("Vehicle");
-  const firstVehicleValue = await vehicleSelect.locator("option").first().getAttribute("value");
-  await vehicleSelect.selectOption(firstVehicleValue);
+  const fixtureOption = vehicleSelect.locator(`option[value="${FIXTURE_VEHICLE_ID}"]`);
+  await expect(fixtureOption).toHaveCount(1);
+  await expect(fixtureOption).toContainText(FIXTURE_VEHICLE_REGISTRATION);
+  await vehicleSelect.selectOption(FIXTURE_VEHICLE_ID);
+  await expect(vehicleSelect).toHaveValue(FIXTURE_VEHICLE_ID);
 
   const today = new Date().toISOString().slice(0, 10);
   await form.getByLabel("Date").fill(today);
@@ -102,6 +121,7 @@ const createFinanceUatRecord = async (page, runTag) => {
   await form.getByLabel("Amount").fill("1");
 
   await form.getByRole("button", { name: "Save trip" }).click();
+  await assertNoLiveSyncProblem(page);
 
   await openBankingTab(page);
   await expect(financeQueueCard(page, runTag)).toBeVisible({ timeout: 30_000 });
@@ -215,6 +235,7 @@ test.describe.serial("Preview release gate", () => {
     await card.locator(".verification-input").fill("1");
     await card.getByRole("button", { name: "Record hand-in" }).click();
     await expect(card.locator(".status-chip").first()).toHaveText("Counted", { timeout: 30_000 });
+    await assertNoLiveSyncProblem(page);
 
     await page.reload();
     await openBankingTab(page);
@@ -230,6 +251,7 @@ test.describe.serial("Preview release gate", () => {
     await card.locator(".verification-input").fill("1");
     await card.getByRole("button", { name: "Verify checking" }).click();
     await expect(card.locator(".status-chip").first()).toHaveText("Verified", { timeout: 30_000 });
+    await assertNoLiveSyncProblem(page);
 
     await page.reload();
     await openBankingTab(page);
@@ -244,6 +266,7 @@ test.describe.serial("Preview release gate", () => {
     await expect(card).toBeVisible({ timeout: 30_000 });
     await card.getByRole("button", { name: "Delete entry" }).click();
     await expect(financeQueueCard(page, RUN_TAG)).toHaveCount(0, { timeout: 30_000 });
+    await assertNoLiveSyncProblem(page);
 
     await page.reload();
     await openBankingTab(page);

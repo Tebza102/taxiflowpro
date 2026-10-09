@@ -5,6 +5,16 @@ import { defineConfig } from "@playwright/test";
 // playwright.config.mjs. There is deliberately no `webServer` block here - this
 // suite never builds or boots anything locally, it only drives a browser against
 // whatever PREVIEW_URL already is.
+// Accidental-run guard: the live suite may only be started by
+// scripts/uat/run-preview-uat.mjs after its target, baseline and fixture checks.
+// (An environment flag can be set by hand; this prevents mistakes, not misuse.)
+if (process.env.UAT_RUNNER_PREFLIGHT !== "passed") {
+  throw new Error(
+    "The Preview UAT suite must be started with `npm run uat:preview`, which verifies the " +
+      "deployment, workspace baseline and disposable fixture before any write.",
+  );
+}
+
 const PREVIEW_URL = process.env.PREVIEW_URL;
 
 if (!PREVIEW_URL) {

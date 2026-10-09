@@ -348,13 +348,22 @@ test("owner settings rights allow admin to add a driver", async ({ page }) => {
   const addDriverForm = page.locator("form.finance-form").filter({
     has: page.getByRole("button", { name: "Save driver" }),
   });
+  // Since fb5bb9e TaxiFlow login is an explicit, Owner-only opt-in: an Admin
+  // gets no login controls and saves a profile-only driver.
+  await expect(addDriverForm.getByLabel("Enable TaxiFlow login")).toHaveCount(0);
+  await expect(addDriverForm.locator('input[type="password"]')).toHaveCount(0);
+  await expect(addDriverForm).toContainText("Owner manages TaxiFlow login access.");
+  await expect(addDriverForm).toContainText("No login access (profile only)");
+
   await addDriverForm.getByLabel("Full name").fill("Access Test Driver");
   await addDriverForm.getByLabel("Email address").fill("access.test.driver@taxiflow.local");
   await addDriverForm.getByLabel("Assigned routes").selectOption({ index: 0 });
-  await addDriverForm.getByLabel("Password").fill("Driver123");
   await addDriverForm.getByRole("button", { name: "Save driver" }).click();
 
   await expect(page.getByText("Access Test Driver added to the driver roster.")).toBeVisible();
+  await expect(
+    page.locator("article.person-row").filter({ hasText: "Access Test Driver" }),
+  ).toContainText("access.test.driver@taxiflow.local");
   await signOut(page);
   assertNoRuntimeErrors();
 });
@@ -366,22 +375,9 @@ test("saved driver.two account replaces the sample driver and persists after rel
   const replacementDriverName = "Andile Hlatshwayo";
   const replacementPassword = "Andile123";
 
+  // Since fb5bb9e enabling TaxiFlow login is an explicit opt-in that only the
+  // Owner can make, so the Owner saves the login-enabled driver.
   await signIn(page, ownerAccount.email);
-  await openModule(page, "Settings", "Roles and rights");
-
-  const adminRow = page.locator("article.person-row").filter({
-    hasText: "admin@taxiflow.local",
-  });
-  await adminRow.getByRole("button", { name: "Manage" }).click();
-  const accessForm = page.locator("form.finance-form").filter({
-    has: page.getByRole("button", { name: "Save access" }),
-  });
-  await accessForm.getByRole("button", { name: "Drivers" }).click();
-  await accessForm.getByRole("button", { name: "Save access" }).click();
-  await expect(page.getByText(/updated as Admin\./i)).toBeVisible();
-  await signOut(page);
-
-  await signIn(page, "admin@taxiflow.local");
   await openModule(page, "Drivers", "Terminal preview");
 
   const addDriverButton = page.getByRole("button", { name: "Add driver" }).first();
@@ -391,10 +387,34 @@ test("saved driver.two account replaces the sample driver and persists after rel
   const addDriverForm = page.locator("form.finance-form").filter({
     has: page.getByRole("button", { name: "Save driver" }),
   });
+  const enableLogin = addDriverForm.getByLabel("Enable TaxiFlow login");
+  const passwordInput = addDriverForm.locator('input[type="password"]');
+
+  // Default: login off, no password field, profile-only.
+  await expect(enableLogin).not.toBeChecked();
+  await expect(passwordInput).toHaveCount(0);
+  await expect(addDriverForm).toContainText("No login access (profile only)");
+
+  // Opting in reveals the password field; opting out hides it again.
+  await enableLogin.check();
+  await expect(passwordInput).toBeVisible();
+  await expect(addDriverForm).toContainText("Login access will be set");
+  await enableLogin.uncheck();
+  await expect(passwordInput).toHaveCount(0);
+  await enableLogin.check();
+
+  // A brand-new login-enabled driver needs a password in mock mode.
   await addDriverForm.getByLabel("Full name").fill(replacementDriverName);
-  await addDriverForm.getByLabel("Email address").fill(driverTwoAccount.email);
+  await addDriverForm.getByLabel("Email address").fill("new.login.driver@taxiflow.local");
   await addDriverForm.getByLabel("Assigned routes").selectOption({ index: 0 });
-  await addDriverForm.getByLabel("Password").fill(replacementPassword);
+  await addDriverForm.getByRole("button", { name: "Save driver" }).click();
+  await expect(page.getByText("Create a password for this driver before saving.")).toBeVisible();
+  await expect(
+    page.locator("article.person-row").filter({ hasText: "new.login.driver@taxiflow.local" }),
+  ).toHaveCount(0);
+
+  await addDriverForm.getByLabel("Email address").fill(driverTwoAccount.email);
+  await passwordInput.fill(replacementPassword);
   await addDriverForm.getByRole("button", { name: "Save driver" }).click();
 
   await expect(

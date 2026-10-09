@@ -8024,7 +8024,9 @@ function FinancePanel({
                         }
                         onClick={() => !isDriverCashUp && handleDelete(sourceRecord.id)}
                       >
-                        {deletingRecordId === sourceRecord.id ? "Deleting..." : "Delete entry"}
+                        {!isDriverCashUp && deletingRecordId === sourceRecord.id
+                          ? "Deleting..."
+                          : "Delete entry"}
                       </button>
                     </div>
                     {isDriverCashUp && (

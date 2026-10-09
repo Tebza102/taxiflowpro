@@ -72,8 +72,13 @@ const grantOwnerModules = async (page, email, modules) => {
     has: page.getByRole("button", { name: "Save access" }),
   });
 
+  // Pills toggle, and Admin/Manager start with their role modules on, so only
+  // click a pill that is not already granted.
   for (const moduleLabel of modules) {
-    await accessForm.getByRole("button", { name: moduleLabel }).click();
+    const pill = accessForm.getByRole("button", { name: moduleLabel, exact: true });
+    if (!/\bactive\b/.test((await pill.getAttribute("class")) ?? "")) {
+      await pill.click();
+    }
   }
 
   await accessForm.getByRole("button", { name: "Save access" }).click();
@@ -422,5 +427,93 @@ test("admin records cash hand-in, manager verifies it, and the dashboard total i
   await signIn(page, "owner@taxiflow.local");
   const updatedDailyTotal = await readOverviewDailyTotal(page);
   expect(updatedDailyTotal).toBe(baselineDailyTotal + ENTRY_AMOUNT);
+  await signOut(page);
+});
+
+// Regression: a driver day cash-up in the queue has no linked income record, and
+// the Delete entry label used to read sourceRecord.id unguarded, so Money crashed
+// into the error boundary as soon as one was queued.
+test("admin opens Money with a driver cash-up queued and records a short hand-in that persists as counted", async ({
+  page,
+}) => {
+  const SHORT_HAND_IN = 900;
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+
+  await signIn(page, "driver.one@taxiflow.local");
+  await page.getByRole("button", { name: "Add daily earnings" }).click();
+  await page.getByLabel("Date").fill(DAILY_DATE);
+  await page.getByLabel("Time in").fill("06:00");
+  await page.getByLabel("Time out").fill("10:00");
+  await page.getByLabel("Opening odo").fill("384120");
+  await page.getByLabel("Closing odo").fill("384200");
+  const driverActionPanel = page.locator(".driver-action-panel");
+  await driverActionPanel.getByRole("spinbutton", { name: "Passengers" }).first().fill("12");
+  await driverActionPanel.getByRole("spinbutton", { name: "Amount collected" }).first().fill("500");
+  await page.getByRole("button", { name: "Add passenger trip" }).click();
+  await driverActionPanel.getByRole("spinbutton", { name: "Passengers" }).nth(1).fill("9");
+  await driverActionPanel.getByRole("spinbutton", { name: "Amount collected" }).nth(1).fill("420");
+  await page.getByRole("button", { name: "Save trip" }).click();
+  await expect(
+    page.getByText("Trip saved and added to the daily total. Use Checking to wrap up the day for cash-in."),
+  ).toBeVisible();
+  await moduleButton(page, "Overview").click();
+  await page
+    .locator("article.overview-board")
+    .filter({ has: page.getByRole("heading", { name: "Day cash activity" }) })
+    .getByRole("button", { name: "Checking" })
+    .click();
+  await expect(
+    page.getByText("Checking sent. Management can now record one day hand-in for this shift."),
+  ).toBeVisible();
+  await signOut(page);
+
+  await grantOwnerModules(page, "admin@taxiflow.local", ["Money"]);
+
+  await signIn(page, "admin@taxiflow.local");
+  await openBankingModule(page);
+  await expect(page.getByText("TaxiFlow hit a runtime error.")).toHaveCount(0);
+
+  const queueCard = page
+    .locator("article.queue-card")
+    .filter({ hasText: "Sizwe Mokoena" })
+    .filter({ hasText: DAILY_DATE_LABEL });
+  await expect(queueCard).toHaveCount(1);
+  await expect(queueCard).toContainText("Waiting for admin hand-in");
+  // The day cash-up card is not an editable ledger entry.
+  await expect(queueCard.getByRole("button", { name: "Delete entry" })).toBeDisabled();
+  await expect(queueCard.getByRole("button", { name: "Edit entry" })).toBeDisabled();
+
+  await queueCard.getByPlaceholder("Cash handed in").fill(String(SHORT_HAND_IN));
+  await queueCard.getByRole("button", { name: "Record hand-in" }).click();
+  await expect(
+    page.getByText("Day checking recorded and waiting for manager verification."),
+  ).toBeVisible();
+  await expect(queueCard).toContainText("Waiting for manager check");
+
+  // Survives a reload: expected R 920, actual R 900, status counted. The card's
+  // "Difference" is the unsigned shortfall (expected - counted, floored at 0);
+  // the signed variance (actual - expected = -20) is covered by the report data tests.
+  await page.reload();
+  await openBankingModule(page);
+  const reloadedCard = page
+    .locator("article.queue-card")
+    .filter({ hasText: "Sizwe Mokoena" })
+    .filter({ hasText: DAILY_DATE_LABEL });
+  await expect(reloadedCard).toContainText("Waiting for manager check");
+  await expect(reloadedCard.locator(".info-pair").filter({ hasText: "Expected cash in" })).toContainText("R 920");
+  await expect(reloadedCard.locator(".info-pair").filter({ hasText: "Counted" })).toContainText("R 900");
+  await expect(reloadedCard.locator(".info-pair").filter({ hasText: "Difference" })).toContainText("R 20");
+
+  const storedCashUp = await page.evaluate((workDate) => {
+    const snapshot = JSON.parse(window.localStorage.getItem("taxiflow-demo-snapshot-v1") ?? "{}");
+    const entry = (snapshot.dailyCashUps ?? []).find((item) => item.workDate === workDate);
+    return entry
+      ? { status: entry.status, actualCashReceived: entry.actualCashReceived, countedByRole: entry.countedByRole }
+      : null;
+  }, DAILY_DATE);
+  expect(storedCashUp).toEqual({ status: "counted", actualCashReceived: SHORT_HAND_IN, countedByRole: "Admin" });
+
+  expect(pageErrors).toEqual([]);
   await signOut(page);
 });

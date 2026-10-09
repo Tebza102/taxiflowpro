@@ -9,12 +9,16 @@
     "preview": "vite preview",
     "test:sync-guards": "node tests/liveSyncGuards.test.mjs",
     "dev:daily-log-check": "node scripts/daily-log-regression.mjs",
-    "supabase:seed-users": "node scripts/create-supabase-users.mjs"
+    "supabase:seed-users": "node scripts/create-supabase-users.mjs",
+    "supabase:reset-owner": "node scripts/reset-production-users.mjs",
+    "supabase:reconcile-users": "node scripts/reconcile-production-users.mjs",
+    "uat:preview": "node scripts/uat/run-preview-uat.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.8",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.511.0",
+    "pdfkit": "^0.20.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

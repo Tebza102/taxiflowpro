@@ -13,6 +13,8 @@ import {
   CheckSquare,
   ChevronRight,
   Clock,
+  Eye,
+  EyeOff,
   FileText,
   LayoutDashboard,
   Loader2,
@@ -30,10 +32,12 @@ import { DriverFullScreenView } from "./components/DriverFullScreenView";
 import { MobileActionScreen } from "./components/MobileActionScreen";
 import { MobileBottomSheet } from "./components/MobileBottomSheet";
 import { TripLegOptionalFields } from "./components/TripLegOptionalFields";
+import { ReportsPanel } from "./components/ReportsPanel";
 import { repository } from "./lib/dataGateway";
 import { getSafeDocument, getSafeWindow, safeMatchMedia } from "./lib/browserRuntime";
 import { logStartupError, logStartupEvent } from "./lib/runtimeDiagnostics";
 import { hasSupabaseConfig, supabase } from "./lib/supabaseClient";
+import { MIN_LIVE_LOGIN_PASSWORD_LENGTH } from "./lib/accountPolicy";
 
 import {
   ZAR,
@@ -250,6 +254,16 @@ function App() {
   const [factoryResetSubmitting, setFactoryResetSubmitting] = useState(false);
   const [authError, setAuthError] = useState(null);
   const [authRecoveryFeedback, setAuthRecoveryFeedback] = useState(null);
+  const [passwordResetRequestSubmitting, setPasswordResetRequestSubmitting] = useState(false);
+  // Entered via the Supabase "PASSWORD_RECOVERY" auth event (the user followed a
+  // real recovery email link). Takes over the screen ahead of the normal
+  // authSession/authIdentity routing below - a recovery session must never be
+  // treated as a normal sign-in and dropped straight into the app.
+  const [passwordRecoveryMode, setPasswordRecoveryMode] = useState(false);
+  const [passwordRecoverySubmitting, setPasswordRecoverySubmitting] = useState(false);
+  const [passwordRecoveryFeedback, setPasswordRecoveryFeedback] = useState(null);
+  const [showRecoveryPassword, setShowRecoveryPassword] = useState(false);
+  const [recoveryDraft, setRecoveryDraft] = useState({ newPassword: "", confirmPassword: "" });
   const [liveSyncBusy, setLiveSyncBusy] = useState(false);
   const [lastSuccessfulSyncAt, setLastSuccessfulSyncAt] = useState(null);
   const liveSyncOperationCountRef = useRef(0);
@@ -257,6 +271,11 @@ function App() {
   const latestLiveSaveWarningRef = useRef(null);
   const pendingUserAccessWriteRef = useRef(false);
   const pendingUserAccessSnapshotRef = useRef(null);
+  // Set right before setSnapshot() is called with a snapshot that a server lifecycle
+  // call (create/update/delete/reset-password user) already persisted remotely.
+  // Prevents the generic persistence effect from firing a redundant, uncoordinated
+  // second write for the same mutation.
+  const skipNextGenericPersistRef = useRef(false);
   const [authDraft, setAuthDraft] = useState({
     email: "",
     password: "",
@@ -378,7 +397,7 @@ function App() {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
+    } = supabase.auth.onAuthStateChange((authEvent, session) => {
       if (!isMounted) {
         return;
       }
@@ -389,6 +408,13 @@ function App() {
       setAuthSession(session ?? null);
       setAuthError(null);
       setAuthLoading(false);
+
+      // A real Supabase password-recovery link was followed - take over the
+      // screen with the password-update form instead of treating this like a
+      // normal sign-in (see the passwordRecoveryMode render branch below).
+      if (authEvent === "PASSWORD_RECOVERY") {
+        setPasswordRecoveryMode(true);
+      }
     });
 
     return () => {
@@ -410,33 +436,101 @@ function App() {
       backendMode: effectiveBackendMode,
       authEnabled,
     });
+    const isAuthSessionOwner = () =>
+      authSession?.user?.app_metadata?.role === "Owner" ||
+      authSession?.user?.user_metadata?.role === "Owner";
+
+    // A missing workspace row is only auto-recoverable by an Owner, since bootstrap
+    // is Owner-gated server-side too. Any other role just sees the workspaceMissing
+    // state via the normal ok:false handling below (no silent pretend-live state).
+    const attemptWorkspaceBootstrapAndReload = async (retainedSnapshot) => {
+      try {
+        const response = await fetch("/api/admin/bootstrap-workspace", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${authSession.access_token}`,
+          },
+          body: JSON.stringify({ snapshot: retainedSnapshot }),
+        });
+        const bootstrapResult = await response.json();
+
+        if (!response.ok || !bootstrapResult?.ok) {
+          return { ok: false };
+        }
+
+        const reloaded = await repository.loadSnapshot("live");
+        if (reloaded?.ok !== false && reloaded?.meta?.source === "remote-live") {
+          skipNextGenericPersistRef.current = true;
+          return { ok: true, snapshot: reloaded };
+        }
+        return { ok: false };
+      } catch {
+        return { ok: false };
+      }
+    };
+
     repository
       .loadSnapshot(effectiveBackendMode)
-      .then((data) => {
-        if (isMounted) {
-          if (data?.ok !== false) {
-            setBackendFeedback((current) =>
-              current?.kind === "live-conflict" ? null : current,
+      .then(async (data) => {
+        if (!isMounted) {
+          return;
+        }
+
+        if (effectiveBackendMode === "live" && data?.workspaceMissing && authSession?.access_token && isAuthSessionOwner()) {
+          const bootstrap = await attemptWorkspaceBootstrapAndReload(data);
+          if (!isMounted) {
+            return;
+          }
+
+          if (bootstrap.ok) {
+            setBackendFeedback(null);
+            setLastSuccessfulSyncAt(
+              bootstrap.snapshot?.meta?.liveVersion ?? new Date().toISOString(),
             );
+            setSnapshot(bootstrap.snapshot);
+            setLoading(false);
+            finishLiveSync();
+            return;
           }
-          logStartupEvent("app-bootstrap-load-complete", {
-            backendMode: effectiveBackendMode,
-            ok: data?.ok !== false,
-            warning: data?.warning ?? null,
+
+          setBackendFeedback({
+            tone: "danger",
+            message: "Live workspace could not be initialized.",
           });
-          syncLiveWarning(
-            setLiveLoadWarning,
-            effectiveBackendMode === "live" && (data?.ok === false || data?.warning)
-              ? LIVE_SYNC_WARNING_MESSAGE
-              : null,
-          );
-          if (effectiveBackendMode === "live" && data?.ok !== false && data?.meta?.source === "remote-live") {
-            setLastSuccessfulSyncAt(data?.meta?.liveVersion ?? new Date().toISOString());
-          }
           setSnapshot(data);
           setLoading(false);
           finishLiveSync();
+          return;
         }
+
+        if (data?.ok !== false) {
+          setBackendFeedback((current) =>
+            current?.kind === "live-conflict" ? null : current,
+          );
+        } else if (data?.workspaceMissing) {
+          setBackendFeedback({
+            tone: "danger",
+            message: "Live workspace could not be initialized.",
+          });
+        }
+        logStartupEvent("app-bootstrap-load-complete", {
+          backendMode: effectiveBackendMode,
+          ok: data?.ok !== false,
+          warning: data?.warning ?? null,
+        });
+        syncLiveWarning(
+          setLiveLoadWarning,
+          effectiveBackendMode === "live" && (data?.ok === false || data?.warning)
+            ? LIVE_SYNC_WARNING_MESSAGE
+            : null,
+        );
+        if (effectiveBackendMode === "live" && data?.ok !== false && data?.meta?.source === "remote-live") {
+          setLastSuccessfulSyncAt(data?.meta?.liveVersion ?? new Date().toISOString());
+        }
+        setSnapshot(data);
+        setLoading(false);
+        finishLiveSync();
       })
       .catch((error) => {
         if (isMounted) {
@@ -460,6 +554,11 @@ function App() {
 
   useEffect(() => {
     if (loading || !snapshot) {
+      return undefined;
+    }
+
+    if (skipNextGenericPersistRef.current) {
+      skipNextGenericPersistRef.current = false;
       return undefined;
     }
 
@@ -916,9 +1015,14 @@ function App() {
     };
   };
 
-  const syncUserWithSupabaseAuth = async ({ action, email, name, role, password, staffId }) => {
-    if (effectiveBackendMode !== "live" || !authSession?.access_token) {
-      return { ok: true, skipped: true, message: "Supabase Auth sync skipped (demo mode or no session)" };
+  // Server-orchestrated user lifecycle (live mode only). The server endpoint commits
+  // BOTH the Supabase Auth identity and the appUsers snapshot record for a single
+  // mutation, so the client never performs its own separate snapshot write for these
+  // operations - that dual-write is exactly what previously let the two stores drift
+  // apart. Mock/demo mode never calls this; it keeps the original client-only flow.
+  const callUserLifecycleApi = async ({ action, email, name, role, password, staffId, moduleAccess }) => {
+    if (!authSession?.access_token) {
+      return { ok: false, error: "No active session available for this account operation." };
     }
 
     try {
@@ -928,15 +1032,7 @@ function App() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${authSession.access_token}`,
         },
-        body: JSON.stringify({
-          action,
-          email,
-          name,
-          role,
-          password,
-          staffId,
-          actorId: authSession.user?.id,
-        }),
+        body: JSON.stringify({ action, email, name, role, password, staffId, moduleAccess }),
       });
 
       const result = await response.json();
@@ -944,17 +1040,101 @@ function App() {
       if (!response.ok || !result.ok) {
         return {
           ok: false,
-          error: result.error ?? "Supabase Auth sync failed",
+          partial: Boolean(result?.partial),
+          error: result?.error ?? "Account operation failed",
           status: response.status,
         };
       }
 
-      return { ok: true, message: result.message, user: result.user };
+      return result;
     } catch (error) {
       return {
         ok: false,
-        error: error.message ?? "Network error during Supabase Auth sync",
+        error: error?.message ?? "Network error during account operation",
       };
+    }
+  };
+
+  // After a server lifecycle call succeeds, the server's copy of the snapshot is the
+  // only trustworthy one. Reload it and suppress the one redundant generic-persist
+  // write that would otherwise fire in response to setSnapshot().
+  const reloadCanonicalLiveSnapshot = async () => {
+    const loaded = await repository.loadSnapshot("live");
+    skipNextGenericPersistRef.current = true;
+    setSnapshot(loaded);
+    latestSnapshotRef.current = loaded;
+    if (loaded?.ok !== false && loaded?.meta?.source === "remote-live") {
+      setLastSuccessfulSyncAt(loaded?.meta?.liveVersion ?? new Date().toISOString());
+    }
+    return loaded;
+  };
+
+  // Reusable confirmed-mutation helper: same principle already proven for account
+  // persistence (commitUserAccessSnapshot / reloadCanonicalLiveSnapshot above) -
+  // a local React state change is never reported to the caller as "saved" on its
+  // own. In live mode this persists remotely, waits for the result, and only a
+  // *fresh canonical remote read* that actually contains the change is treated as
+  // success; on any failure or conflict the canonical remote state is reloaded
+  // instead (never left showing an unconfirmed optimistic write), and a clear
+  // error is returned. Mock mode keeps the original local-only behaviour, since
+  // there is no remote to verify against.
+  //
+  // Built for Route persistence first; intentionally generic (plain
+  // current/next-snapshot in, {ok, snapshot|error} out) so Drivers and Finance can
+  // adopt it later once Route is proven, per the standing instruction not to build
+  // a second, route-specific persistence system.
+  const commitLiveSnapshotMutation = async (current, nextSnapshot) => {
+    if (effectiveBackendMode !== "live") {
+      setSnapshot(nextSnapshot);
+      latestSnapshotRef.current = nextSnapshot;
+      return { ok: true, snapshot: nextSnapshot };
+    }
+
+    const finishLiveSync = beginLiveSync();
+
+    try {
+      const persistResult = await repository.persistSnapshot(nextSnapshot, effectiveBackendMode);
+
+      if (persistResult?.conflict) {
+        setBackendFeedback({
+          kind: "live-conflict",
+          tone: "danger",
+          message: persistResult.conflict.message,
+          actionLabel: "Refresh live data",
+        });
+        await reloadCanonicalLiveSnapshot();
+        return {
+          ok: false,
+          error:
+            persistResult.conflict.message ??
+            "Live data changed on another device. Refresh before saving.",
+        };
+      }
+
+      if (persistResult?.ok !== true) {
+        syncLiveWarning(setLiveSaveWarning, LIVE_SAVE_WARNING_MESSAGE);
+        await reloadCanonicalLiveSnapshot();
+        return {
+          ok: false,
+          error: "Could not be saved to the live workspace. No confirmed change was made.",
+        };
+      }
+
+      // Write succeeded - but the only trustworthy copy of what actually landed is
+      // a fresh remote read, not the snapshot we optimistically built client-side.
+      const canonical = await reloadCanonicalLiveSnapshot();
+
+      if (canonical?.ok === false) {
+        return {
+          ok: false,
+          error: "Saved, but the confirmation read failed. Refresh to verify.",
+        };
+      }
+
+      setLastSuccessfulSyncAt(canonical?.meta?.liveVersion ?? new Date().toISOString());
+      return { ok: true, snapshot: canonical };
+    } finally {
+      finishLiveSync();
     }
   };
 
@@ -1088,7 +1268,7 @@ function App() {
     setAuthSubmitting(false);
   };
 
-  const handlePasswordResetRequest = () => {
+  const handlePasswordResetRequest = async () => {
     const normalizedEmail = normalizeEmailAddress(authDraft.email);
 
     if (!normalizedEmail) {
@@ -1107,6 +1287,53 @@ function App() {
       return;
     }
 
+    // Live Supabase Auth: real, self-service password recovery via Supabase's
+    // native flow. resetPasswordForEmail requires no authenticated session to
+    // call, and - deliberately - never confirms whether the email maps to a
+    // real account, so the response shown here must stay neutral regardless of
+    // the outcome (do not add a layer that leaks account existence back).
+    if (authEnabled) {
+      if (passwordResetRequestSubmitting) {
+        return;
+      }
+
+      setPasswordResetRequestSubmitting(true);
+      setAuthError(null);
+
+      try {
+        const redirectTo = getSafeWindow()?.location?.origin || undefined;
+        const { error } = await supabase.auth.resetPasswordForEmail(normalizedEmail, {
+          redirectTo,
+        });
+
+        setAuthRecoveryFeedback({
+          tone: error ? "danger" : "success",
+          message: error
+            ? "Unable to send the recovery email right now. Try again in a moment."
+            : "If the account can receive password recovery email, check your inbox for the reset link.",
+        });
+
+        if (!error) {
+          setAuthDraft((current) => ({
+            ...current,
+            password: "",
+          }));
+        }
+      } catch {
+        setAuthRecoveryFeedback({
+          tone: "danger",
+          message: "Unable to send the recovery email right now. Try again in a moment.",
+        });
+      } finally {
+        setPasswordResetRequestSubmitting(false);
+      }
+
+      return;
+    }
+
+    // Local/mock auth: there is no real Supabase Auth session to send recovery
+    // email through, so this keeps the existing in-app "management will reset
+    // it" notice flow unchanged.
     let response = { ok: false, error: "Unable to send the password reset request." };
 
     setSnapshot((current) => {
@@ -1264,6 +1491,69 @@ function App() {
     });
   };
 
+  // Only reachable once passwordRecoveryMode is true (a real Supabase
+  // PASSWORD_RECOVERY event fired - see the onAuthStateChange listener above),
+  // which means the recovery session Supabase established is already active.
+  // updateUser rotates that session's password directly; it is never written to
+  // workspace_snapshots (password lives only in Supabase Auth, matching the
+  // existing account-lifecycle rule server-side).
+  const handlePasswordRecoverySubmit = async (event) => {
+    event.preventDefault();
+
+    if (passwordRecoverySubmitting) {
+      return;
+    }
+
+    const nextPassword = recoveryDraft.newPassword;
+    const confirmPassword = recoveryDraft.confirmPassword;
+
+    if (!nextPassword || nextPassword.length < MIN_LIVE_LOGIN_PASSWORD_LENGTH) {
+      setPasswordRecoveryFeedback({
+        tone: "danger",
+        message: `Password must be at least ${MIN_LIVE_LOGIN_PASSWORD_LENGTH} characters long.`,
+      });
+      return;
+    }
+    if (nextPassword !== confirmPassword) {
+      setPasswordRecoveryFeedback({ tone: "danger", message: "Passwords do not match." });
+      return;
+    }
+
+    setPasswordRecoverySubmitting(true);
+    setPasswordRecoveryFeedback(null);
+
+    try {
+      const { error } = await supabase.auth.updateUser({ password: nextPassword });
+
+      if (error) {
+        setPasswordRecoveryFeedback({
+          tone: "danger",
+          message: error.message ?? "Unable to update the password right now.",
+        });
+        return;
+      }
+
+      // Return to normal sign-in with the new password rather than continuing
+      // as an authenticated session on the recovered account.
+      await supabase.auth.signOut();
+      setPasswordRecoveryMode(false);
+      setRecoveryDraft({ newPassword: "", confirmPassword: "" });
+      setShowRecoveryPassword(false);
+      setAuthSession(null);
+      setAuthRecoveryFeedback({
+        tone: "success",
+        message: "Password updated. Sign in with your new password.",
+      });
+    } catch (error) {
+      setPasswordRecoveryFeedback({
+        tone: "danger",
+        message: error?.message ?? "Unable to update the password right now.",
+      });
+    } finally {
+      setPasswordRecoverySubmitting(false);
+    }
+  };
+
   const handleSignOut = async () => {
     setAuthSubmitting(true);
 
@@ -1313,6 +1603,27 @@ function App() {
     setAuthSubmitting(false);
   };
 
+  if (passwordRecoveryMode) {
+    return (
+      <PasswordRecoveryShell
+        fleetName={currentSnapshot.profile.fleetName}
+        newPassword={recoveryDraft.newPassword}
+        confirmPassword={recoveryDraft.confirmPassword}
+        showPassword={showRecoveryPassword}
+        submitting={passwordRecoverySubmitting}
+        feedback={passwordRecoveryFeedback}
+        onChangeNewPassword={(value) =>
+          setRecoveryDraft((current) => ({ ...current, newPassword: value }))
+        }
+        onChangeConfirmPassword={(value) =>
+          setRecoveryDraft((current) => ({ ...current, confirmPassword: value }))
+        }
+        onToggleShowPassword={() => setShowRecoveryPassword((current) => !current)}
+        onSubmit={handlePasswordRecoverySubmit}
+      />
+    );
+  }
+
   if (!authSession) {
     return (
       <SignInShell
@@ -1326,6 +1637,7 @@ function App() {
         onSubmit={handleAuthSubmit}
         password={authDraft.password}
         passwordResetFeedback={authRecoveryFeedback}
+        passwordResetSubmitting={passwordResetRequestSubmitting}
         submitting={authSubmitting}
       />
     );
@@ -1591,14 +1903,6 @@ function App() {
       return { ok: false, error: "Select a valid TaxiFlow role." };
     }
 
-    const nextAccessPassword = String(draft.nextAccessPassword ?? "").trim();
-    if (nextAccessPassword && nextAccessPassword.length < 6) {
-      return {
-        ok: false,
-        error: "Reset password must be at least 6 characters long.",
-      };
-    }
-
     if (!canAssignRoleToUser(nextRole, existingUser)) {
       return {
         ok: false,
@@ -1609,6 +1913,52 @@ function App() {
     const ownerCount = currentUsers.filter((user) => user.role === "Owner").length;
     if (existingUser.role === "Owner" && nextRole !== "Owner" && ownerCount <= 1) {
       return { ok: false, error: "TaxiFlow must always keep at least one owner account." };
+    }
+
+    const nextAccessPassword = String(draft.nextAccessPassword ?? "").trim();
+
+    if (effectiveBackendMode === "live") {
+      if (nextAccessPassword && nextAccessPassword.length < 8) {
+        return { ok: false, error: "Reset password must be at least 8 characters long." };
+      }
+
+      const updateResult = await callUserLifecycleApi({
+        action: "update",
+        email: existingUser.email,
+        name: String(draft.name ?? "").trim() || existingUser.name,
+        role: nextRole,
+        moduleAccess: normalizeModuleViewAccess(draft.moduleAccess, nextRole),
+      });
+
+      if (!updateResult.ok) {
+        return { ok: false, error: updateResult.error };
+      }
+
+      let passwordMessage = "";
+      if (nextAccessPassword) {
+        const passwordResult = await callUserLifecycleApi({
+          action: "reset-password",
+          email: existingUser.email,
+          password: nextAccessPassword,
+        });
+        passwordMessage = passwordResult.ok
+          ? " Password reset saved."
+          : ` Role/access saved, but the password reset failed: ${passwordResult.error}`;
+      }
+
+      await reloadCanonicalLiveSnapshot();
+
+      return {
+        ok: true,
+        message: `${updateResult.appUser?.name ?? existingUser.name} updated as ${nextRole}.${passwordMessage}`,
+      };
+    }
+
+    if (nextAccessPassword && nextAccessPassword.length < 6) {
+      return {
+        ok: false,
+        error: "Reset password must be at least 6 characters long.",
+      };
     }
 
     const timestamp = new Date().toISOString();
@@ -1713,15 +2063,13 @@ function App() {
         ]),
     };
 
-    const persistResult = await commitUserAccessSnapshot(nextSnapshot);
-    const liveWarning =
-      effectiveBackendMode === "live" && (persistResult?.ok === false || persistResult?.warning)
-        ? " Saved locally and queued for live sync."
-        : "";
+    // Mock/demo mode only reaches here (live mode returned earlier via the server
+    // lifecycle call above).
+    await commitUserAccessSnapshot(nextSnapshot);
 
     return {
       ok: true,
-      message: `${nextUser.name} updated as ${nextUser.role}.${nextAccessPassword ? " Password reset saved." : ""}${liveWarning}`,
+      message: `${nextUser.name} updated as ${nextUser.role}.${nextAccessPassword ? " Password reset saved." : ""}`,
     };
   };
 
@@ -1754,6 +2102,39 @@ function App() {
     }
 
     const nextAccessPassword = String(draft.nextAccessPassword ?? "").trim();
+
+    if (effectiveBackendMode === "live") {
+      // Live mode: the server commits Supabase Auth + appUsers together, or neither.
+      // No client-side snapshot mutation happens here.
+      if (!nextAccessPassword || nextAccessPassword.length < 8) {
+        return {
+          ok: false,
+          error: "A real password (8+ characters) is required to create a live account.",
+        };
+      }
+
+      const lifecycleResult = await callUserLifecycleApi({
+        action: "create",
+        email: newEmail,
+        name: String(draft.name ?? "").trim() || newEmail,
+        role: userRole,
+        password: nextAccessPassword,
+        staffId: draft.staffId ?? null,
+      });
+
+      if (!lifecycleResult.ok) {
+        return { ok: false, error: lifecycleResult.error };
+      }
+
+      await reloadCanonicalLiveSnapshot();
+
+      return {
+        ok: true,
+        message: `New user created: ${lifecycleResult.appUser?.name ?? newEmail} as ${userRole}.`,
+        user: lifecycleResult.appUser,
+      };
+    }
+
     if (nextAccessPassword && nextAccessPassword.length < 6) {
       return {
         ok: false,
@@ -1807,32 +2188,13 @@ function App() {
       ]),
     };
 
-    const persistResult = await commitUserAccessSnapshot(nextSnapshot);
-    const liveWarning =
-      effectiveBackendMode === "live" && (persistResult?.ok === false || persistResult?.warning)
-        ? " Saved locally and queued for live sync."
-        : "";
-
-    let authSyncMessage = "";
-    if (effectiveBackendMode === "live" && nextAccessPassword) {
-      const authSyncResult = await syncUserWithSupabaseAuth({
-        action: "create",
-        email: newEmail,
-        name: newUser.name,
-        role: userRole,
-        password: nextAccessPassword,
-      });
-
-      if (!authSyncResult.ok && !authSyncResult.skipped) {
-        authSyncMessage = ` Supabase Auth sync failed: ${authSyncResult.error}`;
-      } else if (authSyncResult.message) {
-        authSyncMessage = ` ${authSyncResult.message}`;
-      }
-    }
+    // Mock/demo mode only reaches here (live mode returned earlier via the server
+    // lifecycle call above).
+    await commitUserAccessSnapshot(nextSnapshot);
 
     return {
       ok: true,
-      message: `New user created: ${newUser.name} as ${newUser.role}.${liveWarning}${authSyncMessage}`,
+      message: `New user created: ${newUser.name} as ${newUser.role}.`,
       user: newUser,
     };
   };
@@ -1863,6 +2225,30 @@ function App() {
       return { ok: false, error: "Cannot delete the account you are signed in with." };
     }
 
+    if (effectiveBackendMode === "live") {
+      const lifecycleResult = await callUserLifecycleApi({
+        action: "delete",
+        email: userToDelete.email,
+      });
+
+      // Reload the canonical snapshot even on a "partial" outcome: the server
+      // guarantees appUsers membership is removed (and access blocked) before it
+      // ever attempts the Supabase Auth deletion, so the account directory is
+      // authoritative either way.
+      if (lifecycleResult.ok || lifecycleResult.partial) {
+        await reloadCanonicalLiveSnapshot();
+      }
+
+      if (!lifecycleResult.ok) {
+        return { ok: false, error: lifecycleResult.error };
+      }
+
+      return {
+        ok: true,
+        message: lifecycleResult.message ?? `User account deleted: ${userToDelete.name}.`,
+      };
+    }
+
     const nextUsers = sortAppUsers(
       currentUsers.filter((user) => user.email !== userEmail),
     );
@@ -1872,15 +2258,11 @@ function App() {
       appUsers: nextUsers,
     };
 
-    const persistResult = await commitUserAccessSnapshot(nextSnapshot);
-    const liveWarning =
-      effectiveBackendMode === "live" && (persistResult?.ok === false || persistResult?.warning)
-        ? " Saved locally and queued for live sync."
-        : "";
+    await commitUserAccessSnapshot(nextSnapshot);
 
     return {
       ok: true,
-      message: `User account deleted: ${userToDelete.name}.${liveWarning}`,
+      message: `User account deleted: ${userToDelete.name}.`,
     };
   };
 
@@ -1914,6 +2296,36 @@ function App() {
 
     if (!shouldUpdateName && !shouldUpdatePassword) {
       return { ok: false, error: "Update the full name or enter a new password before saving." };
+    }
+
+    if (effectiveBackendMode === "live") {
+      if (shouldUpdatePassword && password.length < 8) {
+        return { ok: false, error: "Reset password must be at least 8 characters long." };
+      }
+
+      // Password only ever goes to Supabase Auth here - it is never written into the
+      // live snapshot, matching the "no plaintext credentials in workspace_snapshots"
+      // contract.
+      const lifecycleResult = await callUserLifecycleApi({
+        action: "reset-password",
+        email: normalizedEmail,
+        name: shouldUpdateName ? nextName : undefined,
+        password: shouldUpdatePassword ? password : undefined,
+      });
+
+      if (!lifecycleResult.ok) {
+        return { ok: false, error: lifecycleResult.error };
+      }
+
+      await reloadCanonicalLiveSnapshot();
+
+      return {
+        ok: true,
+        message:
+          lifecycleResult.warning ??
+          lifecycleResult.message ??
+          `${nextName} details saved.`,
+      };
     }
 
     if (shouldUpdatePassword && password.length < 6) {
@@ -2022,117 +2434,113 @@ function App() {
       ]),
     };
 
-    const persistResult = await commitUserAccessSnapshot(nextSnapshot);
-    const liveWarning =
-      effectiveBackendMode === "live" && (persistResult?.ok === false || persistResult?.warning)
-        ? " Saved locally and queued for live sync."
-        : "";
-
-    let authSyncMessage = "";
-    if (effectiveBackendMode === "live" && shouldUpdatePassword) {
-      const authSyncResult = await syncUserWithSupabaseAuth({
-        action: "reset-password",
-        email: normalizedEmail,
-        name: nextName,
-        role: existingUser.role,
-        password,
-      });
-
-      if (!authSyncResult.ok && !authSyncResult.skipped) {
-        authSyncMessage = ` Supabase Auth sync failed: ${authSyncResult.error}`;
-      } else if (authSyncResult.message) {
-        authSyncMessage = ` ${authSyncResult.message}`;
-      }
-    }
+    // Mock/demo mode only reaches here (live mode returned earlier via the server
+    // lifecycle call above).
+    await commitUserAccessSnapshot(nextSnapshot);
 
     return {
       ok: true,
       message: shouldUpdateName && shouldUpdatePassword
-        ? `${nextUser.name} details and password saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}${liveWarning}${authSyncMessage}`
+        ? `${nextUser.name} details and password saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}`
         : shouldUpdatePassword
-          ? `${nextUser.name} password reset saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}${liveWarning}${authSyncMessage}`
-          : `${nextUser.name} details saved.${liveWarning}`,
+          ? `${nextUser.name} password reset saved.${resolvedRequestIds.length > 0 ? " Reset request closed." : ""}`
+          : `${nextUser.name} details saved.`,
     };
   };
 
-  const resolvePasswordResetRequest = (requestId) => {
-    let result = { ok: false, error: "Unable to close this password reset request." };
+  const resolvePasswordResetRequest = async (requestId) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!PASSWORD_RESET_ROLES.has(activeRole)) {
+      return { ok: false, error: "Only management can close password reset requests." };
+    }
 
-      if (!PASSWORD_RESET_ROLES.has(activeRole)) {
-        result = { ok: false, error: "Only management can close password reset requests." };
-        return current;
-      }
+    const targetRequest =
+      (current.passwordResetRequests ?? []).find((request) => request.id === requestId) ?? null;
 
-      const targetRequest =
-        (current.passwordResetRequests ?? []).find((request) => request.id === requestId) ?? null;
+    if (!targetRequest) {
+      return { ok: false, error: "Password reset request not found." };
+    }
 
-      if (!targetRequest) {
-        result = { ok: false, error: "Password reset request not found." };
-        return current;
-      }
+    if (String(targetRequest.status ?? "pending").trim().toLowerCase() === "resolved") {
+      return { ok: false, error: "This password reset request is already marked as handled." };
+    }
 
-      if (String(targetRequest.status ?? "pending").trim().toLowerCase() === "resolved") {
-        result = { ok: false, error: "This password reset request is already marked as handled." };
-        return current;
-      }
+    const timestamp = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const nextPasswordResetRequests = (current.passwordResetRequests ?? []).map((request) =>
+      request.id === requestId
+        ? {
+            ...request,
+            status: "resolved",
+            notificationStatus: "sent",
+            notificationSentAt:
+              request.notificationSentAt ?? request.requestedAt ?? timestamp,
+            resolvedAt: timestamp,
+            resolvedBy: actorId,
+            resolvedByRole: activeRole,
+          }
+        : request,
+    );
+    const nextEmailOutbox = (current.emailOutbox ?? []).map((entry) =>
+      entry.relatedRequestId === requestId &&
+      String(entry.status ?? "queued").trim().toLowerCase() === "queued"
+        ? {
+            ...entry,
+            status: "actioned",
+            actionedAt: timestamp,
+            actionedBy: actorId,
+          }
+        : entry,
+    );
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp,
+        scope: "system",
+        action: "update",
+        entityType: "password-reset",
+        entityId: requestId,
+        title: `Password reset handled / ${targetRequest.email}`,
+        detail: "Management confirmed the password reset request was handled.",
+      }),
+    ]);
 
-      const timestamp = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const nextPasswordResetRequests = (current.passwordResetRequests ?? []).map((request) =>
-        request.id === requestId
-          ? {
-              ...request,
-              status: "resolved",
-              notificationStatus: "sent",
-              notificationSentAt:
-                request.notificationSentAt ?? request.requestedAt ?? timestamp,
-              resolvedAt: timestamp,
-              resolvedBy: actorId,
-              resolvedByRole: activeRole,
-            }
-          : request,
-      );
-      const nextEmailOutbox = (current.emailOutbox ?? []).map((entry) =>
-        entry.relatedRequestId === requestId &&
-        String(entry.status ?? "queued").trim().toLowerCase() === "queued"
-          ? {
-              ...entry,
-              status: "actioned",
-              actionedAt: timestamp,
-              actionedBy: actorId,
-            }
-          : entry,
-      );
+    const nextSnapshot = {
+      ...current,
+      passwordResetRequests: nextPasswordResetRequests,
+      emailOutbox: nextEmailOutbox,
+      auditTrail: nextAuditTrail,
+    };
 
-      result = {
-        ok: true,
-        message: `Password reset request marked as handled for ${targetRequest.email}.`,
-      };
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
 
+    if (!commitResult.ok) {
       return {
-        ...current,
-        passwordResetRequests: nextPasswordResetRequests,
-        emailOutbox: nextEmailOutbox,
-        auditTrail: appendAuditTrail(current.auditTrail, [
-          buildCurrentAuditEvent(current, {
-            timestamp,
-            scope: "system",
-            action: "update",
-            entityType: "password-reset",
-            entityId: requestId,
-            title: `Password reset handled / ${targetRequest.email}`,
-            detail: "Management confirmed the password reset request was handled.",
-          }),
-        ]),
+        ok: false,
+        error:
+          commitResult.error ??
+          "Could not be saved to the live workspace. No confirmed change was made.",
       };
-    });
+    }
 
-    return result;
+    const confirmedRequest = (commitResult.snapshot?.passwordResetRequests ?? []).find(
+      (request) => request.id === requestId,
+    );
+
+    if (!confirmedRequest || confirmedRequest.status !== "resolved") {
+      return {
+        ok: false,
+        error: "Could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: `Password reset request marked as handled for ${targetRequest.email}.`,
+    };
   };
 
   const selectDriverVehicle = (vehicleId) => {
@@ -2162,618 +2570,645 @@ function App() {
     });
   };
 
-  const saveStandardIncome = (draft) => {
-    let result = { ok: false, error: "Unable to save the standard shift." };
+  // Async and verified, not optimistic: same confirmed-mutation principle already
+  // proven for Route/Driver/Fleet persistence, now applied to Driver Standard
+  // Income capture. Success is only reported once commitLiveSnapshotMutation's
+  // fresh canonical remote read actually contains the new/updated record. All
+  // prior validation (trip logbook, odometer rules, driver edit-reason rule) and
+  // the record data shape are unchanged.
+  const saveStandardIncome = async (draft) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
 
-      const existing = (current.financeTransactions ?? []).find(
-        (record) => record.id === draft.id,
-      );
-      const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
-      const tripDate = String(draft.tripDate ?? "").trim();
-      const timeIn = String(draft.timeIn ?? "").trim();
-      const timeOut = String(draft.timeOut ?? "").trim();
-      const tripLogbook = Array.isArray(draft.tripLogbook) ? draft.tripLogbook : [];
-      const openingOdo = Number(draft.openingOdo);
-      const closingOdo = Number(draft.closingOdo);
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const isUpdate = Boolean(existing);
-      const driverEditReason =
-        isUpdate && activeRole === "Driver" ? String(draft.editReason ?? "").trim() : "";
-      const driverStaffId =
-        activeRole === "Driver"
-          ? String(current.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null
-          : String(existing?.driverStaffId ?? "").trim() || null;
-      const driverName =
-        activeRole === "Driver"
-          ? String(
-              current.driverTerminal?.activeDriver ??
-                current.drivers.find((driver) => driver.staffId === driverStaffId)?.name ??
-                "",
-            ).trim() || null
-          : String(existing?.driverName ?? "").trim() || null;
+    const existing = (current.financeTransactions ?? []).find(
+      (record) => record.id === draft.id,
+    );
+    const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
+    const tripDate = String(draft.tripDate ?? "").trim();
+    const timeIn = String(draft.timeIn ?? "").trim();
+    const timeOut = String(draft.timeOut ?? "").trim();
+    const tripLogbook = Array.isArray(draft.tripLogbook) ? draft.tripLogbook : [];
+    const openingOdo = Number(draft.openingOdo);
+    const closingOdo = Number(draft.closingOdo);
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const isUpdate = Boolean(existing);
+    const driverEditReason =
+      isUpdate && activeRole === "Driver" ? String(draft.editReason ?? "").trim() : "";
+    const driverStaffId =
+      activeRole === "Driver"
+        ? String(current.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null
+        : String(existing?.driverStaffId ?? "").trim() || null;
+    const driverName =
+      activeRole === "Driver"
+        ? String(
+            current.driverTerminal?.activeDriver ??
+              current.drivers.find((driver) => driver.staffId === driverStaffId)?.name ??
+              "",
+          ).trim() || null
+        : String(existing?.driverName ?? "").trim() || null;
 
-      if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
-        return current;
-      }
-      if (existing?.status === "banked") {
-        result = { ok: false, error: "Deposited records can no longer be changed." };
-        return current;
-      }
-      if (isUpdate && activeRole === "Driver" && !driverEditReason) {
-        result = {
-          ok: false,
-          error: "Add a note explaining why you are updating this daily taking.",
-        };
-        return current;
-      }
-      if (!vehicle) {
-        result = { ok: false, error: "Select a valid vehicle before submitting." };
-        return current;
-      }
-      if (!tripDate || !parseDateInputValue(tripDate)) {
-        result = { ok: false, error: "Select the trip date." };
-        return current;
-      }
-      if (!parseTimeInputValue(timeIn) || !parseTimeInputValue(timeOut)) {
-        result = { ok: false, error: "Enter a valid time in and time out." };
-        return current;
-      }
-      if ((getTimeInputMinutes(timeOut) ?? 0) <= (getTimeInputMinutes(timeIn) ?? 0)) {
-        result = { ok: false, error: "Time out must be later than time in." };
-        return current;
-      }
-      if (!Number.isFinite(openingOdo) || !Number.isFinite(closingOdo)) {
-        result = { ok: false, error: "Opening and closing odometer readings are required." };
-        return current;
-      }
-      if (closingOdo - openingOdo <= 0) {
-        result = { ok: false, error: "Closing odometer must be greater than opening odometer." };
-        return current;
-      }
-
-      if (tripLogbook.length === 0) {
-        result = { ok: false, error: "Add at least one trip to the daily logbook." };
-        return current;
-      }
-
-      const normalizedTripLogbook = [];
-      for (const [index, entry] of tripLogbook.entries()) {
-        const normalizedEntry = createDailyTripLogEntry(draft.route ?? vehicle.route, entry);
-        const fromLocation = String(normalizedEntry.fromLocation ?? "").trim();
-        const toLocation = String(normalizedEntry.toLocation ?? "").trim();
-        const passengerValue = String(entry?.passengerCount ?? "").trim();
-        const amountValue = String(entry?.amountCollected ?? "").trim();
-        const passengerCount = Number(entry?.passengerCount);
-        const amountCollected = Number(entry?.amountCollected);
-
-        if (!fromLocation || !toLocation) {
-          result = { ok: false, error: `Complete the from and to stops for trip ${index + 1}.` };
-          return current;
-        }
-        if (fromLocation.toLowerCase() === toLocation.toLowerCase()) {
-          result = { ok: false, error: `Trip ${index + 1} must use two different stops.` };
-          return current;
-        }
-        if (!passengerValue) {
-          result = { ok: false, error: `Enter the passenger count for trip ${index + 1}.` };
-          return current;
-        }
-        if (!Number.isInteger(passengerCount) || passengerCount < 0) {
-          result = {
-            ok: false,
-            error: `Passenger count for trip ${index + 1} must be zero or more.`,
-          };
-          return current;
-        }
-        if (!amountValue) {
-          result = { ok: false, error: `Enter the amount collected for trip ${index + 1}.` };
-          return current;
-        }
-        if (!Number.isFinite(amountCollected) || amountCollected < 0) {
-          result = {
-            ok: false,
-            error: `Amount collected for trip ${index + 1} must be zero or more.`,
-          };
-          return current;
-        }
-
-        normalizedTripLogbook.push({
-          id: normalizedEntry.id ?? createRecordId("trip-leg"),
-          fromLocation,
-          toLocation,
-          departingFromPoint: String(
-            normalizedEntry.departingFromPoint ?? fromLocation,
-          ).trim(),
-          goingToPoint: String(normalizedEntry.goingToPoint ?? toLocation).trim(),
-          passengerCount,
-          amountCollected,
-          ...buildTripAnalyticsFields(normalizedEntry),
-        });
-      }
-
-      const tripLogTotals = getDailyTripLogbookTotals(normalizedTripLogbook);
-      const amountClaimed = tripLogTotals.totalAmount;
-
-      const expectedOpening = getExpectedOpeningOdo(
-        current.financeTransactions ?? [],
-        current.vehicles ?? [],
-        draft.vehicleId,
-        draft.id ?? null,
-      );
-      const recordAnalytics = buildTripAnalyticsFields({
-        ...existing,
-        timeIn,
-        timeOut,
-        odometerStart: draft.odometerStart ?? existing?.odometerStart ?? openingOdo,
-        odometerEnd: draft.odometerEnd ?? existing?.odometerEnd ?? closingOdo,
-      });
-      const dailyAnalytics = buildDailyAnalyticsFields({
-        ...existing,
-        dayStartOdometer: draft.dayStartOdometer ?? existing?.dayStartOdometer ?? openingOdo,
-        dayEndOdometer: draft.dayEndOdometer ?? existing?.dayEndOdometer ?? closingOdo,
-        notes: draft.notes ?? existing?.notes,
-      });
-      const baseNextRecord = {
-        ...existing,
-        id: draft.id ?? createRecordId("txn-inc"),
-        type: "income",
-        incomeKind: "standard",
-        vehicleId: draft.vehicleId,
-        vehicle: vehicle.registration,
-        route: vehicle.route,
-        tripDate,
-        timeIn,
-        timeOut,
-        tripLogbook: normalizedTripLogbook,
-        tripCount: tripLogTotals.tripCount,
-        totalPassengers: tripLogTotals.totalPassengers,
-        openingOdo,
-        closingOdo,
-        ...recordAnalytics,
-        ...dailyAnalytics,
-        amountClaimed,
-        actualCashReceived: null,
-        amount: amountClaimed,
-        driverStaffId,
-        driverName,
-        discrepancy: openingOdo !== expectedOpening,
-        isSpecial: false,
-        status: "pending",
-        timestamp: createTimestampFromDateTimeInput(tripDate, timeIn, existing?.timestamp ?? now),
-        createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
-        createdBy: existing?.createdBy ?? actorId,
-        createdByRole: existing?.createdByRole ?? activeRole,
-        updatedAt: isUpdate ? now : null,
-        updatedBy: isUpdate ? actorId : null,
-        updatedByRole: isUpdate ? activeRole : null,
-        verifiedAt: null,
-        verifiedBy: null,
-        verifiedByRole: null,
-        depositId: null,
-      };
-      const driverEditTracking = buildDriverRecordEditTracking({
-        existingRecord: existing,
-        nextRecord: baseNextRecord,
-        reason: driverEditReason,
-        timestamp: now,
-        actorId,
-        actorRole: activeRole,
-      });
-      const nextRecord = {
-        ...baseNextRecord,
-        ...driverEditTracking.trackingFields,
-      };
-      const nextTransactions = draft.id
-        ? current.financeTransactions.map((record) =>
-            record.id === draft.id
-              ? nextRecord
-              : record,
-          )
-        : [nextRecord, ...(current.financeTransactions ?? [])];
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "finance",
-          action: isUpdate ? "update" : "create",
-          entityType: "income",
-          entityId: nextRecord.id,
-          title: `${isUpdate ? "Trip income updated" : "Trip income added"} / ${vehicle.registration}`,
-          detail: `${vehicle.route} / ${tripLogTotals.tripCount} trips / ${tripLogTotals.totalPassengers} passengers / ${formatMoney(
-            amountClaimed,
-          )}${
-            driverEditTracking.editEntry
-              ? ` / Driver note: ${driverEditTracking.editEntry.reason} / ${driverEditTracking.editEntry.summary}`
-              : ""
-          }`,
-        }),
-      ]);
-
-      result = {
-        ok: true,
-        message: isUpdate
-          ? nextRecord.discrepancy
-            ? "Trip update saved and logged for owner review. The opening odometer still does not match the last record."
-            : "Trip update saved and logged for owner review."
-          : nextRecord.discrepancy
-            ? "Trip saved and added to the daily total, but the opening odometer does not match the last record."
-            : "Trip saved and added to the daily total. Use Checking to wrap up the day for cash-in.",
-        nextOpeningOdo: closingOdo,
-      };
-
+    if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
+      return { ok: false, error: getModuleAccessErrorMessage("finance") };
+    }
+    if (existing?.status === "banked") {
+      return { ok: false, error: "Deposited records can no longer be changed." };
+    }
+    if (isUpdate && activeRole === "Driver" && !driverEditReason) {
       return {
-        ...current,
-        financeTransactions: nextTransactions,
-        auditTrail: nextAuditTrail,
+        ok: false,
+        error: "Add a note explaining why you are updating this daily taking.",
       };
-    });
+    }
+    if (!vehicle) {
+      return { ok: false, error: "Select a valid vehicle before submitting." };
+    }
+    if (!tripDate || !parseDateInputValue(tripDate)) {
+      return { ok: false, error: "Select the trip date." };
+    }
+    if (!parseTimeInputValue(timeIn) || !parseTimeInputValue(timeOut)) {
+      return { ok: false, error: "Enter a valid time in and time out." };
+    }
+    if ((getTimeInputMinutes(timeOut) ?? 0) <= (getTimeInputMinutes(timeIn) ?? 0)) {
+      return { ok: false, error: "Time out must be later than time in." };
+    }
+    if (!Number.isFinite(openingOdo) || !Number.isFinite(closingOdo)) {
+      return { ok: false, error: "Opening and closing odometer readings are required." };
+    }
+    if (closingOdo - openingOdo <= 0) {
+      return { ok: false, error: "Closing odometer must be greater than opening odometer." };
+    }
 
-    return result;
-  };
+    if (tripLogbook.length === 0) {
+      return { ok: false, error: "Add at least one trip to the daily logbook." };
+    }
 
-  const saveSpecialIncome = (draft) => {
-    let result = { ok: false, error: "Unable to save the extra trip." };
+    const normalizedTripLogbook = [];
+    for (const [index, entry] of tripLogbook.entries()) {
+      const normalizedEntry = createDailyTripLogEntry(draft.route ?? vehicle.route, entry);
+      const fromLocation = String(normalizedEntry.fromLocation ?? "").trim();
+      const toLocation = String(normalizedEntry.toLocation ?? "").trim();
+      const passengerValue = String(entry?.passengerCount ?? "").trim();
+      const amountValue = String(entry?.amountCollected ?? "").trim();
+      const passengerCount = Number(entry?.passengerCount);
+      const amountCollected = Number(entry?.amountCollected);
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
+      if (!fromLocation || !toLocation) {
+        return { ok: false, error: `Complete the from and to stops for trip ${index + 1}.` };
       }
-
-      const existing = (current.financeTransactions ?? []).find(
-        (record) => record.id === draft.id,
-      );
-      const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
-      const tripDate = String(draft.tripDate ?? "").trim();
-      const openingOdo = Number(draft.openingOdo);
-      const closingOdo = Number(draft.closingOdo);
-      const fromLocation = draft.fromLocation?.trim() ?? "";
-      const toLocation = draft.toLocation?.trim() ?? "";
-      const travelReason = draft.travelReason?.trim() ?? "";
-      const fuelOilCost = Number(draft.fuelOilCost ?? 0);
-      const repairMaintenanceCost = Number(draft.repairMaintenanceCost ?? 0);
-      const amount = Number(draft.amount);
-      const businessKm = closingOdo - openingOdo;
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const isUpdate = Boolean(existing);
-      const driverEditReason =
-        isUpdate && activeRole === "Driver" ? String(draft.editReason ?? "").trim() : "";
-      const driverStaffId =
-        activeRole === "Driver"
-          ? String(current.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null
-          : String(existing?.driverStaffId ?? "").trim() || null;
-      const driverName =
-        activeRole === "Driver"
-          ? String(
-              current.driverTerminal?.activeDriver ??
-                current.drivers.find((driver) => driver.staffId === driverStaffId)?.name ??
-                "",
-            ).trim() || null
-          : String(existing?.driverName ?? "").trim() || null;
-
-      if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
-        return current;
+      if (fromLocation.toLowerCase() === toLocation.toLowerCase()) {
+        return { ok: false, error: `Trip ${index + 1} must use two different stops.` };
       }
-      if (existing?.status === "banked") {
-        result = { ok: false, error: "Deposited records can no longer be changed." };
-        return current;
+      if (!passengerValue) {
+        return { ok: false, error: `Enter the passenger count for trip ${index + 1}.` };
       }
-      if (isUpdate && activeRole === "Driver" && !driverEditReason) {
-        result = {
+      if (!Number.isInteger(passengerCount) || passengerCount < 0) {
+        return {
           ok: false,
-          error: "Add a note explaining why you are updating this extra trip.",
+          error: `Passenger count for trip ${index + 1} must be zero or more.`,
         };
-        return current;
       }
-      if (!vehicle) {
-        result = { ok: false, error: "Select a valid vehicle before submitting." };
-        return current;
+      if (!amountValue) {
+        return { ok: false, error: `Enter the amount collected for trip ${index + 1}.` };
       }
-      if (!tripDate || !parseDateInputValue(tripDate)) {
-        result = { ok: false, error: "Select the travel date." };
-        return current;
-      }
-      if (!Number.isFinite(openingOdo) || !Number.isFinite(closingOdo)) {
-        result = { ok: false, error: "Opening and closing odometer readings are required." };
-        return current;
-      }
-      if (closingOdo - openingOdo <= 0) {
-        result = { ok: false, error: "Closing odometer must be greater than opening odometer." };
-        return current;
-      }
-      if (!fromLocation || !toLocation || !travelReason) {
-        result = { ok: false, error: "Complete the business travel details before saving." };
-        return current;
-      }
-      if (!Number.isFinite(fuelOilCost) || fuelOilCost < 0) {
-        result = { ok: false, error: "Enter a valid fuel and oil cost." };
-        return current;
-      }
-      if (!Number.isFinite(repairMaintenanceCost) || repairMaintenanceCost < 0) {
-        result = { ok: false, error: "Enter a valid repairs and maintenance cost." };
-        return current;
-      }
-      if (!Number.isFinite(amount) || amount <= 0) {
-        result = { ok: false, error: "Enter the amount earned for the extra trip." };
-        return current;
+      if (!Number.isFinite(amountCollected) || amountCollected < 0) {
+        return {
+          ok: false,
+          error: `Amount collected for trip ${index + 1} must be zero or more.`,
+        };
       }
 
-      const recordAnalytics = buildTripAnalyticsFields({
-        ...existing,
-        timeIn: draft.timeIn ?? existing?.timeIn,
-        timeOut: draft.timeOut ?? existing?.timeOut,
-        odometerStart: draft.odometerStart ?? existing?.odometerStart ?? openingOdo,
-        odometerEnd: draft.odometerEnd ?? existing?.odometerEnd ?? closingOdo,
-        kmComputed: draft.kmComputed ?? existing?.kmComputed ?? businessKm,
-        tripDurationMin: draft.tripDurationMin ?? existing?.tripDurationMin,
-      });
-      const baseNextRecord = {
-        ...existing,
-        id: draft.id ?? createRecordId("txn-sp"),
-        type: "income",
-        incomeKind: "special",
-        vehicleId: draft.vehicleId,
-        vehicle: vehicle.registration,
-        route: `${fromLocation} to ${toLocation}`,
-        assignedRoute: vehicle.route,
-        description: travelReason,
-        tripDate,
-        openingOdo,
-        closingOdo,
-        businessKm,
-        ...recordAnalytics,
+      normalizedTripLogbook.push({
+        id: normalizedEntry.id ?? createRecordId("trip-leg"),
         fromLocation,
         toLocation,
-        departingFromPoint: fromLocation,
-        goingToPoint: toLocation,
-        travelReason,
-        fuelOilCost,
-        repairMaintenanceCost,
-        amount,
-        amountClaimed: amount,
-        actualCashReceived: null,
-        driverStaffId,
-        driverName,
-        discrepancy: false,
-        isSpecial: true,
-        status: "pending",
-        timestamp: createTimestampFromDateInput(tripDate, existing?.timestamp ?? now),
-        createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
-        createdBy: existing?.createdBy ?? actorId,
-        createdByRole: existing?.createdByRole ?? activeRole,
-        updatedAt: isUpdate ? now : null,
-        updatedBy: isUpdate ? actorId : null,
-        updatedByRole: isUpdate ? activeRole : null,
-        verifiedAt: null,
-        verifiedBy: null,
-        verifiedByRole: null,
-        depositId: null,
-      };
-      const driverEditTracking = buildDriverRecordEditTracking({
-        existingRecord: existing,
-        nextRecord: baseNextRecord,
-        reason: driverEditReason,
-        timestamp: now,
-        actorId,
-        actorRole: activeRole,
+        departingFromPoint: String(
+          normalizedEntry.departingFromPoint ?? fromLocation,
+        ).trim(),
+        goingToPoint: String(normalizedEntry.goingToPoint ?? toLocation).trim(),
+        passengerCount,
+        amountCollected,
+        ...buildTripAnalyticsFields(normalizedEntry),
       });
-      const nextRecord = {
-        ...baseNextRecord,
-        ...driverEditTracking.trackingFields,
-      };
-      const nextTransactions = draft.id
-        ? current.financeTransactions.map((record) =>
-            record.id === draft.id ? nextRecord : record,
-          )
-        : [nextRecord, ...(current.financeTransactions ?? [])];
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "finance",
-          action: isUpdate ? "update" : "create",
-          entityType: "income",
-          entityId: nextRecord.id,
-          title: `${isUpdate ? "Extra trip updated" : "Extra trip added"} / ${
-            nextRecord.vehicle
-          }`,
-          detail: `${formatTripRoute(nextRecord)} / ${travelReason} / ${businessKm.toLocaleString()} km / ${formatMoney(
-            amount,
-          )}${
-            driverEditTracking.editEntry
-              ? ` / Driver note: ${driverEditTracking.editEntry.reason} / ${driverEditTracking.editEntry.summary}`
-              : ""
-          }`,
-        }),
-      ]);
+    }
 
-      result = {
-        ok: true,
-        message: isUpdate
-          ? "Extra trip update saved and logged for owner review."
-          : "Extra trip saved and added to the daily total. Use Checking to wrap up the day for cash-in.",
-      };
+    const tripLogTotals = getDailyTripLogbookTotals(normalizedTripLogbook);
+    const amountClaimed = tripLogTotals.totalAmount;
 
-      return {
-        ...current,
-        financeTransactions: nextTransactions,
-        auditTrail: nextAuditTrail,
-      };
+    const expectedOpening = getExpectedOpeningOdo(
+      current.financeTransactions ?? [],
+      current.vehicles ?? [],
+      draft.vehicleId,
+      draft.id ?? null,
+    );
+    const recordAnalytics = buildTripAnalyticsFields({
+      ...existing,
+      timeIn,
+      timeOut,
+      odometerStart: draft.odometerStart ?? existing?.odometerStart ?? openingOdo,
+      odometerEnd: draft.odometerEnd ?? existing?.odometerEnd ?? closingOdo,
     });
+    const dailyAnalytics = buildDailyAnalyticsFields({
+      ...existing,
+      dayStartOdometer: draft.dayStartOdometer ?? existing?.dayStartOdometer ?? openingOdo,
+      dayEndOdometer: draft.dayEndOdometer ?? existing?.dayEndOdometer ?? closingOdo,
+      notes: draft.notes ?? existing?.notes,
+    });
+    const baseNextRecord = {
+      ...existing,
+      id: draft.id ?? createRecordId("txn-inc"),
+      type: "income",
+      incomeKind: "standard",
+      vehicleId: draft.vehicleId,
+      vehicle: vehicle.registration,
+      route: vehicle.route,
+      tripDate,
+      timeIn,
+      timeOut,
+      tripLogbook: normalizedTripLogbook,
+      tripCount: tripLogTotals.tripCount,
+      totalPassengers: tripLogTotals.totalPassengers,
+      openingOdo,
+      closingOdo,
+      ...recordAnalytics,
+      ...dailyAnalytics,
+      amountClaimed,
+      actualCashReceived: null,
+      amount: amountClaimed,
+      driverStaffId,
+      driverName,
+      discrepancy: openingOdo !== expectedOpening,
+      isSpecial: false,
+      status: "pending",
+      timestamp: createTimestampFromDateTimeInput(tripDate, timeIn, existing?.timestamp ?? now),
+      createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
+      createdBy: existing?.createdBy ?? actorId,
+      createdByRole: existing?.createdByRole ?? activeRole,
+      updatedAt: isUpdate ? now : null,
+      updatedBy: isUpdate ? actorId : null,
+      updatedByRole: isUpdate ? activeRole : null,
+      verifiedAt: null,
+      verifiedBy: null,
+      verifiedByRole: null,
+      depositId: null,
+    };
+    const driverEditTracking = buildDriverRecordEditTracking({
+      existingRecord: existing,
+      nextRecord: baseNextRecord,
+      reason: driverEditReason,
+      timestamp: now,
+      actorId,
+      actorRole: activeRole,
+    });
+    const nextRecord = {
+      ...baseNextRecord,
+      ...driverEditTracking.trackingFields,
+    };
+    const nextTransactions = draft.id
+      ? current.financeTransactions.map((record) =>
+          record.id === draft.id
+            ? nextRecord
+            : record,
+        )
+      : [nextRecord, ...(current.financeTransactions ?? [])];
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "finance",
+        action: isUpdate ? "update" : "create",
+        entityType: "income",
+        entityId: nextRecord.id,
+        title: `${isUpdate ? "Trip income updated" : "Trip income added"} / ${vehicle.registration}`,
+        detail: `${vehicle.route} / ${tripLogTotals.tripCount} trips / ${tripLogTotals.totalPassengers} passengers / ${formatMoney(
+          amountClaimed,
+        )}${
+          driverEditTracking.editEntry
+            ? ` / Driver note: ${driverEditTracking.editEntry.reason} / ${driverEditTracking.editEntry.summary}`
+            : ""
+        }`,
+      }),
+    ]);
 
-    return result;
+    const nextSnapshot = {
+      ...current,
+      financeTransactions: nextTransactions,
+      auditTrail: nextAuditTrail,
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
+      return {
+        ok: false,
+        error:
+          commitResult.error ??
+          "Trip income could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    const confirmedRecord = (commitResult.snapshot?.financeTransactions ?? []).find(
+      (record) => record.id === nextRecord.id,
+    );
+
+    if (!confirmedRecord) {
+      return {
+        ok: false,
+        error: "Trip income could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: isUpdate
+        ? nextRecord.discrepancy
+          ? "Trip update saved and logged for owner review. The opening odometer still does not match the last record."
+          : "Trip update saved and logged for owner review."
+        : nextRecord.discrepancy
+          ? "Trip saved and added to the daily total, but the opening odometer does not match the last record."
+          : "Trip saved and added to the daily total. Use Checking to wrap up the day for cash-in.",
+      nextOpeningOdo: closingOdo,
+    };
   };
 
-  const saveExpense = (draft) => {
-    let result = { ok: false, error: "Unable to save the expense." };
+  const saveSpecialIncome = async (draft) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
 
-      const existing = (current.financeTransactions ?? []).find(
-        (record) => record.id === draft.id,
-      );
-      const amount = Number(draft.amount);
-      const expenseKind = draft.expenseKind;
-      const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
-      const status =
-        activeRole !== "Driver" && hasModuleUpdateAccess(current, "finance")
-          ? "verified"
-          : "pending";
-      const now = new Date().toISOString();
-      const expenseDate = String(draft.expenseDate ?? "").trim();
-      const description = draft.description?.trim() ?? "";
-      const reference = draft.reference?.trim() ?? "";
-      const actorId = resolveCurrentActorId(current);
-      const isUpdate = Boolean(existing);
-      const driverEditReason =
-        isUpdate && activeRole === "Driver" ? String(draft.editReason ?? "").trim() : "";
-      const driverStaffId =
-        activeRole === "Driver"
-          ? String(current.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null
-          : String(existing?.driverStaffId ?? "").trim() || null;
-      const driverName =
-        activeRole === "Driver"
-          ? String(
-              current.driverTerminal?.activeDriver ??
-                current.drivers.find((driver) => driver.staffId === driverStaffId)?.name ??
-                "",
-            ).trim() || null
-          : String(existing?.driverName ?? "").trim() || null;
+    const existing = (current.financeTransactions ?? []).find(
+      (record) => record.id === draft.id,
+    );
+    const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
+    const tripDate = String(draft.tripDate ?? "").trim();
+    const openingOdo = Number(draft.openingOdo);
+    const closingOdo = Number(draft.closingOdo);
+    const fromLocation = draft.fromLocation?.trim() ?? "";
+    const toLocation = draft.toLocation?.trim() ?? "";
+    const travelReason = draft.travelReason?.trim() ?? "";
+    const fuelOilCost = Number(draft.fuelOilCost ?? 0);
+    const repairMaintenanceCost = Number(draft.repairMaintenanceCost ?? 0);
+    const amount = Number(draft.amount);
+    const businessKm = closingOdo - openingOdo;
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const isUpdate = Boolean(existing);
+    const driverEditReason =
+      isUpdate && activeRole === "Driver" ? String(draft.editReason ?? "").trim() : "";
+    const driverStaffId =
+      activeRole === "Driver"
+        ? String(current.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null
+        : String(existing?.driverStaffId ?? "").trim() || null;
+    const driverName =
+      activeRole === "Driver"
+        ? String(
+            current.driverTerminal?.activeDriver ??
+              current.drivers.find((driver) => driver.staffId === driverStaffId)?.name ??
+              "",
+          ).trim() || null
+        : String(existing?.driverName ?? "").trim() || null;
 
-      if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
-        return current;
-      }
-      if (existing?.status === "banked") {
-        result = { ok: false, error: "Deposited records can no longer be changed." };
-        return current;
-      }
-      if (isUpdate && activeRole === "Driver" && !driverEditReason) {
-        result = {
-          ok: false,
-          error: "Add a note explaining why you are updating this expense.",
-        };
-        return current;
-      }
-      if (!draft.category?.trim()) {
-        result = { ok: false, error: "Enter an expense category." };
-        return current;
-      }
-      if (!description) {
-        result = { ok: false, error: "Enter an expense description." };
-        return current;
-      }
-      if (!expenseDate) {
-        result = { ok: false, error: "Select the expense date." };
-        return current;
-      }
-      if (!Number.isFinite(amount) || amount <= 0) {
-        result = { ok: false, error: "Enter a valid expense amount." };
-        return current;
-      }
-      if (expenseKind === "asset" && !vehicle) {
-        result = { ok: false, error: "Vehicle costs need a valid vehicle." };
-        return current;
-      }
-
-      const baseNextRecord = {
-        ...existing,
-        id: draft.id ?? createRecordId("txn-exp"),
-        type: "expense",
-        expenseKind,
-        category: draft.category.trim(),
-        description,
-        expenseDate,
-        reference: reference || null,
-        vehicleId: expenseKind === "asset" ? draft.vehicleId : null,
-        vehicle: expenseKind === "asset" ? vehicle.registration : "General",
-        amount,
-        cashExpense: Boolean(draft.cashExpense),
-        driverStaffId,
-        driverName,
-        status,
-        timestamp: createTimestampFromDateInput(expenseDate, existing?.timestamp ?? now),
-        createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
-        createdBy: existing?.createdBy ?? actorId,
-        createdByRole: existing?.createdByRole ?? activeRole,
-        updatedAt: isUpdate ? now : null,
-        updatedBy: isUpdate ? actorId : null,
-        updatedByRole: isUpdate ? activeRole : null,
-        depositId: null,
-      };
-      const driverEditTracking = buildDriverRecordEditTracking({
-        existingRecord: existing,
-        nextRecord: baseNextRecord,
-        reason: driverEditReason,
-        timestamp: now,
-        actorId,
-        actorRole: activeRole,
-      });
-      const nextRecord = {
-        ...baseNextRecord,
-        ...driverEditTracking.trackingFields,
-      };
-      const nextTransactions = draft.id
-        ? current.financeTransactions.map((record) =>
-            record.id === draft.id ? nextRecord : record,
-          )
-        : [nextRecord, ...(current.financeTransactions ?? [])];
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "finance",
-          action: isUpdate ? "update" : "create",
-          entityType: "expense",
-          entityId: nextRecord.id,
-          title: `${isUpdate ? "Expense updated" : "Expense added"} / ${nextRecord.category}`,
-          detail: `${nextRecord.description} / ${formatMoney(amount)}${
-            nextRecord.reference ? ` / Receipt ${nextRecord.reference}` : ""
-          }${
-            driverEditTracking.editEntry
-              ? ` / Driver note: ${driverEditTracking.editEntry.reason} / ${driverEditTracking.editEntry.summary}`
-              : ""
-          }`,
-        }),
-      ]);
-
-      result = {
-        ok: true,
-        message: isUpdate && activeRole === "Driver"
-          ? "Expense update saved and logged for owner review."
-          : status === "verified"
-            ? "Expense saved and checked."
-            : "Expense saved and sent to a manager for review.",
-      };
-
+    if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
+      return { ok: false, error: getModuleAccessErrorMessage("finance") };
+    }
+    if (existing?.status === "banked") {
+      return { ok: false, error: "Deposited records can no longer be changed." };
+    }
+    if (isUpdate && activeRole === "Driver" && !driverEditReason) {
       return {
-        ...current,
-        financeTransactions: nextTransactions,
-        auditTrail: nextAuditTrail,
+        ok: false,
+        error: "Add a note explaining why you are updating this extra trip.",
       };
-    });
+    }
+    if (!vehicle) {
+      return { ok: false, error: "Select a valid vehicle before submitting." };
+    }
+    if (!tripDate || !parseDateInputValue(tripDate)) {
+      return { ok: false, error: "Select the travel date." };
+    }
+    if (!Number.isFinite(openingOdo) || !Number.isFinite(closingOdo)) {
+      return { ok: false, error: "Opening and closing odometer readings are required." };
+    }
+    if (closingOdo - openingOdo <= 0) {
+      return { ok: false, error: "Closing odometer must be greater than opening odometer." };
+    }
+    if (!fromLocation || !toLocation || !travelReason) {
+      return { ok: false, error: "Complete the business travel details before saving." };
+    }
+    if (!Number.isFinite(fuelOilCost) || fuelOilCost < 0) {
+      return { ok: false, error: "Enter a valid fuel and oil cost." };
+    }
+    if (!Number.isFinite(repairMaintenanceCost) || repairMaintenanceCost < 0) {
+      return { ok: false, error: "Enter a valid repairs and maintenance cost." };
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { ok: false, error: "Enter the amount earned for the extra trip." };
+    }
 
-    return result;
+    const recordAnalytics = buildTripAnalyticsFields({
+      ...existing,
+      timeIn: draft.timeIn ?? existing?.timeIn,
+      timeOut: draft.timeOut ?? existing?.timeOut,
+      odometerStart: draft.odometerStart ?? existing?.odometerStart ?? openingOdo,
+      odometerEnd: draft.odometerEnd ?? existing?.odometerEnd ?? closingOdo,
+      kmComputed: draft.kmComputed ?? existing?.kmComputed ?? businessKm,
+      tripDurationMin: draft.tripDurationMin ?? existing?.tripDurationMin,
+    });
+    const baseNextRecord = {
+      ...existing,
+      id: draft.id ?? createRecordId("txn-sp"),
+      type: "income",
+      incomeKind: "special",
+      vehicleId: draft.vehicleId,
+      vehicle: vehicle.registration,
+      route: `${fromLocation} to ${toLocation}`,
+      assignedRoute: vehicle.route,
+      description: travelReason,
+      tripDate,
+      openingOdo,
+      closingOdo,
+      businessKm,
+      ...recordAnalytics,
+      fromLocation,
+      toLocation,
+      departingFromPoint: fromLocation,
+      goingToPoint: toLocation,
+      travelReason,
+      fuelOilCost,
+      repairMaintenanceCost,
+      amount,
+      amountClaimed: amount,
+      actualCashReceived: null,
+      driverStaffId,
+      driverName,
+      discrepancy: false,
+      isSpecial: true,
+      status: "pending",
+      timestamp: createTimestampFromDateInput(tripDate, existing?.timestamp ?? now),
+      createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
+      createdBy: existing?.createdBy ?? actorId,
+      createdByRole: existing?.createdByRole ?? activeRole,
+      updatedAt: isUpdate ? now : null,
+      updatedBy: isUpdate ? actorId : null,
+      updatedByRole: isUpdate ? activeRole : null,
+      verifiedAt: null,
+      verifiedBy: null,
+      verifiedByRole: null,
+      depositId: null,
+    };
+    const driverEditTracking = buildDriverRecordEditTracking({
+      existingRecord: existing,
+      nextRecord: baseNextRecord,
+      reason: driverEditReason,
+      timestamp: now,
+      actorId,
+      actorRole: activeRole,
+    });
+    const nextRecord = {
+      ...baseNextRecord,
+      ...driverEditTracking.trackingFields,
+    };
+    const nextTransactions = draft.id
+      ? current.financeTransactions.map((record) =>
+          record.id === draft.id ? nextRecord : record,
+        )
+      : [nextRecord, ...(current.financeTransactions ?? [])];
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "finance",
+        action: isUpdate ? "update" : "create",
+        entityType: "income",
+        entityId: nextRecord.id,
+        title: `${isUpdate ? "Extra trip updated" : "Extra trip added"} / ${
+          nextRecord.vehicle
+        }`,
+        detail: `${formatTripRoute(nextRecord)} / ${travelReason} / ${businessKm.toLocaleString()} km / ${formatMoney(
+          amount,
+        )}${
+          driverEditTracking.editEntry
+            ? ` / Driver note: ${driverEditTracking.editEntry.reason} / ${driverEditTracking.editEntry.summary}`
+            : ""
+        }`,
+      }),
+    ]);
+
+    const nextSnapshot = {
+      ...current,
+      financeTransactions: nextTransactions,
+      auditTrail: nextAuditTrail,
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
+      return {
+        ok: false,
+        error:
+          commitResult.error ??
+          "Extra trip could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    const confirmedRecord = (commitResult.snapshot?.financeTransactions ?? []).find(
+      (record) => record.id === nextRecord.id,
+    );
+
+    if (!confirmedRecord) {
+      return {
+        ok: false,
+        error: "Extra trip could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: isUpdate
+        ? "Extra trip update saved and logged for owner review."
+        : "Extra trip saved and added to the daily total. Use Checking to wrap up the day for cash-in.",
+    };
   };
 
-  const submitDriverCashUp = () => {
-    if (!snapshot) {
+  const saveExpense = async (draft) => {
+    const current = currentSnapshot;
+
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+
+    const existing = (current.financeTransactions ?? []).find(
+      (record) => record.id === draft.id,
+    );
+    const amount = Number(draft.amount);
+    const expenseKind = draft.expenseKind;
+    const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
+    const status =
+      activeRole !== "Driver" && hasModuleUpdateAccess(current, "finance")
+        ? "verified"
+        : "pending";
+    const now = new Date().toISOString();
+    const expenseDate = String(draft.expenseDate ?? "").trim();
+    const description = draft.description?.trim() ?? "";
+    const reference = draft.reference?.trim() ?? "";
+    const actorId = resolveCurrentActorId(current);
+    const isUpdate = Boolean(existing);
+    const driverEditReason =
+      isUpdate && activeRole === "Driver" ? String(draft.editReason ?? "").trim() : "";
+    const driverStaffId =
+      activeRole === "Driver"
+        ? String(current.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null
+        : String(existing?.driverStaffId ?? "").trim() || null;
+    const driverName =
+      activeRole === "Driver"
+        ? String(
+            current.driverTerminal?.activeDriver ??
+              current.drivers.find((driver) => driver.staffId === driverStaffId)?.name ??
+              "",
+          ).trim() || null
+        : String(existing?.driverName ?? "").trim() || null;
+
+    if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "finance")) {
+      return { ok: false, error: getModuleAccessErrorMessage("finance") };
+    }
+    if (existing?.status === "banked") {
+      return { ok: false, error: "Deposited records can no longer be changed." };
+    }
+    if (isUpdate && activeRole === "Driver" && !driverEditReason) {
+      return {
+        ok: false,
+        error: "Add a note explaining why you are updating this expense.",
+      };
+    }
+    if (!draft.category?.trim()) {
+      return { ok: false, error: "Enter an expense category." };
+    }
+    if (!description) {
+      return { ok: false, error: "Enter an expense description." };
+    }
+    if (!expenseDate) {
+      return { ok: false, error: "Select the expense date." };
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return { ok: false, error: "Enter a valid expense amount." };
+    }
+    if (expenseKind === "asset" && !vehicle) {
+      return { ok: false, error: "Vehicle costs need a valid vehicle." };
+    }
+
+    const baseNextRecord = {
+      ...existing,
+      id: draft.id ?? createRecordId("txn-exp"),
+      type: "expense",
+      expenseKind,
+      category: draft.category.trim(),
+      description,
+      expenseDate,
+      reference: reference || null,
+      vehicleId: expenseKind === "asset" ? draft.vehicleId : null,
+      vehicle: expenseKind === "asset" ? vehicle.registration : "General",
+      amount,
+      cashExpense: Boolean(draft.cashExpense),
+      driverStaffId,
+      driverName,
+      status,
+      timestamp: createTimestampFromDateInput(expenseDate, existing?.timestamp ?? now),
+      createdAt: existing?.createdAt ?? existing?.timestamp ?? now,
+      createdBy: existing?.createdBy ?? actorId,
+      createdByRole: existing?.createdByRole ?? activeRole,
+      updatedAt: isUpdate ? now : null,
+      updatedBy: isUpdate ? actorId : null,
+      updatedByRole: isUpdate ? activeRole : null,
+      depositId: null,
+    };
+    const driverEditTracking = buildDriverRecordEditTracking({
+      existingRecord: existing,
+      nextRecord: baseNextRecord,
+      reason: driverEditReason,
+      timestamp: now,
+      actorId,
+      actorRole: activeRole,
+    });
+    const nextRecord = {
+      ...baseNextRecord,
+      ...driverEditTracking.trackingFields,
+    };
+    const nextTransactions = draft.id
+      ? current.financeTransactions.map((record) =>
+          record.id === draft.id ? nextRecord : record,
+        )
+      : [nextRecord, ...(current.financeTransactions ?? [])];
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "finance",
+        action: isUpdate ? "update" : "create",
+        entityType: "expense",
+        entityId: nextRecord.id,
+        title: `${isUpdate ? "Expense updated" : "Expense added"} / ${nextRecord.category}`,
+        detail: `${nextRecord.description} / ${formatMoney(amount)}${
+          nextRecord.reference ? ` / Receipt ${nextRecord.reference}` : ""
+        }${
+          driverEditTracking.editEntry
+            ? ` / Driver note: ${driverEditTracking.editEntry.reason} / ${driverEditTracking.editEntry.summary}`
+            : ""
+        }`,
+      }),
+    ]);
+
+    const nextSnapshot = {
+      ...current,
+      financeTransactions: nextTransactions,
+      auditTrail: nextAuditTrail,
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
+      return {
+        ok: false,
+        error:
+          commitResult.error ??
+          "Expense could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    const confirmedRecord = (commitResult.snapshot?.financeTransactions ?? []).find(
+      (record) => record.id === nextRecord.id,
+    );
+
+    if (!confirmedRecord) {
+      return {
+        ok: false,
+        error: "Expense could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: isUpdate && activeRole === "Driver"
+        ? "Expense update saved and logged for owner review."
+        : status === "verified"
+          ? "Expense saved and checked."
+          : "Expense saved and sent to a manager for review.",
+    };
+  };
+
+  const submitDriverCashUp = async () => {
+    const current = currentSnapshot;
+
+    if (!current) {
       return { ok: false, error: "Unable to send the day checking." };
     }
     if (activeRole !== "Driver") {
       return { ok: false, error: "Only a driver can wrap up the day with checking." };
     }
 
-    const actorId = resolveCurrentActorId(snapshot);
-    const derived = deriveSnapshot(snapshot);
+    const actorId = resolveCurrentActorId(current);
+    const derived = deriveSnapshot(current);
     const driverStaffId =
       String(derived.driverTerminal?.activeDriverId ?? actorId ?? "").trim() || null;
     const daySummary = buildDriverDayCashSummary(derived, { driverStaffId });
@@ -2787,7 +3222,7 @@ function App() {
 
     const timestamp = new Date().toISOString();
     const existingCashUp =
-      (snapshot.dailyCashUps ?? []).find(
+      (current.dailyCashUps ?? []).find(
         (entry) =>
           String(entry.driverStaffId ?? "").trim() === driverStaffId &&
           String(entry.workDate ?? "").trim() === daySummary.workDate,
@@ -2841,12 +3276,12 @@ function App() {
       bankedAt: null,
     };
     const nextCashUps = existingCashUp
-      ? (snapshot.dailyCashUps ?? []).map((entry) =>
+      ? (current.dailyCashUps ?? []).map((entry) =>
           entry.id === existingCashUp.id ? nextCashUp : entry,
         )
-      : [nextCashUp, ...(snapshot.dailyCashUps ?? [])];
+      : [nextCashUp, ...(current.dailyCashUps ?? [])];
     const nextTransactions = syncTransactionsForDriverCashUp(
-      snapshot.financeTransactions ?? [],
+      current.financeTransactions ?? [],
       daySummary,
       (record) => ({
         ...record,
@@ -2862,8 +3297,8 @@ function App() {
         bankedAt: null,
       }),
     );
-    const nextAuditTrail = appendAuditTrail(snapshot.auditTrail, [
-      buildCurrentAuditEvent(snapshot, {
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
         timestamp,
         scope: "finance",
         action: existingCashUp ? "update" : "create",
@@ -2878,12 +3313,34 @@ function App() {
       }),
     ]);
 
-    setSnapshot({
-      ...snapshot,
+    const nextSnapshot = {
+      ...current,
       financeTransactions: nextTransactions,
       dailyCashUps: nextCashUps,
       auditTrail: nextAuditTrail,
-    });
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
+      return {
+        ok: false,
+        error:
+          commitResult.error ??
+          "Checking could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    const confirmedCashUp = (commitResult.snapshot?.dailyCashUps ?? []).find(
+      (entry) => entry.id === nextCashUp.id,
+    );
+
+    if (!confirmedCashUp) {
+      return {
+        ok: false,
+        error: "Checking could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
 
     return {
       ok: true,
@@ -2980,67 +3437,256 @@ function App() {
     return result;
   };
 
-  const verifyIncome = (transactionId, actualCashReceived) => {
-    let result = { ok: false, error: "Unable to update this cash hand-in record." };
+  // Async and verified, not optimistic: same confirmed-mutation principle already
+  // proven for Route/Driver/Fleet persistence, applied to the Admin-counted /
+  // Manager-verified cash workflow. Every branch below still only ever performs
+  // ONE of the two contract-defined transitions (pending -> counted, or
+  // counted -> verified) - never skips a status - exactly as before. Success is
+  // only reported once commitLiveSnapshotMutation's fresh canonical remote read
+  // actually contains the transitioned record.
+  const verifyIncome = async (transactionId, actualCashReceived) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+
+    const amount = Number(actualCashReceived);
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const cashUpTarget =
+      (current.dailyCashUps ?? []).find(
+        (entry) => getDailyCashUpStableId(entry) === transactionId,
+      ) ?? null;
+
+    if (cashUpTarget) {
+      const derived = deriveSnapshot(current);
+      const daySummary = buildDriverDayCashSummary(derived, {
+        driverStaffId: String(cashUpTarget.driverStaffId ?? "").trim() || null,
+        workDate: String(cashUpTarget.workDate ?? "").trim() || null,
+      });
+      const workflowStatus = getDriverCashUpWorkflowStatus(cashUpTarget, daySummary);
+
+      if (workflowStatus === "banked") {
+        return { ok: false, error: "Deposited day checkings can no longer be changed." };
       }
 
-      const amount = Number(actualCashReceived);
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const cashUpTarget =
-        (current.dailyCashUps ?? []).find(
-          (entry) => getDailyCashUpStableId(entry) === transactionId,
-        ) ?? null;
-
-      if (cashUpTarget) {
-        const derived = deriveSnapshot(current);
-        const daySummary = buildDriverDayCashSummary(derived, {
-          driverStaffId: String(cashUpTarget.driverStaffId ?? "").trim() || null,
-          workDate: String(cashUpTarget.workDate ?? "").trim() || null,
-        });
-        const workflowStatus = getDriverCashUpWorkflowStatus(cashUpTarget, daySummary);
-
-        if (workflowStatus === "banked") {
-          result = { ok: false, error: "Deposited day checkings can no longer be changed." };
-          return current;
+      if (workflowStatus === "pending") {
+        if (!canRecordCashHandoverForRole(activeRole)) {
+          return {
+            ok: false,
+            error: "Administrator must record the day hand-in before manager verification.",
+          };
+        }
+        if (!Number.isFinite(amount) || amount < 0) {
+          return {
+            ok: false,
+            error: "Enter the cash received before recording the day hand-in.",
+          };
         }
 
-        if (workflowStatus === "pending") {
-          if (!canRecordCashHandoverForRole(activeRole)) {
-            result = {
-              ok: false,
-              error: "Administrator must record the day hand-in before manager verification.",
-            };
-            return current;
-          }
-          if (!Number.isFinite(amount) || amount < 0) {
-            result = {
-              ok: false,
-              error: "Enter the cash received before recording the day hand-in.",
-            };
-            return current;
-          }
-
-          const nextCashUp = {
-            ...cashUpTarget,
+        const nextCashUp = {
+          ...cashUpTarget,
+          status: "counted",
+          actualCashReceived: amount,
+          countedAt: now,
+          countedBy: actorId,
+          countedByRole: activeRole,
+          verifiedAt: null,
+          verifiedBy: null,
+          verifiedByRole: null,
+        };
+        const nextTransactions = syncTransactionsForDriverCashUp(
+          current.financeTransactions ?? [],
+          daySummary,
+          (record) => ({
+            ...record,
             status: "counted",
-            actualCashReceived: amount,
             countedAt: now,
             countedBy: actorId,
             countedByRole: activeRole,
             verifiedAt: null,
             verifiedBy: null,
             verifiedByRole: null,
+            depositId: null,
+            bankedAt: null,
+          }),
+        );
+        const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+          buildCurrentAuditEvent(current, {
+            timestamp: now,
+            scope: "finance",
+            action: "update",
+            entityType: "driver-checking",
+            entityId: transactionId,
+            title: `Day hand-in recorded / ${cashUpTarget.driverName ?? "Driver"}`,
+            detail: `${cashUpTarget.workDate} / ${formatMoney(amount)} handed in to admin`,
+          }),
+        ]);
+
+        const nextSnapshot = {
+          ...current,
+          dailyCashUps: (current.dailyCashUps ?? []).map((entry) =>
+            entry.id === transactionId ? nextCashUp : entry,
+          ),
+          financeTransactions: nextTransactions,
+          auditTrail: nextAuditTrail,
+        };
+
+        const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+        if (!commitResult.ok) {
+          return {
+            ok: false,
+            error:
+              commitResult.error ??
+              "Day hand-in could not be saved to the live workspace. No confirmed change was made.",
           };
-          const nextTransactions = syncTransactionsForDriverCashUp(
-            current.financeTransactions ?? [],
-            daySummary,
-            (record) => ({
+        }
+
+        const confirmedCashUp = (commitResult.snapshot?.dailyCashUps ?? []).find(
+          (entry) => entry.id === transactionId && entry.status === "counted",
+        );
+
+        if (!confirmedCashUp) {
+          return {
+            ok: false,
+            error: "Day hand-in could not be saved to the live workspace. No confirmed change was made.",
+          };
+        }
+
+        return {
+          ok: true,
+          message: "Day checking recorded and waiting for manager verification.",
+          shortage: Math.max(Number(daySummary.expectedCashIn ?? 0) - amount, 0),
+        };
+      }
+
+      if (workflowStatus === "counted") {
+        if (!canVerifyCashCheckForRole(activeRole)) {
+          return {
+            ok: false,
+            error: "Manager must verify the admin day checking before banking.",
+          };
+        }
+
+        const finalAmount =
+          Number.isFinite(amount) && amount >= 0
+            ? amount
+            : Number(cashUpTarget.actualCashReceived ?? NaN);
+        if (!Number.isFinite(finalAmount) || finalAmount < 0) {
+          return {
+            ok: false,
+            error: "Administrator must record the day hand-in before manager verification.",
+          };
+        }
+
+        const nextCashUp = {
+          ...cashUpTarget,
+          status: "verified",
+          actualCashReceived: finalAmount,
+          verifiedAt: now,
+          verifiedBy: actorId,
+          verifiedByRole: activeRole,
+        };
+        const nextTransactions = syncTransactionsForDriverCashUp(
+          current.financeTransactions ?? [],
+          daySummary,
+          (record) => ({
+            ...record,
+            status: "verified",
+            verifiedAt: now,
+            verifiedBy: actorId,
+            verifiedByRole: activeRole,
+          }),
+        );
+        const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+          buildCurrentAuditEvent(current, {
+            timestamp: now,
+            scope: "finance",
+            action: "verify",
+            entityType: "driver-checking",
+            entityId: transactionId,
+            title: `Day checking verified / ${cashUpTarget.driverName ?? "Driver"}`,
+            detail: `${cashUpTarget.workDate} / ${formatMoney(finalAmount)} manager checked`,
+          }),
+        ]);
+
+        const nextSnapshot = {
+          ...current,
+          dailyCashUps: (current.dailyCashUps ?? []).map((entry) =>
+            entry.id === transactionId ? nextCashUp : entry,
+          ),
+          financeTransactions: nextTransactions,
+          auditTrail: nextAuditTrail,
+        };
+
+        const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+        if (!commitResult.ok) {
+          return {
+            ok: false,
+            error:
+              commitResult.error ??
+              "Day checking could not be verified in the live workspace. No confirmed change was made.",
+          };
+        }
+
+        const confirmedCashUp = (commitResult.snapshot?.dailyCashUps ?? []).find(
+          (entry) => entry.id === transactionId && entry.status === "verified",
+        );
+
+        if (!confirmedCashUp) {
+          return {
+            ok: false,
+            error: "Day checking could not be verified in the live workspace. No confirmed change was made.",
+          };
+        }
+
+        return {
+          ok: true,
+          message: "Day checking verified and added to cash ready for banking.",
+          shortage: Math.max(Number(daySummary.expectedCashIn ?? 0) - finalAmount, 0),
+        };
+      }
+
+      return {
+        ok: false,
+        error:
+          workflowStatus === "verified"
+            ? "This day checking has already been verified."
+            : "This day checking is not ready for another cash action.",
+      };
+    }
+
+    const target = current.financeTransactions.find((record) => record.id === transactionId);
+
+    if (!target || target.type !== "income") {
+      return { ok: false, error: "Income record not found." };
+    }
+    if (target.status === "banked") {
+      return { ok: false, error: "Deposited records can no longer be changed." };
+    }
+
+    if (target.status === "pending") {
+      if (!canRecordCashHandoverForRole(activeRole)) {
+        return {
+          ok: false,
+          error: "Administrator must record the cash hand-in before manager verification.",
+        };
+      }
+      if (!Number.isFinite(amount) || amount < 0) {
+        return {
+          ok: false,
+          error: "Enter the cash received before recording the hand-in.",
+        };
+      }
+
+      const nextTransactions = current.financeTransactions.map((record) =>
+        record.id === transactionId
+          ? {
               ...record,
+              actualCashReceived: amount,
               status: "counted",
               countedAt: now,
               countedBy: actorId,
@@ -3048,776 +3694,739 @@ function App() {
               verifiedAt: null,
               verifiedBy: null,
               verifiedByRole: null,
-              depositId: null,
-              bankedAt: null,
-            }),
-          );
-          const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-            buildCurrentAuditEvent(current, {
-              timestamp: now,
-              scope: "finance",
-              action: "update",
-              entityType: "driver-checking",
-              entityId: transactionId,
-              title: `Day hand-in recorded / ${cashUpTarget.driverName ?? "Driver"}`,
-              detail: `${cashUpTarget.workDate} / ${formatMoney(amount)} handed in to admin`,
-            }),
-          ]);
+            }
+          : record,
+      );
+      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, {
+          timestamp: now,
+          scope: "finance",
+          action: "update",
+          entityType: "income",
+          entityId: transactionId,
+          title: `Cash hand-in recorded / ${target.vehicle ?? "General"}`,
+          detail: `${formatMoney(amount)} handed in to admin`,
+        }),
+      ]);
 
-          result = {
-            ok: true,
-            message: "Day checking recorded and waiting for manager verification.",
-            shortage: Math.max(Number(daySummary.expectedCashIn ?? 0) - amount, 0),
-          };
+      const nextSnapshot = {
+        ...current,
+        financeTransactions: nextTransactions,
+        auditTrail: nextAuditTrail,
+      };
 
-          return {
-            ...current,
-            dailyCashUps: (current.dailyCashUps ?? []).map((entry) =>
-              entry.id === transactionId ? nextCashUp : entry,
-            ),
-            financeTransactions: nextTransactions,
-            auditTrail: nextAuditTrail,
-          };
-        }
+      const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
 
-        if (workflowStatus === "counted") {
-          if (!canVerifyCashCheckForRole(activeRole)) {
-            result = {
-              ok: false,
-              error: "Manager must verify the admin day checking before banking.",
-            };
-            return current;
-          }
+      if (!commitResult.ok) {
+        return {
+          ok: false,
+          error:
+            commitResult.error ??
+            "Cash hand-in could not be saved to the live workspace. No confirmed change was made.",
+        };
+      }
 
-          const finalAmount =
-            Number.isFinite(amount) && amount >= 0
-              ? amount
-              : Number(cashUpTarget.actualCashReceived ?? NaN);
-          if (!Number.isFinite(finalAmount) || finalAmount < 0) {
-            result = {
-              ok: false,
-              error: "Administrator must record the day hand-in before manager verification.",
-            };
-            return current;
-          }
+      const confirmedRecord = (commitResult.snapshot?.financeTransactions ?? []).find(
+        (record) => record.id === transactionId && record.status === "counted",
+      );
 
-          const nextCashUp = {
-            ...cashUpTarget,
-            status: "verified",
-            actualCashReceived: finalAmount,
-            verifiedAt: now,
-            verifiedBy: actorId,
-            verifiedByRole: activeRole,
-          };
-          const nextTransactions = syncTransactionsForDriverCashUp(
-            current.financeTransactions ?? [],
-            daySummary,
-            (record) => ({
+      if (!confirmedRecord) {
+        return {
+          ok: false,
+          error: "Cash hand-in could not be saved to the live workspace. No confirmed change was made.",
+        };
+      }
+
+      return {
+        ok: true,
+        message: "Cash hand-in recorded and waiting for manager verification.",
+        shortage: Math.max(Number(target.amountClaimed ?? target.amount ?? 0) - amount, 0),
+      };
+    }
+
+    if (target.status === "counted") {
+      if (!canVerifyCashCheckForRole(activeRole)) {
+        return {
+          ok: false,
+          error: "Manager must verify the admin cash checking before banking.",
+        };
+      }
+
+      const finalAmount =
+        Number.isFinite(amount) && amount >= 0 ? amount : Number(target.actualCashReceived ?? NaN);
+      if (!Number.isFinite(finalAmount) || finalAmount < 0) {
+        return {
+          ok: false,
+          error: "Administrator must record the cash hand-in before manager verification.",
+        };
+      }
+
+      const nextTransactions = current.financeTransactions.map((record) =>
+        record.id === transactionId
+          ? {
               ...record,
+              actualCashReceived: finalAmount,
               status: "verified",
               verifiedAt: now,
               verifiedBy: actorId,
               verifiedByRole: activeRole,
-            }),
-          );
-          const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-            buildCurrentAuditEvent(current, {
-              timestamp: now,
-              scope: "finance",
-              action: "verify",
-              entityType: "driver-checking",
-              entityId: transactionId,
-              title: `Day checking verified / ${cashUpTarget.driverName ?? "Driver"}`,
-              detail: `${cashUpTarget.workDate} / ${formatMoney(finalAmount)} manager checked`,
-            }),
-          ]);
-
-          result = {
-            ok: true,
-            message: "Day checking verified and added to cash ready for banking.",
-            shortage: Math.max(Number(daySummary.expectedCashIn ?? 0) - finalAmount, 0),
-          };
-
-          return {
-            ...current,
-            dailyCashUps: (current.dailyCashUps ?? []).map((entry) =>
-              entry.id === transactionId ? nextCashUp : entry,
-            ),
-            financeTransactions: nextTransactions,
-            auditTrail: nextAuditTrail,
-          };
-        }
-
-        result = {
-          ok: false,
-          error:
-            workflowStatus === "verified"
-              ? "This day checking has already been verified."
-              : "This day checking is not ready for another cash action.",
-        };
-        return current;
-      }
-
-      const target = current.financeTransactions.find((record) => record.id === transactionId);
-
-      if (!target || target.type !== "income") {
-        result = { ok: false, error: "Income record not found." };
-        return current;
-      }
-      if (target.status === "banked") {
-        result = { ok: false, error: "Deposited records can no longer be changed." };
-        return current;
-      }
-
-      if (target.status === "pending") {
-        if (!canRecordCashHandoverForRole(activeRole)) {
-          result = {
-            ok: false,
-            error: "Administrator must record the cash hand-in before manager verification.",
-          };
-          return current;
-        }
-        if (!Number.isFinite(amount) || amount < 0) {
-          result = {
-            ok: false,
-            error: "Enter the cash received before recording the hand-in.",
-          };
-          return current;
-        }
-
-        const nextTransactions = current.financeTransactions.map((record) =>
-          record.id === transactionId
-            ? {
-                ...record,
-                actualCashReceived: amount,
-                status: "counted",
-                countedAt: now,
-                countedBy: actorId,
-                countedByRole: activeRole,
-                verifiedAt: null,
-                verifiedBy: null,
-                verifiedByRole: null,
-              }
-            : record,
-        );
-        const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-          buildCurrentAuditEvent(current, {
-            timestamp: now,
-            scope: "finance",
-            action: "update",
-            entityType: "income",
-            entityId: transactionId,
-            title: `Cash hand-in recorded / ${target.vehicle ?? "General"}`,
-            detail: `${formatMoney(amount)} handed in to admin`,
-          }),
-        ]);
-
-        result = {
-          ok: true,
-          message: "Cash hand-in recorded and waiting for manager verification.",
-          shortage: Math.max(Number(target.amountClaimed ?? target.amount ?? 0) - amount, 0),
-        };
-
-        return {
-          ...current,
-          financeTransactions: nextTransactions,
-          auditTrail: nextAuditTrail,
-        };
-      }
-
-      if (target.status === "counted") {
-        if (!canVerifyCashCheckForRole(activeRole)) {
-          result = {
-            ok: false,
-            error: "Manager must verify the admin cash checking before banking.",
-          };
-          return current;
-        }
-
-        const finalAmount =
-          Number.isFinite(amount) && amount >= 0 ? amount : Number(target.actualCashReceived ?? NaN);
-        if (!Number.isFinite(finalAmount) || finalAmount < 0) {
-          result = {
-            ok: false,
-            error: "Administrator must record the cash hand-in before manager verification.",
-          };
-          return current;
-        }
-
-        const nextTransactions = current.financeTransactions.map((record) =>
-          record.id === transactionId
-            ? {
-                ...record,
-                actualCashReceived: finalAmount,
-                status: "verified",
-                verifiedAt: now,
-                verifiedBy: actorId,
-                verifiedByRole: activeRole,
-              }
-            : record,
-        );
-        const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-          buildCurrentAuditEvent(current, {
-            timestamp: now,
-            scope: "finance",
-            action: "verify",
-            entityType: "income",
-            entityId: transactionId,
-            title: `Cash checking verified / ${target.vehicle ?? "General"}`,
-            detail: `${formatMoney(finalAmount)} manager checked`,
-          }),
-        ]);
-
-        result = {
-          ok: true,
-          message: "Cash checking verified and added to cash ready for banking.",
-          shortage: Math.max(Number(target.amountClaimed ?? target.amount ?? 0) - finalAmount, 0),
-        };
-
-        return {
-          ...current,
-          financeTransactions: nextTransactions,
-          auditTrail: nextAuditTrail,
-        };
-      }
-
-      result = {
-        ok: false,
-        error:
-          target.status === "verified"
-            ? "This cash checking has already been verified."
-            : "This income record is not ready for another cash action.",
-      };
-      return current;
-    });
-
-    return result;
-  };
-
-  const deleteTransaction = (transactionId) => {
-    let result = { ok: false, error: "Unable to delete the record." };
-
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-
-      const target = current.financeTransactions.find((record) => record.id === transactionId);
-
-      if (!hasModuleUpdateAccess(current, "finance")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
-        return current;
-      }
-      if (!target) {
-        result = { ok: false, error: "Record not found." };
-        return current;
-      }
-      if (target.status === "banked") {
-        result = { ok: false, error: "Deposited records are final and cannot be deleted." };
-        return current;
-      }
-
-      result = { ok: true, message: "Record removed." };
+            }
+          : record,
+      );
       const nextAuditTrail = appendAuditTrail(current.auditTrail, [
         buildCurrentAuditEvent(current, {
+          timestamp: now,
           scope: "finance",
-          action: "delete",
-          entityType: target.type,
-          entityId: target.id,
-          title:
-            target.type === "income"
-              ? `${target.isSpecial ? "Extra trip removed" : "Trip income removed"} / ${
-                  target.vehicle ?? "General"
-                }`
-              : `Expense removed / ${target.category}`,
-          detail:
-            target.type === "income"
-              ? target.isSpecial
-                ? `${formatMoney(target.amountClaimed ?? target.amount ?? 0)} / ${formatTripRoute(
-                    target,
-                  )} / ${formatTripLogMeta(target)}`
-                : `${formatMoney(target.amountClaimed ?? target.amount ?? 0)} / ${
-                    target.route ?? "Pending route"
-                  }`
-              : `${formatMoney(target.amount ?? 0)} / ${target.vehicle ?? "General"}`,
+          action: "verify",
+          entityType: "income",
+          entityId: transactionId,
+          title: `Cash checking verified / ${target.vehicle ?? "General"}`,
+          detail: `${formatMoney(finalAmount)} manager checked`,
         }),
       ]);
 
-      return {
+      const nextSnapshot = {
         ...current,
-        financeTransactions: current.financeTransactions.filter(
-          (record) => record.id !== transactionId,
-        ),
+        financeTransactions: nextTransactions,
         auditTrail: nextAuditTrail,
       };
-    });
 
-    return result;
+      const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+      if (!commitResult.ok) {
+        return {
+          ok: false,
+          error:
+            commitResult.error ??
+            "Cash checking could not be verified in the live workspace. No confirmed change was made.",
+        };
+      }
+
+      const confirmedRecord = (commitResult.snapshot?.financeTransactions ?? []).find(
+        (record) => record.id === transactionId && record.status === "verified",
+      );
+
+      if (!confirmedRecord) {
+        return {
+          ok: false,
+          error: "Cash checking could not be verified in the live workspace. No confirmed change was made.",
+        };
+      }
+
+      return {
+        ok: true,
+        message: "Cash checking verified and added to cash ready for banking.",
+        shortage: Math.max(Number(target.amountClaimed ?? target.amount ?? 0) - finalAmount, 0),
+      };
+    }
+
+    return {
+      ok: false,
+      error:
+        target.status === "verified"
+          ? "This cash checking has already been verified."
+          : "This income record is not ready for another cash action.",
+    };
   };
 
-  const lockDeposit = () => {
-    let result = { ok: false, error: "No manager-checked records are ready to finalise." };
+  const deleteTransaction = async (transactionId) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
 
-      if (!hasModuleUpdateAccess(current, "finance")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("finance") };
-        return current;
-      }
-      if (!canFinishDepositForRole(activeRole)) {
-        result = {
-          ok: false,
-          error: "Only the manager or owner can finalise a verified deposit batch.",
-        };
-        return current;
-      }
-      const derived = deriveSnapshot(current);
-      const driverCashUpQueue = buildDriverCashUpQueue({
-        ...derived,
-        vehicles: derived.vehicles,
-        financeTransactions: derived.financeTransactions,
-        dailyCashUps: Array.isArray(current.dailyCashUps) ? current.dailyCashUps : [],
-      });
-      const verifiedDriverCashUps = driverCashUpQueue.filter(
-        (entry) => entry.workflowStatus === "verified",
-      );
-      const verifiedDriverCashUpIds = new Set(
-        verifiedDriverCashUps.map((entry) => entry.id).filter(Boolean),
-      );
-      const verifiedDriverCashUpTransactionIds = new Set(
-        verifiedDriverCashUps.flatMap((entry) => buildCashUpTransactionIds(entry)),
-      );
-      const standaloneVerifiedTransactions = (current.financeTransactions ?? []).filter(
-        (record) => record.status === "verified" && !verifiedDriverCashUpTransactionIds.has(record.id),
-      );
-      const recordsLocked = verifiedDriverCashUps.length + standaloneVerifiedTransactions.length;
+    const target = current.financeTransactions.find((record) => record.id === transactionId);
 
-      if (recordsLocked === 0) {
-        return current;
-      }
+    if (!hasModuleUpdateAccess(current, "finance")) {
+      return { ok: false, error: getModuleAccessErrorMessage("finance") };
+    }
+    if (!target) {
+      return { ok: false, error: "Record not found." };
+    }
+    if (target.status === "banked") {
+      return { ok: false, error: "Deposited records are final and cannot be deleted." };
+    }
 
-      const now = new Date();
-      const actorId = resolveCurrentActorId(current);
-      const depositId = `dep-${now.getTime()}`;
-      const reference = buildDepositReference((current.deposits?.length ?? 0) + 1, now);
-      const verifiedTakings =
-        sumBy(verifiedDriverCashUps, (entry) => entry.totalIncome) +
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        scope: "finance",
+        action: "delete",
+        entityType: target.type,
+        entityId: target.id,
+        title:
+          target.type === "income"
+            ? `${target.isSpecial ? "Extra trip removed" : "Trip income removed"} / ${
+                target.vehicle ?? "General"
+              }`
+            : `Expense removed / ${target.category}`,
+        detail:
+          target.type === "income"
+            ? target.isSpecial
+              ? `${formatMoney(target.amountClaimed ?? target.amount ?? 0)} / ${formatTripRoute(
+                  target,
+                )} / ${formatTripLogMeta(target)}`
+              : `${formatMoney(target.amountClaimed ?? target.amount ?? 0)} / ${
+                  target.route ?? "Pending route"
+                }`
+            : `${formatMoney(target.amount ?? 0)} / ${target.vehicle ?? "General"}`,
+      }),
+    ]);
+
+    const nextSnapshot = {
+      ...current,
+      financeTransactions: current.financeTransactions.filter(
+        (record) => record.id !== transactionId,
+      ),
+      auditTrail: nextAuditTrail,
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
+      return {
+        ok: false,
+        error:
+          commitResult.error ??
+          "Record could not be deleted in the live workspace. No confirmed change was made.",
+      };
+    }
+
+    const stillPresent = (commitResult.snapshot?.financeTransactions ?? []).some(
+      (record) => record.id === transactionId,
+    );
+
+    if (stillPresent) {
+      return {
+        ok: false,
+        error: "Record could not be deleted in the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return { ok: true, message: "Record removed." };
+  };
+
+  // Async and verified, not optimistic: same confirmed-mutation principle already
+  // proven for Route/Driver/Fleet persistence, applied to Manager/Owner deposit
+  // finalisation - the last, highest-finality step of the money workflow. Success
+  // is only reported once commitLiveSnapshotMutation's fresh canonical remote read
+  // actually contains the new deposit AND every linked record/cash-up shows
+  // status "banked".
+  const lockDeposit = async () => {
+    const current = currentSnapshot;
+
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!hasModuleUpdateAccess(current, "finance")) {
+      return { ok: false, error: getModuleAccessErrorMessage("finance") };
+    }
+    if (!canFinishDepositForRole(activeRole)) {
+      return {
+        ok: false,
+        error: "Only the manager or owner can finalise a verified deposit batch.",
+      };
+    }
+    const derived = deriveSnapshot(current);
+    const driverCashUpQueue = buildDriverCashUpQueue({
+      ...derived,
+      vehicles: derived.vehicles,
+      financeTransactions: derived.financeTransactions,
+      dailyCashUps: Array.isArray(current.dailyCashUps) ? current.dailyCashUps : [],
+    });
+    const verifiedDriverCashUps = driverCashUpQueue.filter(
+      (entry) => entry.workflowStatus === "verified",
+    );
+    const verifiedDriverCashUpIds = new Set(
+      verifiedDriverCashUps.map((entry) => entry.id).filter(Boolean),
+    );
+    const verifiedDriverCashUpTransactionIds = new Set(
+      verifiedDriverCashUps.flatMap((entry) => buildCashUpTransactionIds(entry)),
+    );
+    const standaloneVerifiedTransactions = (current.financeTransactions ?? []).filter(
+      (record) => record.status === "verified" && !verifiedDriverCashUpTransactionIds.has(record.id),
+    );
+    const recordsLocked = verifiedDriverCashUps.length + standaloneVerifiedTransactions.length;
+
+    if (recordsLocked === 0) {
+      return { ok: false, error: "No manager-checked records are ready to finalise." };
+    }
+
+    const now = new Date();
+    const actorId = resolveCurrentActorId(current);
+    const depositId = `dep-${now.getTime()}`;
+    const reference = buildDepositReference((current.deposits?.length ?? 0) + 1, now);
+    const verifiedTakings =
+      sumBy(verifiedDriverCashUps, (entry) => entry.totalIncome) +
+      sumBy(
+        standaloneVerifiedTransactions.filter((record) => record.type === "income"),
+        getIncomeCashValue,
+      );
+    const cashExpenses = sumBy(
+      standaloneVerifiedTransactions.filter(
+        (record) => record.type === "expense" && record.cashExpense,
+      ),
+      (record) => record.amount,
+    ) + sumBy(verifiedDriverCashUps, (entry) => entry.cashExpenses);
+    const depositRecord = {
+      depositId,
+      reference,
+      timestamp: now.toISOString(),
+      recordsLocked,
+      verifiedTakings,
+      cashExpenses,
+      depositAmount:
+        sumBy(
+          verifiedDriverCashUps,
+          (entry) => entry.actualCashReceived ?? entry.expectedCashIn,
+        ) +
         sumBy(
           standaloneVerifiedTransactions.filter((record) => record.type === "income"),
           getIncomeCashValue,
-        );
-      const cashExpenses = sumBy(
-        standaloneVerifiedTransactions.filter(
-          (record) => record.type === "expense" && record.cashExpense,
-        ),
-        (record) => record.amount,
-      ) + sumBy(verifiedDriverCashUps, (entry) => entry.cashExpenses);
-      const depositRecord = {
-        depositId,
-        reference,
-        timestamp: now.toISOString(),
-        recordsLocked,
-        verifiedTakings,
-        cashExpenses,
-        depositAmount:
-          sumBy(
-            verifiedDriverCashUps,
-            (entry) => entry.actualCashReceived ?? entry.expectedCashIn,
-          ) +
-          sumBy(
-            standaloneVerifiedTransactions.filter((record) => record.type === "income"),
-            getIncomeCashValue,
-          ) -
-          sumBy(
-            standaloneVerifiedTransactions.filter(
-              (record) => record.type === "expense" && record.cashExpense,
-            ),
-            (record) => record.amount,
+        ) -
+        sumBy(
+          standaloneVerifiedTransactions.filter(
+            (record) => record.type === "expense" && record.cashExpense,
           ),
-        transactionIds: [
-          ...verifiedDriverCashUpTransactionIds,
-          ...standaloneVerifiedTransactions.map((record) => record.id),
-        ],
-        cashUpIds: [...verifiedDriverCashUpIds],
-        lockedBy: actorId,
-        lockedByRole: activeRole,
-      };
-      const timestamp = now.toISOString();
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp,
-          scope: "finance",
-          action: "lock",
-          entityType: "deposit",
-          entityId: depositId,
-          title: `Deposit finished / ${reference}`,
-          detail: `${recordsLocked} records / ${formatMoney(depositRecord.depositAmount)}`,
-        }),
-      ]);
+          (record) => record.amount,
+        ),
+      transactionIds: [
+        ...verifiedDriverCashUpTransactionIds,
+        ...standaloneVerifiedTransactions.map((record) => record.id),
+      ],
+      cashUpIds: [...verifiedDriverCashUpIds],
+      lockedBy: actorId,
+      lockedByRole: activeRole,
+    };
+    const timestamp = now.toISOString();
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp,
+        scope: "finance",
+        action: "lock",
+        entityType: "deposit",
+        entityId: depositId,
+        title: `Deposit finished / ${reference}`,
+        detail: `${recordsLocked} records / ${formatMoney(depositRecord.depositAmount)}`,
+      }),
+    ]);
 
-      result = {
-        ok: true,
-        message: `${recordsLocked} manager-checked records were added to ${reference}.`,
-        reference,
-      };
+    const nextSnapshot = {
+      ...current,
+      deposits: [depositRecord, ...(current.deposits ?? [])],
+      dailyCashUps: (current.dailyCashUps ?? []).map((entry) =>
+        verifiedDriverCashUpIds.has(entry.id)
+          ? {
+              ...entry,
+              status: "banked",
+              depositId,
+              bankedAt: timestamp,
+            }
+          : entry,
+      ),
+      financeTransactions: current.financeTransactions.map((record) =>
+        record.status === "verified" || verifiedDriverCashUpTransactionIds.has(record.id)
+          ? {
+              ...record,
+              status: "banked",
+              depositId,
+              bankedAt: timestamp,
+            }
+          : record,
+      ),
+      auditTrail: nextAuditTrail,
+    };
 
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
       return {
-        ...current,
-        deposits: [depositRecord, ...(current.deposits ?? [])],
-        dailyCashUps: (current.dailyCashUps ?? []).map((entry) =>
-          verifiedDriverCashUpIds.has(entry.id)
-            ? {
-                ...entry,
-                status: "banked",
-                depositId,
-                bankedAt: timestamp,
-              }
-            : entry,
-        ),
-        financeTransactions: current.financeTransactions.map((record) =>
-          record.status === "verified" || verifiedDriverCashUpTransactionIds.has(record.id)
-            ? {
-                ...record,
-                status: "banked",
-                depositId,
-                bankedAt: timestamp,
-              }
-            : record,
-        ),
-        auditTrail: nextAuditTrail,
+        ok: false,
+        error:
+          commitResult.error ??
+          "Deposit could not be finalised in the live workspace. No confirmed change was made.",
       };
-    });
+    }
 
-    return result;
+    const confirmedDeposit = (commitResult.snapshot?.deposits ?? []).find(
+      (entry) => entry.depositId === depositId,
+    );
+    const confirmedTransactionsBanked = (commitResult.snapshot?.financeTransactions ?? [])
+      .filter((record) => record.depositId === depositId)
+      .every((record) => record.status === "banked");
+    const confirmedCashUpsBanked = (commitResult.snapshot?.dailyCashUps ?? [])
+      .filter((entry) => entry.depositId === depositId)
+      .every((entry) => entry.status === "banked");
+
+    if (!confirmedDeposit || !confirmedTransactionsBanked || !confirmedCashUpsBanked) {
+      return {
+        ok: false,
+        error: "Deposit could not be finalised in the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: `${recordsLocked} manager-checked records were added to ${reference}.`,
+      reference,
+    };
   };
 
-  const saveVehicleProfile = (draft) => {
-    let result = { ok: false, error: "Unable to save the vehicle profile." };
+  // Async and verified, not optimistic: same confirmed-mutation principle already
+  // proven for Route/Driver persistence. Success is only reported once
+  // commitLiveSnapshotMutation's fresh canonical remote read actually contains the
+  // new/updated vehicle. All prior validation, the vehicle data shape, and the
+  // audit-trail entry are unchanged.
+  const saveVehicleProfile = async (draft) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-      if (!PRIVILEGED_ROLES.has(activeRole)) {
-        result = { ok: false, error: "Only management can edit vehicle settings." };
-        return current;
-      }
-      const routeCatalog = collectRouteMasterRecords(current);
-      const routeSelection = resolveVehicleRouteSelection(draft, routeCatalog);
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!PRIVILEGED_ROLES.has(activeRole)) {
+      return { ok: false, error: "Only management can edit vehicle settings." };
+    }
+    const routeCatalog = collectRouteMasterRecords(current);
+    const routeSelection = resolveVehicleRouteSelection(draft, routeCatalog);
 
-      if (!draft.registration?.trim() || !draft.model?.trim() || !routeSelection.route) {
-        result = { ok: false, error: "Registration, model, and route are required." };
-        return current;
-      }
+    if (!draft.registration?.trim() || !draft.model?.trim() || !routeSelection.route) {
+      return { ok: false, error: "Registration, model, and route are required." };
+    }
 
-      const existing = current.vehicles.find((vehicle) => vehicle.id === draft.id);
-      const assignedDriver =
-        draft.assignedDriverId != null && draft.assignedDriverId !== ""
-          ? current.drivers.find((driver) => driver.staffId === draft.assignedDriverId)
-          : null;
-      if (!hasModuleUpdateAccess(current, "fleet")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
-        return current;
-      }
-      if (draft.assignedDriverId && !assignedDriver) {
-        result = { ok: false, error: "Select a valid driver for this vehicle." };
-        return current;
-      }
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const capabilityFields = normalizeVehicleCapabilityHooks({
-        ...existing,
-        ...draft,
-        route: routeSelection.route,
-        currentRouteId: routeSelection.currentRouteId,
-      });
-      const nextVehicle = {
-        ...existing,
-        id: draft.id ?? createRecordId("veh"),
-        registration: draft.registration.trim().toUpperCase(),
-        model: draft.model.trim(),
-        route: routeSelection.route,
-        status: draft.status ?? "active",
-        utilisation: Number(draft.utilisation ?? 0),
-        currentOdometer: Number(draft.currentOdometer ?? 0),
-        lastServiceOdo: Number(draft.lastServiceOdo ?? 0),
-        serviceIntervalKm: Number(draft.serviceIntervalKm ?? current.profile.serviceIntervalKm),
-        permitExpiryDate: draft.permitExpiryDate || null,
-        discExpiryDate: draft.discExpiryDate || null,
-        assignedDriverId: draft.assignedDriverId || null,
-        canDoRouteService: capabilityFields.canDoRouteService,
-        canDoSpecialTrips: capabilityFields.canDoSpecialTrips,
-        canDoContracts: capabilityFields.canDoContracts,
-        seatCapacity: capabilityFields.seatCapacity,
-        currentRouteId: routeSelection.currentRouteId ?? capabilityFields.currentRouteId,
-        createdAt: existing?.createdAt ?? now,
-        createdBy: existing?.createdBy ?? actorId,
-        createdByRole: existing?.createdByRole ?? activeRole,
-        updatedAt: existing ? now : null,
-        updatedBy: existing ? actorId : null,
-        updatedByRole: existing ? activeRole : null,
-        archivedAt: existing?.archivedAt ?? null,
-        archivedBy: existing?.archivedBy ?? null,
-        archivedByRole: existing?.archivedByRole ?? null,
-      };
-      const currentVehicles = current.vehicles ?? [];
-      const nextVehiclesBase = draft.id
-        ? currentVehicles.map((vehicle) =>
-            vehicle.id === draft.id ? { ...vehicle, ...nextVehicle } : vehicle,
-          )
-        : [nextVehicle, ...currentVehicles];
-      const nextVehicles = nextVehicle.assignedDriverId
-        ? nextVehiclesBase.map((vehicle) =>
-            vehicle.id !== nextVehicle.id && vehicle.assignedDriverId === nextVehicle.assignedDriverId
-              ? {
-                  ...vehicle,
-                  assignedDriverId: null,
-                }
-              : vehicle,
-          )
-        : nextVehiclesBase;
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "fleet",
-          action: existing ? "update" : "create",
-          entityType: "vehicle",
-          entityId: nextVehicle.id,
-          title: `Vehicle ${existing ? "updated" : "created"} / ${nextVehicle.registration}`,
-          detail: `${nextVehicle.model} / ${nextVehicle.route}`,
-        }),
-      ]);
-
-      result = {
-        ok: true,
-        message: draft.id ? "Vehicle profile updated." : "Vehicle profile created.",
-        vehicleId: nextVehicle.id,
-      };
-
-      return {
-        ...current,
-        vehicles: nextVehicles,
-        auditTrail: nextAuditTrail,
-      };
+    const existing = current.vehicles.find((vehicle) => vehicle.id === draft.id);
+    const assignedDriver =
+      draft.assignedDriverId != null && draft.assignedDriverId !== ""
+        ? current.drivers.find((driver) => driver.staffId === draft.assignedDriverId)
+        : null;
+    if (!hasModuleUpdateAccess(current, "fleet")) {
+      return { ok: false, error: getModuleAccessErrorMessage("fleet") };
+    }
+    if (draft.assignedDriverId && !assignedDriver) {
+      return { ok: false, error: "Select a valid driver for this vehicle." };
+    }
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const capabilityFields = normalizeVehicleCapabilityHooks({
+      ...existing,
+      ...draft,
+      route: routeSelection.route,
+      currentRouteId: routeSelection.currentRouteId,
     });
+    const nextVehicle = {
+      ...existing,
+      id: draft.id ?? createRecordId("veh"),
+      registration: draft.registration.trim().toUpperCase(),
+      model: draft.model.trim(),
+      route: routeSelection.route,
+      status: draft.status ?? "active",
+      utilisation: Number(draft.utilisation ?? 0),
+      currentOdometer: Number(draft.currentOdometer ?? 0),
+      lastServiceOdo: Number(draft.lastServiceOdo ?? 0),
+      serviceIntervalKm: Number(draft.serviceIntervalKm ?? current.profile.serviceIntervalKm),
+      permitExpiryDate: draft.permitExpiryDate || null,
+      discExpiryDate: draft.discExpiryDate || null,
+      assignedDriverId: draft.assignedDriverId || null,
+      canDoRouteService: capabilityFields.canDoRouteService,
+      canDoSpecialTrips: capabilityFields.canDoSpecialTrips,
+      canDoContracts: capabilityFields.canDoContracts,
+      seatCapacity: capabilityFields.seatCapacity,
+      currentRouteId: routeSelection.currentRouteId ?? capabilityFields.currentRouteId,
+      createdAt: existing?.createdAt ?? now,
+      createdBy: existing?.createdBy ?? actorId,
+      createdByRole: existing?.createdByRole ?? activeRole,
+      updatedAt: existing ? now : null,
+      updatedBy: existing ? actorId : null,
+      updatedByRole: existing ? activeRole : null,
+      archivedAt: existing?.archivedAt ?? null,
+      archivedBy: existing?.archivedBy ?? null,
+      archivedByRole: existing?.archivedByRole ?? null,
+    };
+    const currentVehicles = current.vehicles ?? [];
+    const nextVehiclesBase = draft.id
+      ? currentVehicles.map((vehicle) =>
+          vehicle.id === draft.id ? { ...vehicle, ...nextVehicle } : vehicle,
+        )
+      : [nextVehicle, ...currentVehicles];
+    const nextVehicles = nextVehicle.assignedDriverId
+      ? nextVehiclesBase.map((vehicle) =>
+          vehicle.id !== nextVehicle.id && vehicle.assignedDriverId === nextVehicle.assignedDriverId
+            ? {
+                ...vehicle,
+                assignedDriverId: null,
+              }
+            : vehicle,
+        )
+      : nextVehiclesBase;
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "fleet",
+        action: existing ? "update" : "create",
+        entityType: "vehicle",
+        entityId: nextVehicle.id,
+        title: `Vehicle ${existing ? "updated" : "created"} / ${nextVehicle.registration}`,
+        detail: `${nextVehicle.model} / ${nextVehicle.route}`,
+      }),
+    ]);
 
-    return result;
+    const nextSnapshot = {
+      ...current,
+      vehicles: nextVehicles,
+      auditTrail: nextAuditTrail,
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
+      return {
+        ok: false,
+        error:
+          commitResult.error ??
+          "Vehicle profile could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    const confirmedVehicle = (commitResult.snapshot?.vehicles ?? []).find(
+      (vehicle) => vehicle.id === nextVehicle.id,
+    );
+
+    if (!confirmedVehicle) {
+      return {
+        ok: false,
+        error: "Vehicle profile could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: draft.id ? "Vehicle profile updated." : "Vehicle profile created.",
+      vehicleId: confirmedVehicle.id,
+    };
   };
 
-  const saveRouteProfile = (draft) => {
-    let result = { ok: false, error: "Unable to save the route profile." };
+  // Async and verified, not optimistic: this is the Phase-1 fix for route
+  // persistence. Success is no longer "React state changed" - it is only
+  // reported once commitLiveSnapshotMutation's fresh canonical remote read
+  // actually contains the new/updated route. All prior validation, the route
+  // data shape, and the audit-trail entry are unchanged.
+  const saveRouteProfile = async (draft) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-      if (!PRIVILEGED_ROLES.has(activeRole)) {
-        result = { ok: false, error: "Only management can edit route settings." };
-        return current;
-      }
-      if (!hasModuleUpdateAccess(current, "fleet")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!PRIVILEGED_ROLES.has(activeRole)) {
+      return { ok: false, error: "Only management can edit route settings." };
+    }
+    if (!hasModuleUpdateAccess(current, "fleet")) {
+      return { ok: false, error: getModuleAccessErrorMessage("fleet") };
+    }
 
-      const routeName = String(draft.name ?? "").trim();
-      const routeCode = String(draft.code ?? "").trim().toUpperCase();
-      const routeType = String(draft.type ?? "route_service").trim() || "route_service";
-      const primaryOrigin = String(draft.primaryOrigin ?? "").trim();
-      const primaryDestination = String(draft.primaryDestination ?? "").trim();
+    const routeName = String(draft.name ?? "").trim();
+    const routeCode = String(draft.code ?? "").trim().toUpperCase();
+    const routeType = String(draft.type ?? "route_service").trim() || "route_service";
+    const primaryOrigin = String(draft.primaryOrigin ?? "").trim();
+    const primaryDestination = String(draft.primaryDestination ?? "").trim();
 
-      if (!routeName) {
-        result = { ok: false, error: "Route name is required." };
-        return current;
-      }
-      if (!primaryOrigin || !primaryDestination) {
-        result = { ok: false, error: "Primary origin and destination are required." };
-        return current;
-      }
+    if (!routeName) {
+      return { ok: false, error: "Route name is required." };
+    }
+    if (!primaryOrigin || !primaryDestination) {
+      return { ok: false, error: "Primary origin and destination are required." };
+    }
 
-      const normalizedDraft = normalizeRouteMasterRecord({
-        ...draft,
-        name: routeName,
-        code: routeCode,
-        type: routeType,
-        primaryOrigin,
-        primaryDestination,
-        route: routeName,
-        isActive: draft.isActive ?? true,
-      });
+    const normalizedDraft = normalizeRouteMasterRecord({
+      ...draft,
+      name: routeName,
+      code: routeCode,
+      type: routeType,
+      primaryOrigin,
+      primaryDestination,
+      route: routeName,
+      isActive: draft.isActive ?? true,
+    });
 
-      if (!normalizedDraft) {
-        result = { ok: false, error: "Enter a valid route name." };
-        return current;
-      }
+    if (!normalizedDraft) {
+      return { ok: false, error: "Enter a valid route name." };
+    }
 
-      const currentRoutes = current.routes ?? [];
-      const existingRoute =
-        currentRoutes.find(
-          (route) =>
-            route.id === draft.id ||
-            route.id === normalizedDraft.id ||
-            route.name?.trim().toLowerCase() === normalizedDraft.name.trim().toLowerCase(),
-        ) ?? null;
-      const duplicateCode = currentRoutes.find(
+    const currentRoutes = current.routes ?? [];
+    const existingRoute =
+      currentRoutes.find(
         (route) =>
-          route.id !== existingRoute?.id &&
-          String(route.code ?? "").trim().toUpperCase() === normalizedDraft.code,
-      );
+          route.id === draft.id ||
+          route.id === normalizedDraft.id ||
+          route.name?.trim().toLowerCase() === normalizedDraft.name.trim().toLowerCase(),
+      ) ?? null;
+    const duplicateCode = currentRoutes.find(
+      (route) =>
+        route.id !== existingRoute?.id &&
+        String(route.code ?? "").trim().toUpperCase() === normalizedDraft.code,
+    );
 
-      if (duplicateCode) {
-        result = { ok: false, error: "This route code is already linked to another route." };
-        return current;
-      }
+    if (duplicateCode) {
+      return { ok: false, error: "This route code is already linked to another route." };
+    }
 
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const nextRoute = {
-        ...existingRoute,
-        ...normalizedDraft,
-        createdAt: existingRoute?.createdAt ?? now,
-        createdBy: existingRoute?.createdBy ?? actorId,
-        createdByRole: existingRoute?.createdByRole ?? activeRole,
-        updatedAt: existingRoute ? now : null,
-        updatedBy: existingRoute ? actorId : null,
-        updatedByRole: existingRoute ? activeRole : null,
-      };
-      const nextRoutesBase = existingRoute
-        ? currentRoutes.map((route) => (route.id === existingRoute.id ? nextRoute : route))
-        : [nextRoute, ...currentRoutes];
-      const nextRoutes = collectRouteMasterRecords({
-        ...current,
-        routes: nextRoutesBase,
-      });
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "fleet",
-          action: existingRoute ? "update" : "create",
-          entityType: "route",
-          entityId: nextRoute.id,
-          title: `Route ${existingRoute ? "updated" : "created"} / ${nextRoute.code}`,
-          detail: `${nextRoute.name} / ${nextRoute.type}`,
-        }),
-      ]);
-
-      result = {
-        ok: true,
-        message: existingRoute ? "Route profile updated." : "Route profile created.",
-        routeId: nextRoute.id,
-      };
-
-      return {
-        ...current,
-        routes: nextRoutes,
-        auditTrail: nextAuditTrail,
-      };
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const nextRoute = {
+      ...existingRoute,
+      ...normalizedDraft,
+      createdAt: existingRoute?.createdAt ?? now,
+      createdBy: existingRoute?.createdBy ?? actorId,
+      createdByRole: existingRoute?.createdByRole ?? activeRole,
+      updatedAt: existingRoute ? now : null,
+      updatedBy: existingRoute ? actorId : null,
+      updatedByRole: existingRoute ? activeRole : null,
+    };
+    const nextRoutesBase = existingRoute
+      ? currentRoutes.map((route) => (route.id === existingRoute.id ? nextRoute : route))
+      : [nextRoute, ...currentRoutes];
+    const nextRoutes = collectRouteMasterRecords({
+      ...current,
+      routes: nextRoutesBase,
     });
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "fleet",
+        action: existingRoute ? "update" : "create",
+        entityType: "route",
+        entityId: nextRoute.id,
+        title: `Route ${existingRoute ? "updated" : "created"} / ${nextRoute.code}`,
+        detail: `${nextRoute.name} / ${nextRoute.type}`,
+      }),
+    ]);
 
-    return result;
+    const nextSnapshot = {
+      ...current,
+      routes: nextRoutes,
+      auditTrail: nextAuditTrail,
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
+      return {
+        ok: false,
+        error:
+          commitResult.error ??
+          "Route could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    const confirmedRoute = (commitResult.snapshot?.routes ?? []).find(
+      (route) => route.id === nextRoute.id,
+    );
+
+    if (!confirmedRoute) {
+      return {
+        ok: false,
+        error: "Route could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: existingRoute ? "Route profile updated." : "Route profile created.",
+      routeId: confirmedRoute.id,
+    };
   };
 
-  const allocateDriverShift = (draft) => {
-    let result = { ok: false, error: "Unable to save the driver allocation." };
+  const allocateDriverShift = async (draft) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-      if (!PRIVILEGED_ROLES.has(activeRole)) {
-        result = { ok: false, error: "Only management can allocate drivers to vehicles." };
-        return current;
-      }
-      if (!hasModuleUpdateAccess(current, "drivers")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("drivers") };
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!PRIVILEGED_ROLES.has(activeRole)) {
+      return { ok: false, error: "Only management can allocate drivers to vehicles." };
+    }
+    if (!hasModuleUpdateAccess(current, "drivers")) {
+      return { ok: false, error: getModuleAccessErrorMessage("drivers") };
+    }
 
-      const derived = deriveSnapshot(current);
-      const driver = derived.drivers.find((item) => item.staffId === draft.staffId);
+    const derived = deriveSnapshot(current);
+    const driver = derived.drivers.find((item) => item.staffId === draft.staffId);
 
-      if (!driver) {
-        result = { ok: false, error: "Select a valid driver before saving the allocation." };
-        return current;
-      }
+    if (!driver) {
+      return { ok: false, error: "Select a valid driver before saving the allocation." };
+    }
 
-      const targetVehicle = draft.vehicleId
-        ? derived.vehicles.find((vehicle) => vehicle.id === draft.vehicleId)
+    // A driver may exist without a vehicle allocation - this only assigns one when
+    // draft.vehicleId is provided.
+    const targetVehicle = draft.vehicleId
+      ? derived.vehicles.find((vehicle) => vehicle.id === draft.vehicleId)
+      : null;
+
+    if (draft.vehicleId && !targetVehicle) {
+      return { ok: false, error: "Select a valid vehicle for the shift allocation." };
+    }
+    if (targetVehicle?.status === "archived") {
+      return { ok: false, error: "Archived vehicles cannot receive a driver allocation." };
+    }
+
+    const currentVehicle =
+      derived.vehicles.find((vehicle) => vehicle.assignedDriverId === driver.staffId) ?? null;
+    const displacedDriver =
+      targetVehicle?.assignedDriverId && targetVehicle.assignedDriverId !== driver.staffId
+        ? derived.drivers.find((item) => item.staffId === targetVehicle.assignedDriverId) ?? null
         : null;
 
-      if (draft.vehicleId && !targetVehicle) {
-        result = { ok: false, error: "Select a valid vehicle for the shift allocation." };
-        return current;
+    if ((currentVehicle?.id ?? "") === (targetVehicle?.id ?? "")) {
+      return {
+        ok: true,
+        message: targetVehicle
+          ? `${driver.name} is already assigned to ${targetVehicle.registration}.`
+          : `${driver.name} is already unassigned.`,
+        staffId: driver.staffId,
+        vehicleId: targetVehicle?.id ?? "",
+      };
+    }
+
+    const now = new Date().toISOString();
+    // Preserve the rules: exactly one current vehicle per driver, and reassigning a
+    // vehicle displaces whichever driver previously held it.
+    const nextVehicles = (current.vehicles ?? []).map((vehicle) => {
+      if (vehicle.id === targetVehicle?.id) {
+        return { ...vehicle, assignedDriverId: driver.staffId };
       }
-      if (targetVehicle?.status === "archived") {
-        result = { ok: false, error: "Archived vehicles cannot receive a driver allocation." };
-        return current;
+      if (vehicle.assignedDriverId === driver.staffId) {
+        return { ...vehicle, assignedDriverId: null };
       }
+      return vehicle;
+    });
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "drivers",
+        action: "update",
+        entityType: "allocation",
+        entityId: `${driver.staffId}:${targetVehicle?.id ?? "unassigned"}`,
+        title: `Shift allocation updated / ${driver.name}`,
+        detail: [
+          targetVehicle
+            ? `${targetVehicle.registration} / ${targetVehicle.route}`
+            : "Removed from vehicle",
+          currentVehicle && currentVehicle.id !== targetVehicle?.id
+            ? `Previous ${currentVehicle.registration}`
+            : null,
+          displacedDriver ? `${displacedDriver.name} removed from vehicle` : null,
+        ]
+          .filter(Boolean)
+          .join(" / "),
+      }),
+    ]);
+    const nextSnapshot = {
+      ...current,
+      vehicles: nextVehicles,
+      auditTrail: nextAuditTrail,
+    };
 
-      const currentVehicle =
-        derived.vehicles.find((vehicle) => vehicle.assignedDriverId === driver.staffId) ?? null;
-      const displacedDriver =
-        targetVehicle?.assignedDriverId && targetVehicle.assignedDriverId !== driver.staffId
-          ? derived.drivers.find((item) => item.staffId === targetVehicle.assignedDriverId) ?? null
-          : null;
-
-      if ((currentVehicle?.id ?? "") === (targetVehicle?.id ?? "")) {
-        result = {
-          ok: true,
-          message: targetVehicle
-            ? `${driver.name} is already assigned to ${targetVehicle.registration}.`
-            : `${driver.name} is already unassigned.`,
-          staffId: driver.staffId,
-          vehicleId: targetVehicle?.id ?? "",
-        };
-        return current;
-      }
-
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const nextVehicles = (current.vehicles ?? []).map((vehicle) => {
-        if (vehicle.id === targetVehicle?.id) {
-          return {
-            ...vehicle,
-            assignedDriverId: driver.staffId,
-          };
-        }
-
-        if (vehicle.assignedDriverId === driver.staffId) {
-          return {
-            ...vehicle,
-            assignedDriverId: null,
-          };
-        }
-
-        return vehicle;
-      });
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "drivers",
-          action: "update",
-          entityType: "allocation",
-          entityId: `${driver.staffId}:${targetVehicle?.id ?? "unassigned"}`,
-          title: `Shift allocation updated / ${driver.name}`,
-          detail: [
-            targetVehicle
-              ? `${targetVehicle.registration} / ${targetVehicle.route}`
-              : "Removed from vehicle",
-            currentVehicle && currentVehicle.id !== targetVehicle?.id
-              ? `Previous ${currentVehicle.registration}`
-              : null,
-            displacedDriver ? `${displacedDriver.name} removed from vehicle` : null,
-          ]
-            .filter(Boolean)
-            .join(" / "),
-        }),
-      ]);
-
-      result = {
+    if (effectiveBackendMode !== "live") {
+      setSnapshot(nextSnapshot);
+      return {
         ok: true,
         message: targetVehicle
           ? `${driver.name} assigned to ${targetVehicle.registration}.`
@@ -3825,483 +4434,658 @@ function App() {
         staffId: driver.staffId,
         vehicleId: targetVehicle?.id ?? "",
       };
+    }
 
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
       return {
-        ...current,
-        vehicles: nextVehicles,
-        auditTrail: nextAuditTrail,
+        ok: false,
+        error:
+          commitResult.error ??
+          "Driver allocation could not be saved to the live workspace. No confirmed change was made.",
       };
-    });
+    }
 
-    return result;
+    const confirmedVehicle = targetVehicle
+      ? (commitResult.snapshot?.vehicles ?? []).find(
+          (vehicle) => vehicle.id === targetVehicle.id && vehicle.assignedDriverId === driver.staffId,
+        )
+      : null;
+
+    if (targetVehicle && !confirmedVehicle) {
+      return {
+        ok: false,
+        error: "Driver allocation could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: targetVehicle
+        ? `${driver.name} assigned to ${targetVehicle.registration}.`
+        : `${driver.name} removed from the shift allocation.`,
+      staffId: driver.staffId,
+      vehicleId: targetVehicle?.id ?? "",
+    };
   };
 
-  const saveDriver = (draft) => {
-    let result = { ok: false, error: "Unable to save the driver profile." };
+  const saveDriver = async (draft) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-      if (!PRIVILEGED_ROLES.has(activeRole)) {
-        result = { ok: false, error: "Only management can add drivers." };
-        return current;
-      }
-      if (!hasModuleUpdateAccess(current, "drivers")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("drivers") };
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!PRIVILEGED_ROLES.has(activeRole)) {
+      return { ok: false, error: "Only management can add drivers." };
+    }
+    if (!hasModuleUpdateAccess(current, "drivers")) {
+      return { ok: false, error: getModuleAccessErrorMessage("drivers") };
+    }
 
-      const driverName = String(draft.name ?? "").trim();
-      if (!driverName) {
-        result = { ok: false, error: "Driver name is required." };
-        return current;
-      }
+    const driverName = String(draft.name ?? "").trim();
+    if (!driverName) {
+      return { ok: false, error: "Driver name is required." };
+    }
 
-      const email = normalizeEmailAddress(draft.email);
-      if (!email) {
-        result = { ok: false, error: "Driver email is required." };
-        return current;
-      }
-      if (!isValidEmailAddress(email)) {
-        result = { ok: false, error: "Enter a valid driver email address." };
-        return current;
-      }
+    // Driver PROFILE requires only a name. Email, route, vehicle, and TaxiFlow
+    // login are all optional - a driver captured purely as an operational record
+    // (licence/PrDP tracking, etc.) must be saveable without any of them. staffId,
+    // not email, remains the driver's primary operational identity.
+    const email = normalizeEmailAddress(draft.email);
+    if (email && !isValidEmailAddress(email)) {
+      return { ok: false, error: "Enter a valid driver email address." };
+    }
 
-      const routeCatalog = collectRouteMasterRecords(current);
-      const selectedRouteIds = Array.from(
-        new Set(
-          (Array.isArray(draft.routeIds) ? draft.routeIds : [])
-            .map((value) => String(value ?? "").trim())
-            .filter(Boolean),
-        ),
-      );
-      const selectedRoutes = selectedRouteIds
-        .map((routeId) => routeCatalog.find((route) => route.id === routeId) ?? null)
-        .filter(Boolean);
+    // TaxiFlow login is an explicit, separate opt-in - never implied merely by a
+    // password being present in the draft (e.g. from a stale form state).
+    const enableLogin = Boolean(draft.enableLogin);
+    if (enableLogin && activeRole !== "Owner") {
+      return { ok: false, error: "Only the owner can enable TaxiFlow login access for a driver." };
+    }
+    if (enableLogin && !email) {
+      return { ok: false, error: "A valid email is required to enable TaxiFlow login." };
+    }
 
-      if (selectedRoutes.length === 0) {
-        result = {
-          ok: false,
-          error:
-            routeCatalog.length > 0
-              ? "Select at least one route for this driver."
-              : "Add a route in Fleet & Operations before saving this driver.",
-        };
-        return current;
-      }
+    // Business rule: a Route is optional. A driver must be creatable before any
+    // Route exists, and remain valid with no route selected - assignment can
+    // happen later from the shift allocation panel.
+    const routeCatalog = collectRouteMasterRecords(current);
+    const selectedRouteIds = Array.from(
+      new Set(
+        (Array.isArray(draft.routeIds) ? draft.routeIds : [])
+          .map((value) => String(value ?? "").trim())
+          .filter(Boolean),
+      ),
+    );
+    const selectedRoutes = selectedRouteIds
+      .map((routeId) => routeCatalog.find((route) => route.id === routeId) ?? null)
+      .filter(Boolean);
 
-      const existingDriver =
-        (current.drivers ?? []).find(
-          (driver) => driver.staffId === String(draft.staffId ?? "").trim(),
-        ) ??
-        (current.drivers ?? []).find(
-          (driver) => normalizeEmailAddress(driver.email) === email,
-        ) ??
-        null;
-      const currentUsers = getAppUsers(current);
-      const existingUserByEmail =
-        currentUsers.find((user) => normalizeEmailAddress(user.email) === email) ?? null;
-      const linkedDriverByUserEmail =
-        !existingDriver && existingUserByEmail?.staffId
-          ? (current.drivers ?? []).find((driver) => driver.staffId === existingUserByEmail.staffId) ??
-            null
-          : null;
-      const resolvedExistingDriver = existingDriver ?? linkedDriverByUserEmail;
-      const existingUser =
-        currentUsers.find(
-          (user) =>
-            user.staffId === resolvedExistingDriver?.staffId ||
-            normalizeEmailAddress(user.email) === normalizeEmailAddress(resolvedExistingDriver?.email),
-        ) ??
-        existingUserByEmail ??
-        null;
+    const currentUsers = getAppUsers(current);
+    const existingDriver =
+      (current.drivers ?? []).find(
+        (driver) => driver.staffId === String(draft.staffId ?? "").trim(),
+      ) ??
+      (email
+        ? (current.drivers ?? []).find((driver) => normalizeEmailAddress(driver.email) === email)
+        : null) ??
+      null;
+    const existingUserByEmail = email
+      ? currentUsers.find((user) => normalizeEmailAddress(user.email) === email) ?? null
+      : null;
+    const linkedDriverByUserEmail =
+      !existingDriver && existingUserByEmail?.staffId
+        ? (current.drivers ?? []).find((driver) => driver.staffId === existingUserByEmail.staffId) ??
+          null
+        : null;
+    const resolvedExistingDriver = existingDriver ?? linkedDriverByUserEmail;
+    const existingUser =
+      currentUsers.find(
+        (user) =>
+          user.staffId === resolvedExistingDriver?.staffId ||
+          (resolvedExistingDriver?.email &&
+            normalizeEmailAddress(user.email) === normalizeEmailAddress(resolvedExistingDriver.email)),
+      ) ??
+      existingUserByEmail ??
+      null;
 
-      if (
-        currentUsers.some(
-          (user) =>
-            normalizeEmailAddress(user.email) === email &&
-            user.staffId !== resolvedExistingDriver?.staffId,
-        )
-      ) {
-        result = {
-          ok: false,
-          error: "This email is already linked to another TaxiFlow account.",
-        };
-        return current;
-      }
+    if (
+      email &&
+      currentUsers.some(
+        (user) =>
+          normalizeEmailAddress(user.email) === email &&
+          user.staffId !== resolvedExistingDriver?.staffId,
+      )
+    ) {
+      return { ok: false, error: "This email is already linked to another TaxiFlow account." };
+    }
 
-      const accessPassword = String(draft.accessPassword ?? "").trim();
-      if (!resolvedExistingDriver && !accessPassword) {
-        result = { ok: false, error: "Create a password for this driver before saving." };
-        return current;
-      }
-      if (accessPassword && accessPassword.length < 6) {
-        result = {
-          ok: false,
-          error: "Driver password must be at least 6 characters long.",
-        };
-        return current;
-      }
-
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const routeNames = selectedRoutes.map((route) => route.name);
-      const primaryRoute = routeNames[0] ?? "";
-      const nextDriver = {
-        ...resolvedExistingDriver,
-        staffId: resolvedExistingDriver?.staffId ?? (draft.staffId?.trim() || createRecordId("drv")),
-        name: driverName,
-        email,
-        route: primaryRoute,
-        routeIds: selectedRouteIds,
-        routeNames,
-        primaryRouteId: selectedRouteIds[0] ?? null,
-        shiftStatus: draft.shiftStatus ?? "Ready for dispatch",
-        avgShiftRevenue: resolvedExistingDriver?.avgShiftRevenue ?? 0,
-        cashAccuracy: resolvedExistingDriver?.cashAccuracy ?? 100,
-        licenseNumber: String(draft.licenseNumber ?? "").trim() || null,
-        licenseCode: String(draft.licenseCode ?? "").trim().toUpperCase() || null,
-        licenseExpiryDate: draft.licenseExpiryDate || null,
-        prdpNumber: String(draft.prdpNumber ?? "").trim() || null,
-        prdpExpiryDate: draft.prdpExpiryDate || null,
-        accessPassword: accessPassword || resolvedExistingDriver?.accessPassword || null,
-        role: "Driver",
-        createdAt: resolvedExistingDriver?.createdAt ?? now,
-        createdBy: resolvedExistingDriver?.createdBy ?? actorId,
-        createdByRole: resolvedExistingDriver?.createdByRole ?? activeRole,
-        updatedAt: resolvedExistingDriver ? now : null,
-        updatedBy: resolvedExistingDriver ? actorId : null,
-        updatedByRole: resolvedExistingDriver ? activeRole : null,
-      };
-      const nextDriverUser = normalizeAppUser({
-        ...existingUser,
-        email,
-        name: nextDriver.name,
-        role: "Driver",
-        actorId: existingUser?.actorId ?? nextDriver.staffId,
-        staffId: nextDriver.staffId,
-        accessPassword: nextDriver.accessPassword,
-        createdAt: existingUser?.createdAt ?? nextDriver.createdAt,
-        createdBy: existingUser?.createdBy ?? nextDriver.createdBy,
-        createdByRole: existingUser?.createdByRole ?? nextDriver.createdByRole,
-        updatedAt: existingUser ? now : null,
-        updatedBy: existingUser ? actorId : null,
-        updatedByRole: existingUser ? activeRole : null,
-      });
-      const nextDrivers = resolvedExistingDriver
-        ? (current.drivers ?? []).map((driver) =>
-            driver.staffId === resolvedExistingDriver.staffId ? nextDriver : driver,
-          )
-        : [nextDriver, ...(current.drivers ?? [])];
-      const nextUsers = sortAppUsers(
-        existingUser
-          ? currentUsers.map((user) =>
-              user.staffId === nextDriver.staffId ||
-              normalizeEmailAddress(user.email) === normalizeEmailAddress(existingUser.email)
-                ? nextDriverUser
-                : normalizeAppUser(user),
-            )
-          : [...currentUsers, nextDriverUser],
-      );
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "drivers",
-          action: existingDriver ? "update" : "create",
-          entityType: "driver",
-          entityId: nextDriver.staffId,
-          title: `Driver ${existingDriver ? "updated" : "created"} / ${nextDriver.name}`,
-          detail: `${nextDriver.staffId} / ${getDriverRouteSummary(nextDriver)} / ${nextDriver.email}`,
-        }),
-      ]);
-
-      result = {
-        ok: true,
-        message: resolvedExistingDriver
-          ? `${nextDriver.name} updated in the driver roster.`
-          : `${nextDriver.name} added to the driver roster.`,
-        staffId: nextDriver.staffId,
-      };
-
+    // Business rule 9: changing the email of an already login-enabled driver could
+    // silently orphan or duplicate the Supabase Auth identity if not coordinated.
+    // Rather than attempt that coordination here, block the specific case with a
+    // clear message - the login's email can still be changed through a dedicated
+    // account-management action later.
+    if (
+      existingUser &&
+      resolvedExistingDriver?.email &&
+      email &&
+      normalizeEmailAddress(resolvedExistingDriver.email) !== email
+    ) {
       return {
+        ok: false,
+        error:
+          "This driver already has TaxiFlow login access under a different email. Change the login email through account management, not the driver profile form.",
+      };
+    }
+
+    // Driver PROFILE and TaxiFlow LOGIN are separate concerns: a password is only
+    // relevant when login access is explicitly enabled, never a requirement of the
+    // profile itself. An already-login-enabled driver does not need a password
+    // re-entered just to save profile edits - only a NEW login requires one.
+    const requestedPassword = String(draft.accessPassword ?? "").trim();
+    if (effectiveBackendMode === "live") {
+      if (enableLogin && !existingUser && !requestedPassword) {
+        return { ok: false, error: "Enter a password to create TaxiFlow login access for this driver." };
+      }
+      if (
+        requestedPassword &&
+        requestedPassword.length < MIN_LIVE_LOGIN_PASSWORD_LENGTH
+      ) {
+        return {
+          ok: false,
+          error: `Driver password must be at least ${MIN_LIVE_LOGIN_PASSWORD_LENGTH} characters long.`,
+        };
+      }
+    } else if (requestedPassword && requestedPassword.length < 6) {
+      return { ok: false, error: "Driver password must be at least 6 characters long." };
+    }
+
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const routeNames = selectedRoutes.map((route) => route.name);
+    const primaryRoute = routeNames[0] ?? "";
+    const nextDriver = {
+      ...resolvedExistingDriver,
+      staffId: resolvedExistingDriver?.staffId ?? (draft.staffId?.trim() || createRecordId("drv")),
+      name: driverName,
+      email,
+      route: primaryRoute,
+      routeIds: selectedRouteIds,
+      routeNames,
+      primaryRouteId: selectedRouteIds[0] ?? null,
+      shiftStatus: draft.shiftStatus ?? "Ready for dispatch",
+      avgShiftRevenue: resolvedExistingDriver?.avgShiftRevenue ?? 0,
+      cashAccuracy: resolvedExistingDriver?.cashAccuracy ?? 100,
+      licenseNumber: String(draft.licenseNumber ?? "").trim() || null,
+      licenseCode: String(draft.licenseCode ?? "").trim().toUpperCase() || null,
+      licenseExpiryDate: draft.licenseExpiryDate || null,
+      prdpNumber: String(draft.prdpNumber ?? "").trim() || null,
+      prdpExpiryDate: draft.prdpExpiryDate || null,
+      role: "Driver",
+      createdAt: resolvedExistingDriver?.createdAt ?? now,
+      createdBy: resolvedExistingDriver?.createdBy ?? actorId,
+      createdByRole: resolvedExistingDriver?.createdByRole ?? activeRole,
+      updatedAt: resolvedExistingDriver ? now : null,
+      updatedBy: resolvedExistingDriver ? actorId : null,
+      updatedByRole: resolvedExistingDriver ? activeRole : null,
+    };
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "drivers",
+        action: existingDriver ? "update" : "create",
+        entityType: "driver",
+        entityId: nextDriver.staffId,
+        title: `Driver ${existingDriver ? "updated" : "created"} / ${nextDriver.name}`,
+        detail: `${nextDriver.staffId} / ${getDriverRouteSummary(nextDriver)} / ${nextDriver.email}`,
+      }),
+    ]);
+    const nextDrivers = resolvedExistingDriver
+      ? (current.drivers ?? []).map((driver) =>
+          driver.staffId === resolvedExistingDriver.staffId ? nextDriver : driver,
+        )
+      : [nextDriver, ...(current.drivers ?? [])];
+
+    if (effectiveBackendMode === "live") {
+      // Live mode: the driver PROFILE never carries a password (it is stripped at
+      // the persistence boundary regardless, but it must never be constructed
+      // here in the first place). Login access, if requested, is a separate,
+      // explicit call to the real Auth + appUsers lifecycle - never silently
+      // implied by saving a profile.
+      const nextSnapshot = {
         ...current,
         drivers: nextDrivers,
-        appUsers: nextUsers,
         auditTrail: nextAuditTrail,
       };
-    });
 
-    return result;
-  };
+      const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
 
-  const archiveVehicle = (vehicleId) => {
-    let result = { ok: false, error: "Unable to archive this vehicle." };
-
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-      if (!PRIVILEGED_ROLES.has(activeRole)) {
-        result = { ok: false, error: "Only management can archive vehicles." };
-        return current;
-      }
-      if (!hasModuleUpdateAccess(current, "fleet")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
-        return current;
+      if (!commitResult.ok) {
+        return {
+          ok: false,
+          error:
+            commitResult.error ??
+            "Driver profile could not be saved to the live workspace. No confirmed change was made.",
+        };
       }
 
-      const target = current.vehicles.find((vehicle) => vehicle.id === vehicleId);
-      if (!target) {
-        result = { ok: false, error: "Vehicle not found." };
-        return current;
-      }
-      if (target.status === "archived") {
-        result = { ok: false, error: "Vehicle is already archived." };
-        return current;
+      const confirmedDriver = (commitResult.snapshot?.drivers ?? []).find(
+        (driver) => driver.staffId === nextDriver.staffId,
+      );
+
+      if (!confirmedDriver) {
+        return {
+          ok: false,
+          error: "Driver profile could not be saved to the live workspace. No confirmed change was made.",
+        };
       }
 
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      result = { ok: true, message: `${target.registration} archived for audit retention.` };
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "fleet",
-          action: "archive",
-          entityType: "vehicle",
-          entityId: target.id,
-          title: `Vehicle archived / ${target.registration}`,
-          detail: `${target.model} kept in the owner history`,
-        }),
-      ]);
+      const profileMessage = resolvedExistingDriver
+        ? `${confirmedDriver.name} updated in the driver roster.`
+        : `${confirmedDriver.name} added to the driver roster.`;
+
+      // Login is only touched when explicitly enabled AND a password was actually
+      // supplied (a new login, or an explicit password reset for an existing one).
+      // Enabling login for an already-login-enabled driver without a new password
+      // just keeps the existing login as-is - nothing to call the server for.
+      if (!enableLogin || !requestedPassword) {
+        return {
+          ok: true,
+          message: existingUser ? `${profileMessage} TaxiFlow login: Active.` : profileMessage,
+          staffId: confirmedDriver.staffId,
+        };
+      }
+
+      const lifecycleResult = await callUserLifecycleApi({
+        action: existingUser ? "update" : "create",
+        email,
+        name: confirmedDriver.name,
+        role: "Driver",
+        password: requestedPassword,
+        staffId: confirmedDriver.staffId,
+      });
+
+      if (!lifecycleResult.ok) {
+        return {
+          ok: true,
+          message: `Driver profile saved, but TaxiFlow login was not created: ${lifecycleResult.error}`,
+          staffId: confirmedDriver.staffId,
+        };
+      }
+
+      await reloadCanonicalLiveSnapshot();
 
       return {
-        ...current,
-        vehicles: current.vehicles.map((vehicle) =>
-          vehicle.id === vehicleId
-            ? {
-                ...vehicle,
-                status: "archived",
-                archivedAt: now,
-                archivedBy: actorId,
-                archivedByRole: activeRole,
-                updatedAt: now,
-                updatedBy: actorId,
-                updatedByRole: activeRole,
-              }
-            : vehicle,
-        ),
-        auditTrail: nextAuditTrail,
+        ok: true,
+        message: `${profileMessage} TaxiFlow login enabled.`,
+        staffId: confirmedDriver.staffId,
       };
+    }
+
+    // Mock/demo mode: unchanged local-only behaviour, including local sign-in,
+    // which does need a password on first creation since there is no real Auth
+    // system backing it in this mode.
+    if (!resolvedExistingDriver && enableLogin && !requestedPassword) {
+      return { ok: false, error: "Create a password for this driver before saving." };
+    }
+
+    const nextDriverLocal = { ...nextDriver, accessPassword: requestedPassword || resolvedExistingDriver?.accessPassword || null };
+    const nextDriversLocal = resolvedExistingDriver
+      ? nextDrivers.map((driver) => (driver.staffId === nextDriverLocal.staffId ? nextDriverLocal : driver))
+      : [nextDriverLocal, ...(current.drivers ?? [])];
+    const nextDriverUser = normalizeAppUser({
+      ...existingUser,
+      email,
+      name: nextDriverLocal.name,
+      role: "Driver",
+      actorId: existingUser?.actorId ?? nextDriverLocal.staffId,
+      staffId: nextDriverLocal.staffId,
+      accessPassword: nextDriverLocal.accessPassword,
+      createdAt: existingUser?.createdAt ?? nextDriverLocal.createdAt,
+      createdBy: existingUser?.createdBy ?? nextDriverLocal.createdBy,
+      createdByRole: existingUser?.createdByRole ?? nextDriverLocal.createdByRole,
+      updatedAt: existingUser ? now : null,
+      updatedBy: existingUser ? actorId : null,
+      updatedByRole: existingUser ? activeRole : null,
+    });
+    const nextUsersLocal = sortAppUsers(
+      existingUser
+        ? currentUsers.map((user) =>
+            user.staffId === nextDriverLocal.staffId ||
+            normalizeEmailAddress(user.email) === normalizeEmailAddress(existingUser.email)
+              ? nextDriverUser
+              : normalizeAppUser(user),
+          )
+        : [...currentUsers, nextDriverUser],
+    );
+
+    setSnapshot({
+      ...current,
+      drivers: nextDriversLocal,
+      appUsers: nextUsersLocal,
+      auditTrail: nextAuditTrail,
     });
 
-    return result;
+    return {
+      ok: true,
+      message: resolvedExistingDriver
+        ? `${nextDriverLocal.name} updated in the driver roster.`
+        : `${nextDriverLocal.name} added to the driver roster.`,
+      staffId: nextDriverLocal.staffId,
+    };
   };
 
-  const logDefect = (draft) => {
-    let result = { ok: false, error: "Unable to save the problem report." };
+  const archiveVehicle = async (vehicleId) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-      const existing = current.defects.find((defect) => defect.id === draft.id);
-      if (!draft.vehicleId) {
-        result = { ok: false, error: "Select a vehicle before reporting a problem." };
-        return current;
-      }
-      if (!DEFECT_CATEGORIES.includes(draft.category)) {
-        result = { ok: false, error: "Select a valid problem category." };
-        return current;
-      }
-      if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "fleet")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
-        return current;
-      }
-      if (existing && !["Owner", "Admin", "Manager"].includes(activeRole)) {
-        result = { ok: false, error: "Only management can update reported problems." };
-        return current;
-      }
-      if (existing?.status === "resolved") {
-        result = { ok: false, error: "Fixed problems can no longer be changed." };
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!PRIVILEGED_ROLES.has(activeRole)) {
+      return { ok: false, error: "Only management can archive vehicles." };
+    }
+    if (!hasModuleUpdateAccess(current, "fleet")) {
+      return { ok: false, error: getModuleAccessErrorMessage("fleet") };
+    }
 
-      const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
-      if (!vehicle) {
-        result = { ok: false, error: "Vehicle not found." };
-        return current;
-      }
+    const target = current.vehicles.find((vehicle) => vehicle.id === vehicleId);
+    if (!target) {
+      return { ok: false, error: "Vehicle not found." };
+    }
+    if (target.status === "archived") {
+      return { ok: false, error: "Vehicle is already archived." };
+    }
 
-      const severity =
-        draft.category === "Engine" || draft.category === "Tires" || draft.category === "Windscreen"
-          ? "High"
-          : draft.category === "Seats"
-            ? "Medium"
-            : "Low";
-      const detail = draft.detail?.trim() || draft.category;
-      const now = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const defectRecord = {
-        ...existing,
-        id: draft.id ?? createRecordId("def"),
-        vehicleId: draft.vehicleId,
-        category: draft.category,
-        issue: detail,
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "fleet",
+        action: "archive",
+        entityType: "vehicle",
+        entityId: target.id,
+        title: `Vehicle archived / ${target.registration}`,
+        detail: `${target.model} kept in the owner history`,
+      }),
+    ]);
+
+    const nextSnapshot = {
+      ...current,
+      vehicles: current.vehicles.map((vehicle) =>
+        vehicle.id === vehicleId
+          ? {
+              ...vehicle,
+              status: "archived",
+              archivedAt: now,
+              archivedBy: actorId,
+              archivedByRole: activeRole,
+              updatedAt: now,
+              updatedBy: actorId,
+              updatedByRole: activeRole,
+            }
+          : vehicle,
+      ),
+      auditTrail: nextAuditTrail,
+    };
+
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
+      return {
+        ok: false,
+        error:
+          commitResult.error ??
+          "Vehicle could not be archived in the live workspace. No confirmed change was made.",
+      };
+    }
+
+    const confirmedVehicle = (commitResult.snapshot?.vehicles ?? []).find(
+      (vehicle) => vehicle.id === vehicleId,
+    );
+
+    if (!confirmedVehicle || confirmedVehicle.status !== "archived") {
+      return {
+        ok: false,
+        error: "Vehicle could not be archived in the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return { ok: true, message: `${target.registration} archived for audit retention.` };
+  };
+
+  const logDefect = async (draft) => {
+    const current = currentSnapshot;
+
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    const existing = (current.defects ?? []).find((defect) => defect.id === draft.id);
+    if (!draft.vehicleId) {
+      return { ok: false, error: "Select a vehicle before reporting a problem." };
+    }
+    if (!DEFECT_CATEGORIES.includes(draft.category)) {
+      return { ok: false, error: "Select a valid problem category." };
+    }
+    if (activeRole !== "Driver" && !hasModuleUpdateAccess(current, "fleet")) {
+      return { ok: false, error: getModuleAccessErrorMessage("fleet") };
+    }
+    if (existing && !["Owner", "Admin", "Manager"].includes(activeRole)) {
+      return { ok: false, error: "Only management can update reported problems." };
+    }
+    if (existing?.status === "resolved") {
+      return { ok: false, error: "Fixed problems can no longer be changed." };
+    }
+
+    const vehicle = current.vehicles.find((item) => item.id === draft.vehicleId);
+    if (!vehicle) {
+      return { ok: false, error: "Vehicle not found." };
+    }
+
+    const severity =
+      draft.category === "Engine" || draft.category === "Tires" || draft.category === "Windscreen"
+        ? "High"
+        : draft.category === "Seats"
+          ? "Medium"
+          : "Low";
+    const detail = draft.detail?.trim() || draft.category;
+    const now = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const defectRecord = {
+      ...existing,
+      id: draft.id ?? createRecordId("def"),
+      vehicleId: draft.vehicleId,
+      category: draft.category,
+      issue: detail,
+      detail,
+      severity,
+      reportedAt: existing?.reportedAt ?? now,
+      reportedByStaffId: existing?.reportedByStaffId ?? actorId,
+      reportedByRole: existing?.reportedByRole ?? activeRole,
+      updatedAt: existing ? now : null,
+      updatedBy: existing ? actorId : null,
+      updatedByRole: existing ? activeRole : null,
+      status: "open",
+      costEstimate: existing?.costEstimate ?? 0,
+      repairCost: null,
+      resolvedAt: null,
+      resolvedExpenseId: null,
+      resolvedBy: null,
+      resolvedByRole: null,
+    };
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
+        timestamp: now,
+        scope: "fleet",
+        action: existing ? "update" : "report",
+        entityType: "defect",
+        entityId: defectRecord.id,
+        title: `Problem ${existing ? "updated" : "reported"} / ${vehicle.registration}`,
         detail,
-        severity,
-        reportedAt: existing?.reportedAt ?? now,
-        reportedByStaffId: existing?.reportedByStaffId ?? actorId,
-        reportedByRole: existing?.reportedByRole ?? activeRole,
-        updatedAt: existing ? now : null,
-        updatedBy: existing ? actorId : null,
-        updatedByRole: existing ? activeRole : null,
-        status: "open",
-        costEstimate: existing?.costEstimate ?? 0,
-        repairCost: null,
-        resolvedAt: null,
-        resolvedExpenseId: null,
-        resolvedBy: null,
-        resolvedByRole: null,
-      };
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp: now,
-          scope: "fleet",
-          action: existing ? "update" : "report",
-          entityType: "defect",
-          entityId: defectRecord.id,
-          title: `Problem ${existing ? "updated" : "reported"} / ${vehicle.registration}`,
-          detail,
-        }),
-      ]);
+      }),
+    ]);
 
-      result = {
-        ok: true,
-        message: existing
-          ? "Reported problem updated in the vehicle history."
-          : "Problem added to the vehicle history.",
-      };
+    const nextSnapshot = {
+      ...current,
+      defects: existing
+        ? current.defects.map((defect) =>
+            defect.id === draft.id ? { ...defect, ...defectRecord } : defect,
+          )
+        : [defectRecord, ...(current.defects ?? [])],
+      auditTrail: nextAuditTrail,
+    };
 
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
       return {
-        ...current,
-        defects: existing
-          ? current.defects.map((defect) =>
-              defect.id === draft.id ? { ...defect, ...defectRecord } : defect,
-            )
-          : [defectRecord, ...(current.defects ?? [])],
-        auditTrail: nextAuditTrail,
+        ok: false,
+        error:
+          commitResult.error ??
+          "Problem report could not be saved to the live workspace. No confirmed change was made.",
       };
-    });
+    }
 
-    return result;
+    const confirmedDefect = (commitResult.snapshot?.defects ?? []).find(
+      (defect) => defect.id === defectRecord.id,
+    );
+
+    if (!confirmedDefect) {
+      return {
+        ok: false,
+        error: "Problem report could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: existing
+        ? "Reported problem updated in the vehicle history."
+        : "Problem added to the vehicle history.",
+    };
   };
 
-  const resolveDefect = (defectId, repairCost) => {
-    let result = { ok: false, error: "Unable to mark this problem as fixed." };
+  const resolveDefect = async (defectId, repairCost) => {
+    const current = currentSnapshot;
 
-    setSnapshot((current) => {
-      if (!current) {
-        return current;
-      }
-      if (!["Owner", "Admin", "Manager"].includes(activeRole)) {
-        result = { ok: false, error: "Only management can mark problems as fixed." };
-        return current;
-      }
-      if (!hasModuleUpdateAccess(current, "fleet")) {
-        result = { ok: false, error: getModuleAccessErrorMessage("fleet") };
-        return current;
-      }
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!["Owner", "Admin", "Manager"].includes(activeRole)) {
+      return { ok: false, error: "Only management can mark problems as fixed." };
+    }
+    if (!hasModuleUpdateAccess(current, "fleet")) {
+      return { ok: false, error: getModuleAccessErrorMessage("fleet") };
+    }
 
-      const target = (current.defects ?? []).find((defect) => defect.id === defectId);
-      const amount = Number(repairCost);
-      if (!target) {
-        result = { ok: false, error: "Problem not found." };
-        return current;
-      }
-      if (target.status === "resolved") {
-        result = { ok: false, error: "Fixed problems can no longer be changed." };
-        return current;
-      }
-      if (!Number.isFinite(amount) || amount < 0) {
-        result = { ok: false, error: "Enter the repair cost before marking this as fixed." };
-        return current;
-      }
+    const target = (current.defects ?? []).find((defect) => defect.id === defectId);
+    const amount = Number(repairCost);
+    if (!target) {
+      return { ok: false, error: "Problem not found." };
+    }
+    if (target.status === "resolved") {
+      return { ok: false, error: "Fixed problems can no longer be changed." };
+    }
+    if (!Number.isFinite(amount) || amount < 0) {
+      return { ok: false, error: "Enter the repair cost before marking this as fixed." };
+    }
 
-      const vehicle = current.vehicles.find((item) => item.id === target.vehicleId);
-      const expenseId = createRecordId("txn-exp");
-      const timestamp = new Date().toISOString();
-      const actorId = resolveCurrentActorId(current);
-      const expenseRecord = {
-        id: expenseId,
-        type: "expense",
-        expenseKind: "asset",
-        category: `Repair / ${target.category}`,
-        vehicleId: target.vehicleId,
-        vehicle: vehicle?.registration ?? "Vehicle",
-        amount,
-        cashExpense: true,
-        status: "verified",
+    const vehicle = current.vehicles.find((item) => item.id === target.vehicleId);
+    const expenseId = createRecordId("txn-exp");
+    const timestamp = new Date().toISOString();
+    const actorId = resolveCurrentActorId(current);
+    const expenseRecord = {
+      id: expenseId,
+      type: "expense",
+      expenseKind: "asset",
+      category: `Repair / ${target.category}`,
+      vehicleId: target.vehicleId,
+      vehicle: vehicle?.registration ?? "Vehicle",
+      amount,
+      cashExpense: true,
+      status: "verified",
+      timestamp,
+      createdAt: timestamp,
+      createdBy: actorId,
+      createdByRole: activeRole,
+      verifiedAt: timestamp,
+      verifiedBy: actorId,
+      verifiedByRole: activeRole,
+      depositId: null,
+    };
+    const nextAuditTrail = appendAuditTrail(current.auditTrail, [
+      buildCurrentAuditEvent(current, {
         timestamp,
-        createdAt: timestamp,
-        createdBy: actorId,
-        createdByRole: activeRole,
-        verifiedAt: timestamp,
-        verifiedBy: actorId,
-        verifiedByRole: activeRole,
-        depositId: null,
-      };
-      const nextAuditTrail = appendAuditTrail(current.auditTrail, [
-        buildCurrentAuditEvent(current, {
-          timestamp,
-          scope: "fleet",
-          action: "resolve",
-          entityType: "defect",
-          entityId: defectId,
-          title: `Problem fixed / ${vehicle?.registration ?? "Vehicle"}`,
-          detail: `${target.detail ?? target.issue} / ${formatMoney(amount)}`,
-        }),
-        buildCurrentAuditEvent(current, {
-          timestamp,
-          scope: "finance",
-          action: "create",
-          entityType: "expense",
-          entityId: expenseId,
-          title: `Repair cost added / ${vehicle?.registration ?? "Vehicle"}`,
-          detail: `${target.category} / ${formatMoney(amount)}`,
-        }),
-      ]);
+        scope: "fleet",
+        action: "resolve",
+        entityType: "defect",
+        entityId: defectId,
+        title: `Problem fixed / ${vehicle?.registration ?? "Vehicle"}`,
+        detail: `${target.detail ?? target.issue} / ${formatMoney(amount)}`,
+      }),
+      buildCurrentAuditEvent(current, {
+        timestamp,
+        scope: "finance",
+        action: "create",
+        entityType: "expense",
+        entityId: expenseId,
+        title: `Repair cost added / ${vehicle?.registration ?? "Vehicle"}`,
+        detail: `${target.category} / ${formatMoney(amount)}`,
+      }),
+    ]);
 
-      result = {
-        ok: true,
-        message: "Problem marked as fixed and the repair cost was added to expenses.",
-      };
+    const nextSnapshot = {
+      ...current,
+      defects: current.defects.map((defect) =>
+        defect.id === defectId
+          ? {
+              ...defect,
+              status: "resolved",
+              repairCost: amount,
+              resolvedAt: timestamp,
+              resolvedExpenseId: expenseId,
+              resolvedBy: actorId,
+              resolvedByRole: activeRole,
+              updatedAt: timestamp,
+              updatedBy: actorId,
+              updatedByRole: activeRole,
+            }
+          : defect,
+      ),
+      financeTransactions: [expenseRecord, ...(current.financeTransactions ?? [])],
+      auditTrail: nextAuditTrail,
+    };
 
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+
+    if (!commitResult.ok) {
       return {
-        ...current,
-        defects: current.defects.map((defect) =>
-          defect.id === defectId
-            ? {
-                ...defect,
-                status: "resolved",
-                repairCost: amount,
-                resolvedAt: timestamp,
-                resolvedExpenseId: expenseId,
-                resolvedBy: actorId,
-                resolvedByRole: activeRole,
-                updatedAt: timestamp,
-                updatedBy: actorId,
-                updatedByRole: activeRole,
-              }
-            : defect,
-        ),
-        financeTransactions: [expenseRecord, ...(current.financeTransactions ?? [])],
-        auditTrail: nextAuditTrail,
+        ok: false,
+        error:
+          commitResult.error ??
+          "Repair could not be saved to the live workspace. No confirmed change was made.",
       };
-    });
+    }
 
-    return result;
+    const confirmedDefect = (commitResult.snapshot?.defects ?? []).find(
+      (defect) => defect.id === defectId,
+    );
+    const confirmedExpense = (commitResult.snapshot?.financeTransactions ?? []).find(
+      (record) => record.id === expenseId,
+    );
+
+    if (!confirmedDefect || confirmedDefect.status !== "resolved" || !confirmedExpense) {
+      return {
+        ok: false,
+        error: "Repair could not be saved to the live workspace. No confirmed change was made.",
+      };
+    }
+
+    return {
+      ok: true,
+      message: "Problem marked as fixed and the repair cost was added to expenses.",
+    };
   };
 
   const handleDriverShortcut = (shortcut) => {
@@ -4555,6 +5339,10 @@ function App() {
       stat: `${activeDrivers}`,
       sub: "Active drivers",
     },
+    reports: {
+      stat: "PDF",
+      sub: "Daily finance",
+    },
     settings: {
       stat: pendingPasswordResetCount > 0 ? `${pendingPasswordResetCount}` : `${appUsers.length}`,
       sub: pendingPasswordResetCount > 0 ? "Reset requests" : "User access",
@@ -4749,6 +5537,15 @@ function App() {
               onSelectDriverVehicle={selectDriverVehicle}
             />
           )}
+          {activeView === "reports" && (
+            <ReportsPanel
+              snapshot={currentSnapshot}
+              activeRole={activeRole}
+              canAccessReports={Boolean(authModuleAccess.reports)}
+              accessToken={authSession?.access_token ?? null}
+              backendMode={backendMode}
+            />
+          )}
           {activeView === "settings" && (
             <SettingsPanel
               activeRole={activeRole}
@@ -4809,6 +5606,7 @@ function OverviewPanel({
   onSetAdminModuleAccess,
 }) {
   const [driverCashFeedback, setDriverCashFeedback] = useState(null);
+  const [cashUpSaving, setCashUpSaving] = useState(false);
   const isDriver = activeRole === "Driver";
   const linkedVehicles = getDriverLinkedVehicles(snapshot);
   const linkedVehicleIds = new Set(linkedVehicles.map((vehicle) => vehicle.id));
@@ -4850,17 +5648,27 @@ function OverviewPanel({
   const driverDayCashSummary =
     snapshot.driverTerminal?.dayCashSummary ?? createEmptyDriverDayCashSummary();
   const pendingDriverCashUps = snapshot.finance.pendingDriverCashUps ?? [];
-  const handleDriverCashUp = () => {
-    const response = onSubmitDriverCashUp?.();
-
-    if (!response) {
+  const handleDriverCashUp = async () => {
+    if (cashUpSaving) {
       return;
     }
 
-    setDriverCashFeedback({
-      tone: response.ok ? "success" : "danger",
-      message: response.message ?? response.error,
-    });
+    setCashUpSaving(true);
+
+    try {
+      const response = await onSubmitDriverCashUp?.();
+
+      if (!response) {
+        return;
+      }
+
+      setDriverCashFeedback({
+        tone: response.ok ? "success" : "danger",
+        message: response.message ?? response.error,
+      });
+    } finally {
+      setCashUpSaving(false);
+    }
   };
   const bankingSeries = [
     { label: "In", value: snapshot.finance.bankingBatch.verifiedTakings },
@@ -4974,6 +5782,7 @@ function OverviewPanel({
         <DriverCashSummaryBoard
           summary={driverDayCashSummary}
           onOpenCashUp={handleDriverCashUp}
+          cashUpLoading={cashUpSaving}
         />
 
         <div className="overview-board-grid">
@@ -5419,6 +6228,12 @@ function FinancePanel({
   const [feedback, setFeedback] = useState(null);
   const [verificationInputs, setVerificationInputs] = useState({});
   const [pendingRevenueTarget, setPendingRevenueTarget] = useState(null);
+  const [standardSaving, setStandardSaving] = useState(false);
+  const [specialSaving, setSpecialSaving] = useState(false);
+  const [expenseSaving, setExpenseSaving] = useState(false);
+  const [verifyingRecordId, setVerifyingRecordId] = useState(null);
+  const [deletingRecordId, setDeletingRecordId] = useState(null);
+  const [depositLocking, setDepositLocking] = useState(false);
   const standardEntryRef = useRef(null);
   const specialEntryRef = useRef(null);
   const depositLockRef = useRef(null);
@@ -5553,38 +6368,71 @@ function FinancePanel({
     setExpensePresetDraft(createExpensePresetDraft(nextExpenseKind));
   };
 
-  const handleStandardSubmit = (event) => {
+  const handleStandardSubmit = async (event) => {
     event.preventDefault();
-    const response = onSaveStandardIncome(standardDraft);
-    pushFeedback(response);
-    if (response.ok) {
-      setStandardDraft(
-        createStandardDraft(
-          standardDraft.vehicleId,
-          response.nextOpeningOdo,
-          selectedStandardVehicleRoute,
-        ),
-      );
+
+    if (standardSaving) {
+      return;
+    }
+
+    setStandardSaving(true);
+
+    try {
+      const response = await onSaveStandardIncome(standardDraft);
+      pushFeedback(response);
+      if (response.ok) {
+        setStandardDraft(
+          createStandardDraft(
+            standardDraft.vehicleId,
+            response.nextOpeningOdo,
+            selectedStandardVehicleRoute,
+          ),
+        );
+      }
+    } finally {
+      setStandardSaving(false);
     }
   };
 
-  const handleSpecialSubmit = (event) => {
+  const handleSpecialSubmit = async (event) => {
     event.preventDefault();
-    const response = onSaveSpecialIncome(specialDraft);
-    pushFeedback(response);
-    if (response.ok) {
-      setSpecialDraft(createSpecialDraft(specialDraft.vehicleId || defaultVehicleId));
+
+    if (specialSaving) {
+      return;
+    }
+
+    setSpecialSaving(true);
+
+    try {
+      const response = await onSaveSpecialIncome(specialDraft);
+      pushFeedback(response);
+      if (response.ok) {
+        setSpecialDraft(createSpecialDraft(specialDraft.vehicleId || defaultVehicleId));
+      }
+    } finally {
+      setSpecialSaving(false);
     }
   };
 
-  const handleExpenseSubmit = (event) => {
+  const handleExpenseSubmit = async (event) => {
     event.preventDefault();
-    const response = onSaveExpense(expenseDraft);
-    pushFeedback(response);
-    if (response.ok) {
-      setExpenseDraft(
-        createExpenseDraft(expenseKind, defaultVehicleId, finance.expenseCatalog),
-      );
+
+    if (expenseSaving) {
+      return;
+    }
+
+    setExpenseSaving(true);
+
+    try {
+      const response = await onSaveExpense(expenseDraft);
+      pushFeedback(response);
+      if (response.ok) {
+        setExpenseDraft(
+          createExpenseDraft(expenseKind, defaultVehicleId, finance.expenseCatalog),
+        );
+      }
+    } finally {
+      setExpenseSaving(false);
     }
   };
 
@@ -5600,20 +6448,54 @@ function FinancePanel({
     }
   };
 
-  const handleVerify = (recordId) => {
-    const response = onVerifyIncome(recordId, verificationInputs[recordId]);
-    pushFeedback(response);
-    if (response.ok) {
-      setVerificationInputs((current) => {
-        const next = { ...current };
-        delete next[recordId];
-        return next;
-      });
+  const handleVerify = async (recordId) => {
+    if (verifyingRecordId) {
+      return;
+    }
+
+    setVerifyingRecordId(recordId);
+
+    try {
+      const response = await onVerifyIncome(recordId, verificationInputs[recordId]);
+      pushFeedback(response);
+      if (response.ok) {
+        setVerificationInputs((current) => {
+          const next = { ...current };
+          delete next[recordId];
+          return next;
+        });
+      }
+    } finally {
+      setVerifyingRecordId(null);
     }
   };
 
-  const handleDelete = (recordId) => {
-    pushFeedback(onDeleteTransaction(recordId));
+  const handleDelete = async (recordId) => {
+    if (deletingRecordId) {
+      return;
+    }
+
+    setDeletingRecordId(recordId);
+
+    try {
+      pushFeedback(await onDeleteTransaction(recordId));
+    } finally {
+      setDeletingRecordId(null);
+    }
+  };
+
+  const handleLockDeposit = async () => {
+    if (depositLocking) {
+      return;
+    }
+
+    setDepositLocking(true);
+
+    try {
+      pushFeedback(await onLockDeposit());
+    } finally {
+      setDepositLocking(false);
+    }
   };
 
   const handleEditIncome = (record) => {
@@ -6021,9 +6903,9 @@ function FinancePanel({
                   <button
                     type="submit"
                     className="action-button primary"
-                    disabled={Boolean(standardValidationError) || !canEditFinanceUpdates}
+                    disabled={Boolean(standardValidationError) || !canEditFinanceUpdates || standardSaving}
                   >
-                    {standardDraft.id ? "Update trip" : "Save trip"}
+                    {standardSaving ? "Saving..." : standardDraft.id ? "Update trip" : "Save trip"}
                   </button>
                   {standardDraft.id && (
                     <button
@@ -6235,9 +7117,9 @@ function FinancePanel({
                   <button
                     type="submit"
                     className="action-button primary"
-                    disabled={Boolean(specialValidationError) || !canEditFinanceUpdates}
+                    disabled={Boolean(specialValidationError) || !canEditFinanceUpdates || specialSaving}
                   >
-                    {specialDraft.id ? "Update trip" : "Save trip"}
+                    {specialSaving ? "Saving..." : specialDraft.id ? "Update trip" : "Save trip"}
                   </button>
                   {specialDraft.id && (
                     <button
@@ -6301,10 +7183,14 @@ function FinancePanel({
                       <button
                         type="button"
                         className="record-button danger"
-                        disabled={record.status === "banked" || !canEditFinanceUpdates}
+                        disabled={
+                          record.status === "banked" ||
+                          !canEditFinanceUpdates ||
+                          deletingRecordId === record.id
+                        }
                         onClick={() => handleDelete(record.id)}
                       >
-                        Delete
+                        {deletingRecordId === record.id ? "Deleting..." : "Delete"}
                       </button>
                     </div>
                   </article>
@@ -6669,9 +7555,9 @@ function FinancePanel({
                   <button
                     type="submit"
                     className="action-button primary"
-                    disabled={!canEditFinanceUpdates}
+                    disabled={!canEditFinanceUpdates || expenseSaving}
                   >
-                    {expenseDraft.id ? "Update expense" : "Save expense"}
+                    {expenseSaving ? "Saving..." : expenseDraft.id ? "Update expense" : "Save expense"}
                   </button>
                   {expenseDraft.id && (
                     <button
@@ -6733,10 +7619,14 @@ function FinancePanel({
                       <button
                         type="button"
                         className="record-button danger"
-                        disabled={record.status === "banked" || !canEditFinanceUpdates}
+                        disabled={
+                          record.status === "banked" ||
+                          !canEditFinanceUpdates ||
+                          deletingRecordId === record.id
+                        }
                         onClick={() => handleDelete(record.id)}
                       >
-                        Delete
+                        {deletingRecordId === record.id ? "Deleting..." : "Delete"}
                       </button>
                     </div>
                   </article>
@@ -6857,10 +7747,10 @@ function FinancePanel({
                   <button
                     type="button"
                     className="action-button primary"
-                    disabled={lockableCount === 0 || !canFinishDeposit}
-                    onClick={() => pushFeedback(onLockDeposit())}
+                    disabled={lockableCount === 0 || !canFinishDeposit || depositLocking}
+                    onClick={handleLockDeposit}
                   >
-                    Finish deposit
+                    {depositLocking ? "Saving..." : "Finish deposit"}
                   </button>
                 </div>
               </div>
@@ -6901,6 +7791,12 @@ function FinancePanel({
                   Overview
                   <ChevronRight size={16} />
                 </button>
+                {["Owner", "Admin", "Manager"].includes(activeRole) && (
+                  <button className="cta-link" onClick={() => onNavigate("reports")} type="button">
+                    Download reports
+                    <ChevronRight size={16} />
+                  </button>
+                )}
               </div>
             </Panel>
           </div>
@@ -7122,10 +8018,10 @@ function FinancePanel({
                       <button
                         type="button"
                         className="action-button primary"
-                        disabled={!(canRecordHandIn || canVerifyCheck)}
+                        disabled={!(canRecordHandIn || canVerifyCheck) || verifyingRecordId === record.id}
                         onClick={() => handleVerify(record.id)}
                       >
-                        {actionLabel}
+                        {verifyingRecordId === record.id ? "Saving..." : actionLabel}
                       </button>
                       <button
                         type="button"
@@ -7141,11 +8037,16 @@ function FinancePanel({
                         type="button"
                         className="record-button danger"
                         disabled={
-                          isDriverCashUp || sourceRecord.status === "banked" || !canEditFinanceUpdates
+                          isDriverCashUp ||
+                          sourceRecord.status === "banked" ||
+                          !canEditFinanceUpdates ||
+                          deletingRecordId === sourceRecord.id
                         }
                         onClick={() => !isDriverCashUp && handleDelete(sourceRecord.id)}
                       >
-                        Delete entry
+                        {!isDriverCashUp && deletingRecordId === sourceRecord.id
+                          ? "Deleting..."
+                          : "Delete entry"}
                       </button>
                     </div>
                     {isDriverCashUp && (
@@ -7208,8 +8109,13 @@ function FleetPanel({
   const [vehicleDraft, setVehicleDraft] = useState(() =>
     createVehicleDraft(snapshot.vehicles[0], snapshot.profile.serviceIntervalKm),
   );
+  const [vehicleSaving, setVehicleSaving] = useState(false);
+  const [archivingVehicleId, setArchivingVehicleId] = useState(null);
   const [routeDraft, setRouteDraft] = useState(() => createRouteDraft());
+  const [routeSaving, setRouteSaving] = useState(false);
   const [defectDraft, setDefectDraft] = useState(() => createDefectDraft(assignedVehicleId));
+  const [defectSaving, setDefectSaving] = useState(false);
+  const [resolvingDefectId, setResolvingDefectId] = useState(null);
   const [resolutionCosts, setResolutionCosts] = useState({});
   const vehicleFormRef = useRef(null);
   const routeFormRef = useRef(null);
@@ -7579,16 +8485,27 @@ function FleetPanel({
     });
   };
 
-  const handleVehicleSubmit = (event) => {
+  const handleVehicleSubmit = async (event) => {
     event.preventDefault();
+
+    if (vehicleSaving) {
+      return;
+    }
+
     const isNewVehicle = !vehicleDraft.id;
-    const response = onSaveVehicle(vehicleDraft);
-    pushFeedback(response);
-    if (response.ok) {
-      if (isNewVehicle && !isDriver) {
-        setActiveFilter("all");
+    setVehicleSaving(true);
+
+    try {
+      const response = await onSaveVehicle(vehicleDraft);
+      pushFeedback(response);
+      if (response.ok) {
+        if (isNewVehicle && !isDriver) {
+          setActiveFilter("all");
+        }
+        setSelectedVehicleId(response.vehicleId);
       }
-      setSelectedVehicleId(response.vehicleId);
+    } finally {
+      setVehicleSaving(false);
     }
   };
 
@@ -7619,12 +8536,26 @@ function FleetPanel({
     routeFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const handleRouteSubmit = (event) => {
+  const handleRouteSubmit = async (event) => {
     event.preventDefault();
-    const response = onSaveRoute(routeDraft);
-    pushFeedback(response);
-    if (response?.ok) {
-      setRouteDraft(createRouteDraft());
+
+    if (routeSaving) {
+      return;
+    }
+
+    setRouteSaving(true);
+
+    try {
+      const response = await onSaveRoute(routeDraft);
+      pushFeedback(response);
+      // Only clear the form once remote persistence is confirmed - clearing on an
+      // optimistic local success previously let a failed/unconfirmed save look
+      // identical to a real one.
+      if (response?.ok === true) {
+        setRouteDraft(createRouteDraft());
+      }
+    } finally {
+      setRouteSaving(false);
     }
   };
 
@@ -7636,17 +8567,43 @@ function FleetPanel({
     vehicleProfileRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const handleDefectSubmit = (event) => {
+  const handleArchiveVehicle = async (vehicleId) => {
+    if (archivingVehicleId) {
+      return;
+    }
+
+    setArchivingVehicleId(vehicleId);
+
+    try {
+      const response = await onArchiveVehicle(vehicleId);
+      pushFeedback(response);
+    } finally {
+      setArchivingVehicleId(null);
+    }
+  };
+
+  const handleDefectSubmit = async (event) => {
     event.preventDefault();
-    const response = onLogDefect({
-      ...defectDraft,
-      vehicleId: isDriver ? selectedVehicle?.id ?? assignedVehicleId : defectDraft.vehicleId,
-    });
-    pushFeedback(response);
-    if (response.ok) {
-      setDefectDraft(
-        createDefectDraft(isDriver ? selectedVehicle?.id ?? assignedVehicleId : selectedVehicle?.id),
-      );
+
+    if (defectSaving) {
+      return;
+    }
+
+    setDefectSaving(true);
+
+    try {
+      const response = await onLogDefect({
+        ...defectDraft,
+        vehicleId: isDriver ? selectedVehicle?.id ?? assignedVehicleId : defectDraft.vehicleId,
+      });
+      pushFeedback(response);
+      if (response.ok) {
+        setDefectDraft(
+          createDefectDraft(isDriver ? selectedVehicle?.id ?? assignedVehicleId : selectedVehicle?.id),
+        );
+      }
+    } finally {
+      setDefectSaving(false);
     }
   };
 
@@ -7662,13 +8619,26 @@ function FleetPanel({
     defectFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
-  const handleResolve = (defectId) => {
-    pushFeedback(onResolveDefect(defectId, resolutionCosts[defectId]));
-    setResolutionCosts((current) => {
-      const next = { ...current };
-      delete next[defectId];
-      return next;
-    });
+  const handleResolve = async (defectId) => {
+    if (resolvingDefectId) {
+      return;
+    }
+
+    setResolvingDefectId(defectId);
+
+    try {
+      const response = await onResolveDefect(defectId, resolutionCosts[defectId]);
+      pushFeedback(response);
+      if (response?.ok) {
+        setResolutionCosts((current) => {
+          const next = { ...current };
+          delete next[defectId];
+          return next;
+        });
+      }
+    } finally {
+      setResolvingDefectId(null);
+    }
   };
 
   return (
@@ -8172,14 +9142,14 @@ function FleetPanel({
                     <button
                       type="submit"
                       className="action-button primary"
-                      disabled={!canEditFleetUpdates}
+                      disabled={!canEditFleetUpdates || vehicleSaving}
                     >
-                      {vehicleDraft.id ? "Save vehicle" : "Create vehicle"}
+                      {vehicleSaving ? "Saving..." : vehicleDraft.id ? "Save vehicle" : "Create vehicle"}
                     </button>
                     <button
                       type="button"
                       className="action-button"
-                      disabled={!canEditFleetUpdates}
+                      disabled={!canEditFleetUpdates || vehicleSaving}
                       onClick={handleAddVehicle}
                     >
                       Add vehicle
@@ -8191,9 +9161,10 @@ function FleetPanel({
                       <button
                         type="button"
                         className="record-button danger"
-                        onClick={() => pushFeedback(onArchiveVehicle(selectedVehicle.id))}
+                        disabled={archivingVehicleId === selectedVehicle.id}
+                        onClick={() => handleArchiveVehicle(selectedVehicle.id)}
                       >
-                        Archive vehicle
+                        {archivingVehicleId === selectedVehicle.id ? "Archiving..." : "Archive vehicle"}
                       </button>
                       )}
                   </div>
@@ -8319,13 +9290,14 @@ function FleetPanel({
                   <button
                     type="submit"
                     className="action-button primary"
-                    disabled={!canEditFleetUpdates}
+                    disabled={!canEditFleetUpdates || routeSaving}
                   >
-                    Create route
+                    {routeSaving ? "Saving..." : "Create route"}
                   </button>
                   <button
                     type="button"
                     className="action-button"
+                    disabled={routeSaving}
                     onClick={() => setRouteDraft(createRouteDraft())}
                   >
                     Clear form
@@ -8778,14 +9750,19 @@ function FleetPanel({
                   <button
                     type="submit"
                     className="action-button primary"
-                    disabled={PRIVILEGED_ROLES.has(activeRole) && !canEditFleetUpdates}
+                    disabled={(PRIVILEGED_ROLES.has(activeRole) && !canEditFleetUpdates) || defectSaving}
                   >
-                    {defectDraft.id ? "Update problem" : "Report problem"}
+                    {defectSaving
+                      ? "Saving..."
+                      : defectDraft.id
+                        ? "Update problem"
+                        : "Report problem"}
                   </button>
                   {defectDraft.id && (
                     <button
                       type="button"
                       className="action-button"
+                      disabled={defectSaving}
                       onClick={() =>
                         setDefectDraft(createDefectDraft(isDriver ? assignedVehicleId : selectedVehicle?.id))
                       }
@@ -8844,9 +9821,10 @@ function FleetPanel({
                           <button
                             type="button"
                             className="action-button primary"
+                            disabled={resolvingDefectId === defect.id}
                             onClick={() => handleResolve(defect.id)}
                           >
-                            Mark as fixed
+                            {resolvingDefectId === defect.id ? "Saving..." : "Mark as fixed"}
                           </button>
                         </div>
                       ) : (
@@ -8976,6 +9954,7 @@ function SettingsPanel({
   const [feedback, setFeedback] = useState(null);
   const [factoryResetPassword, setFactoryResetPassword] = useState("");
   const [factoryResetFeedback, setFactoryResetFeedback] = useState(null);
+  const [resolvingRequestId, setResolvingRequestId] = useState(null);
   const isCreatingUser = !draft.id;
 
   useEffect(() => {
@@ -9096,6 +10075,20 @@ function SettingsPanel({
       tone: response?.ok ? "success" : "danger",
       message: response?.message ?? response?.error,
     });
+  };
+
+  const handleResolvePasswordResetRequest = async (requestId) => {
+    if (resolvingRequestId) {
+      return;
+    }
+
+    setResolvingRequestId(requestId);
+
+    try {
+      pushFeedback(await onResolvePasswordResetRequest(requestId));
+    } finally {
+      setResolvingRequestId(null);
+    }
   };
 
   const handleRoleChange = (nextRole) => {
@@ -9591,9 +10584,10 @@ function SettingsPanel({
                       <button
                         type="button"
                         className="finance-sub-pill"
-                        onClick={() => pushFeedback(onResolvePasswordResetRequest(request.id))}
+                        disabled={resolvingRequestId === request.id}
+                        onClick={() => handleResolvePasswordResetRequest(request.id)}
                       >
-                        Mark handled
+                        {resolvingRequestId === request.id ? "Saving..." : "Mark handled"}
                       </button>
                     )}
                   </div>
@@ -10010,7 +11004,26 @@ function DriversPanel({
   const [driverRouteView, setDriverRouteView] = useState(null);
   const [feedback, setFeedback] = useState(null);
   const [showDriverForm, setShowDriverForm] = useState(false);
+  const [driverFormSaving, setDriverFormSaving] = useState(false);
   const [driverDraft, setDriverDraft] = useState(() => createDriverDraft());
+  // Never persisted, never pre-filled from a saved password - only reflects what is
+  // currently being typed into this form, and resets to hidden whenever the form is
+  // reset or closed (see the Cancel handler and post-submit reset below).
+  const [showDriverPassword, setShowDriverPassword] = useState(false);
+  const driverHasActiveLogin = useMemo(() => {
+    const email = normalizeEmailAddress(driverDraft.email);
+    const staffId = String(driverDraft.staffId ?? "").trim();
+    if (!email && !staffId) {
+      return false;
+    }
+    return (snapshot.appUsers ?? []).some(
+      (user) =>
+        user.role === "Driver" &&
+        user.active !== false &&
+        ((staffId && user.staffId === staffId) ||
+          (email && normalizeEmailAddress(user.email) === email)),
+    );
+  }, [driverDraft.email, driverDraft.staffId, snapshot.appUsers]);
   const buildAllocationDraft = (staffId = allocatableDrivers[0]?.staffId ?? "") =>
     createDriverAllocationDraft(staffId, driverVehicleMap.get(staffId)?.id ?? "");
   const [allocationDraft, setAllocationDraft] = useState(() => buildAllocationDraft());
@@ -10645,29 +11658,42 @@ function DriversPanel({
 
   const handleAddDriver = () => {
     setDriverDraft(createDriverDraft());
+    setShowDriverPassword(false);
     setShowDriverForm(true);
     driverFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const handleDriverSubmit = async (event) => {
     event.preventDefault();
-    const response = onSaveDriver(driverDraft);
 
-    setFeedback({
-      tone: response.ok ? "success" : "danger",
-      message: response.message ?? response.error,
-    });
+    if (driverFormSaving) {
+      return;
+    }
 
-    if (response.ok) {
-      setDriverDraft(createDriverDraft());
-      setShowDriverForm(false);
+    setDriverFormSaving(true);
 
-      if (activeRole !== "Driver") {
-        await onRevalidateLiveWorkspace?.({
-          reason: "driver-profile-update",
-          force: true,
-        });
+    try {
+      const response = await onSaveDriver(driverDraft);
+
+      setFeedback({
+        tone: response.ok ? "success" : "danger",
+        message: response.message ?? response.error,
+      });
+
+      if (response.ok) {
+        setDriverDraft(createDriverDraft());
+        setShowDriverPassword(false);
+        setShowDriverForm(false);
+
+        if (activeRole !== "Driver") {
+          await onRevalidateLiveWorkspace?.({
+            reason: "driver-profile-update",
+            force: true,
+          });
+        }
       }
+    } finally {
+      setDriverFormSaving(false);
     }
   };
 
@@ -10678,7 +11704,7 @@ function DriversPanel({
 
   const handleAllocationSubmit = async (event) => {
     event.preventDefault();
-    const response = onAllocateDriverShift(allocationDraft);
+    const response = await onAllocateDriverShift(allocationDraft);
 
     setFeedback({
       tone: response.ok ? "success" : "danger",
@@ -11831,20 +12857,62 @@ function DriversPanel({
                           }
                         />
                       </label>
-                      <label className="finance-field">
-                        <span>Password</span>
-                        <input
-                          autoComplete="new-password"
-                          type="password"
-                          value={driverDraft.accessPassword}
-                          onChange={(event) =>
-                            setDriverDraft((current) => ({
-                              ...current,
-                              accessPassword: event.target.value,
-                            }))
-                          }
-                        />
-                      </label>
+                    </div>
+                    <div className="finance-form-login-section">
+                      {activeRole === "Owner" ? (
+                        <>
+                          <label className="finance-field finance-field-check">
+                            <span>Enable TaxiFlow login</span>
+                            <input
+                              type="checkbox"
+                              checked={driverDraft.enableLogin}
+                              onChange={(event) =>
+                                setDriverDraft((current) => ({
+                                  ...current,
+                                  enableLogin: event.target.checked,
+                                  accessPassword: event.target.checked ? current.accessPassword : "",
+                                }))
+                              }
+                            />
+                          </label>
+                          {driverHasActiveLogin && (
+                            <span className="status-chip" data-tone="success">
+                              TaxiFlow login: Active
+                            </span>
+                          )}
+                          {driverDraft.enableLogin && (
+                            <label className="finance-field">
+                              <span>{driverHasActiveLogin ? "New password (leave blank to keep current)" : "Password"}</span>
+                              <div className="finance-field-password">
+                                <input
+                                  autoComplete="new-password"
+                                  type={showDriverPassword ? "text" : "password"}
+                                  value={driverDraft.accessPassword}
+                                  onChange={(event) =>
+                                    setDriverDraft((current) => ({
+                                      ...current,
+                                      accessPassword: event.target.value,
+                                    }))
+                                  }
+                                />
+                                <button
+                                  type="button"
+                                  className="finance-field-password-toggle"
+                                  aria-label={showDriverPassword ? "Hide password" : "Show password"}
+                                  onClick={() => setShowDriverPassword((current) => !current)}
+                                >
+                                  {showDriverPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                                </button>
+                              </div>
+                            </label>
+                          )}
+                        </>
+                      ) : (
+                        <span className="status-chip" data-tone="neutral">
+                          {driverHasActiveLogin ? "TaxiFlow login: Active. " : ""}
+                          Owner manages TaxiFlow login access.
+                        </span>
+                      )}
                     </div>
                     <div className="finance-form-meta">
                       <span className="status-chip" data-tone="info">
@@ -11852,24 +12920,30 @@ function DriversPanel({
                       </span>
                       <span
                         className="status-chip"
-                        data-tone={driverDraft.accessPassword ? "success" : "warning"}
+                        data-tone={driverDraft.enableLogin || driverHasActiveLogin ? "success" : "neutral"}
                       >
-                        {driverDraft.accessPassword ? "Password set" : "Password required"}
+                        {driverHasActiveLogin
+                          ? "Login access will be set"
+                          : driverDraft.enableLogin
+                            ? "Login access will be set"
+                            : "No login access (profile only)"}
                       </span>
                     </div>
                     <div className="finance-form-actions">
                       <button
                         type="submit"
                         className="action-button primary"
-                        disabled={!canManageDrivers}
+                        disabled={!canManageDrivers || driverFormSaving}
                       >
-                        Save driver
+                        {driverFormSaving ? "Saving..." : "Save driver"}
                       </button>
                       <button
                         type="button"
                         className="action-button"
+                        disabled={driverFormSaving}
                         onClick={() => {
                           setDriverDraft(createDriverDraft());
+                          setShowDriverPassword(false);
                           setShowDriverForm(false);
                         }}
                       >
@@ -11878,13 +12952,17 @@ function DriversPanel({
                     </div>
                     <p
                       className="finance-form-note"
-                      data-tone={driverRouteOptions.length === 0 ? "warning" : "info"}
+                      data-tone={driverRouteOptions.length === 0 ? "info" : "info"}
                     >
                       {driverRouteOptions.length === 0
-                        ? "Add a route in Fleet & Operations first, then return here to assign the driver."
-                        : hasSupabaseConfig && Boolean(supabase)
-                          ? "Use Ctrl or Command to select more than one route, then use shift allocation below to place the driver on a vehicle. In live mode, issue the same password on the driver's Supabase sign-in account."
-                          : "Use Ctrl or Command to select more than one route, then use shift allocation below to place the driver on a vehicle. The saved password works for local TaxiFlow sign-in."}
+                        ? "No routes exist yet - you can save this driver now and assign a route later from Fleet & Operations."
+                        : "A route is optional - leave it unassigned to add one later. Use Ctrl or Command to select more than one, then use shift allocation below to place the driver on a vehicle."}
+                      {" "}
+                      {driverDraft.enableLogin
+                        ? hasSupabaseConfig && Boolean(supabase)
+                          ? "TaxiFlow login access will be created using the real Supabase sign-in system."
+                          : "The saved password works for local TaxiFlow sign-in."
+                        : "Leave TaxiFlow login off to save a profile-only driver - access can be enabled later."}
                     </p>
                   </form>
                 )}
@@ -11997,7 +13075,7 @@ function DriversPanel({
                       className="status-chip"
                       data-tone={driverVehicleMap.has(driver.staffId) ? "success" : "info"}
                     >
-                      {driverVehicleMap.get(driver.staffId)?.registration ?? "Unassigned"}
+                      {driverVehicleMap.get(driver.staffId)?.registration ?? "Vehicle not assigned"}
                     </span>
                     <span
                       className="status-chip"
@@ -12080,6 +13158,7 @@ function SignInShell({
   onRequestPasswordReset,
   onSubmit,
   passwordResetFeedback,
+  passwordResetSubmitting,
 }) {
   const [showForgotPasswordHelp, setShowForgotPasswordHelp] = useState(false);
 
@@ -12147,18 +13226,18 @@ function SignInShell({
                 </div>
               </div>
               <p className="backend-mode-note">
-                Management will reset the password for this account. TaxiFlow sends both the
-                in-app management notice in Settings and the management email queue, and a repeat
-                request rebuilds any missing channel.
+                {isLocalAuth
+                  ? "Management will reset the password for this account. TaxiFlow sends both the in-app management notice in Settings and the management email queue, and a repeat request rebuilds any missing channel."
+                  : "Enter your email above, then request a reset. If the account can receive password recovery email, TaxiFlow will send a secure link to set a new password."}
               </p>
               <div className="backend-mode-actions">
                 <button
                   type="button"
                   className="action-button"
                   onClick={onRequestPasswordReset}
-                  disabled={submitting || !String(email ?? "").trim()}
+                  disabled={submitting || passwordResetSubmitting || !String(email ?? "").trim()}
                 >
-                  Send reset request
+                  {passwordResetSubmitting ? "Sending..." : "Send reset request"}
                 </button>
               </div>
               <p
@@ -12166,7 +13245,9 @@ function SignInShell({
                 data-tone={passwordResetFeedback?.tone ?? "warning"}
               >
                 {passwordResetFeedback?.message ??
-                  "Only management can recreate TaxiFlow access. They will reset the password after TaxiFlow sends the in-app and email notices."}
+                  (isLocalAuth
+                    ? "Only management can recreate TaxiFlow access. They will reset the password after TaxiFlow sends the in-app and email notices."
+                    : "If the account can receive password recovery email, check your inbox for the reset link.")}
               </p>
             </div>
           )}
@@ -12175,6 +13256,73 @@ function SignInShell({
               (isLocalAuth
                 ? "Use the password assigned to your TaxiFlow account. Older local accounts still use the default TaxiFlow password."
                 : "Use the Supabase account issued for your TaxiFlow role. Access is routed by designation.")}
+          </p>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function PasswordRecoveryShell({
+  fleetName,
+  newPassword,
+  confirmPassword,
+  showPassword,
+  submitting,
+  feedback,
+  onChangeNewPassword,
+  onChangeConfirmPassword,
+  onToggleShowPassword,
+  onSubmit,
+}) {
+  return (
+    <div className="auth-shell">
+      <div className="auth-card">
+        <div className="brand-lockup auth-brand">
+          <img className="brand-logo auth-logo" src="/taxiflow-logo.png" alt="TaxiFlow logo" />
+        </div>
+        <div className="auth-copy">
+          <p className="eyebrow">Password recovery</p>
+          <h1>{fleetName}</h1>
+          <p>Set a new password for this account to finish recovery.</p>
+        </div>
+        <form className="auth-form" onSubmit={onSubmit}>
+          <label className="finance-field">
+            <span>New password</span>
+            <div className="finance-field-password">
+              <input
+                autoComplete="new-password"
+                type={showPassword ? "text" : "password"}
+                value={newPassword}
+                onChange={(event) => onChangeNewPassword(event.target.value)}
+              />
+              <button
+                type="button"
+                className="finance-field-password-toggle"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                onClick={onToggleShowPassword}
+              >
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
+          </label>
+          <label className="finance-field">
+            <span>Confirm password</span>
+            <input
+              autoComplete="new-password"
+              type={showPassword ? "text" : "password"}
+              value={confirmPassword}
+              onChange={(event) => onChangeConfirmPassword(event.target.value)}
+            />
+          </label>
+          <div className="finance-form-actions">
+            <button type="submit" className="action-button primary" disabled={submitting}>
+              {submitting ? "Updating..." : "Update password"}
+            </button>
+          </div>
+          <p className="finance-form-note" data-tone={feedback?.tone ?? "info"}>
+            {feedback?.message ??
+              `Password must be at least ${MIN_LIVE_LOGIN_PASSWORD_LENGTH} characters long.`}
           </p>
         </form>
       </div>

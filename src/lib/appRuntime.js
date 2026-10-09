@@ -2,6 +2,7 @@ import { differenceInDays } from "date-fns";
 import {
   Activity,
   Banknote,
+  FileText,
   LayoutDashboard,
   Settings2,
   Users,
@@ -19,6 +20,28 @@ import {
   safeMatchMedia,
   getSafeWindow,
 } from "./browserRuntime";
+import {
+  getCashUpCoverageKey,
+  getDriverCashUpWorkflowStatus,
+  getExpectedOpeningOdo,
+  getFinanceRecordCashUpCoverageKey,
+  getFinanceRecordDriverName,
+  getFinanceRecordDriverStaffId,
+  getFinanceRecordWorkDate,
+  isDriverCreatedFinanceRecord,
+  normalizeCashUpWorkflowStatus,
+  parseDateInputValue,
+  summarizeDriverDayCash,
+  toDateInputValue,
+} from "./cashUpContract";
+import {
+  MODULE_VIEW_ROLES,
+  ROLES,
+  VIEWER_ROLE,
+  createDefaultModuleViewAccess,
+  normalizeModuleViewAccess,
+  normalizeRole,
+} from "./moduleAccessPolicy";
 
 const ZAR = new Intl.NumberFormat("en-ZA", {
   style: "currency",
@@ -26,8 +49,6 @@ const ZAR = new Intl.NumberFormat("en-ZA", {
   maximumFractionDigits: 0,
 });
 
-const VIEWER_ROLE = "Viewer";
-const ROLES = ["Owner", "Admin", "Manager", "Driver", VIEWER_ROLE];
 const AUTH_ACCOUNT_DIRECTORY = {
   "owner@taxiflow.local": {
     name: "Owner account",
@@ -84,48 +105,44 @@ const MODULE_VIEW_ACCESS = {
   overview: {
     label: "Overview",
     detail: "Dashboard and activity summary.",
-    roles: ROLES,
+    roles: MODULE_VIEW_ROLES.overview,
   },
   finance: {
     label: "Money",
     detail: "Daily earnings, expenses, and banking.",
-    roles: ["Owner", "Admin", "Manager", VIEWER_ROLE],
+    roles: MODULE_VIEW_ROLES.finance,
   },
   fleet: {
     label: "Fleet & Operations",
     detail: "Vehicles, defects, and service status.",
-    roles: ROLES,
+    roles: MODULE_VIEW_ROLES.fleet,
   },
   drivers: {
     label: "Drivers",
     detail: "Driver activity, roster, and shift allocation.",
-    roles: ROLES,
+    roles: MODULE_VIEW_ROLES.drivers,
+  },
+  reports: {
+    label: "Reports",
+    detail: "Printable management reports. Follows the account's Money access.",
+    roles: MODULE_VIEW_ROLES.reports,
   },
   settings: {
     label: "Settings",
     detail: "User roles and access rights.",
-    roles: ["Owner", "Admin", "Manager"],
+    roles: MODULE_VIEW_ROLES.settings,
   },
 };
 
 const SETTINGS_ASSIGNABLE_MODULES = ["finance", "fleet", "drivers"];
 
 const NAV_ITEMS = [
-  { id: "overview", label: "Overview", icon: LayoutDashboard, roles: ROLES },
-  {
-    id: "finance",
-    label: "Money",
-    icon: Banknote,
-    roles: ["Owner", "Admin", "Manager", VIEWER_ROLE],
-  },
-  {
-    id: "fleet",
-    label: "Fleet & Operations",
-    icon: Activity,
-    roles: ROLES,
-  },
-  { id: "drivers", label: "Drivers", icon: Users, roles: ROLES },
-  { id: "settings", label: "Settings", icon: Settings2, roles: ["Owner", "Admin", "Manager"] },
+  { id: "overview", label: "Overview", icon: LayoutDashboard, roles: MODULE_VIEW_ROLES.overview },
+  { id: "finance", label: "Money", icon: Banknote, roles: MODULE_VIEW_ROLES.finance },
+  { id: "fleet", label: "Fleet & Operations", icon: Activity, roles: MODULE_VIEW_ROLES.fleet },
+  { id: "drivers", label: "Drivers", icon: Users, roles: MODULE_VIEW_ROLES.drivers },
+  { id: "reports", label: "Reports", icon: FileText, roles: MODULE_VIEW_ROLES.reports },
+  { id: "settings", label: "Settings", icon: Settings2, roles: MODULE_VIEW_ROLES.settings },
 ];
 
 const formatMoney = (value) => ZAR.format(value ?? 0);
@@ -427,64 +444,7 @@ const canEditModuleUpdates = (role, moduleKey, permissionControls, currentUserRe
 const getModuleAccessErrorMessage = (moduleKey) =>
   `This change is locked until the owner enables ${MODULE_EDIT_ACCESS[moduleKey]?.label?.toLowerCase() ?? moduleKey} access in Settings.`;
 
-const normalizeRole = (value) =>
-  ROLES.find((role) => role.toLowerCase() === String(value ?? "").trim().toLowerCase()) ?? null;
-
 const isViewerRole = (value) => normalizeRole(value) === VIEWER_ROLE;
-
-const createDefaultModuleViewAccess = (role) => {
-  const normalizedRole = normalizeRole(role) ?? "Driver";
-
-  if (normalizedRole === "Owner") {
-    return Object.fromEntries(Object.keys(MODULE_VIEW_ACCESS).map((moduleKey) => [moduleKey, true]));
-  }
-
-  if (normalizedRole === VIEWER_ROLE) {
-    return Object.fromEntries(
-      Object.keys(MODULE_VIEW_ACCESS).map((moduleKey) => [moduleKey, moduleKey === "overview"]),
-    );
-  }
-
-  if (["Admin", "Manager"].includes(normalizedRole)) {
-    return Object.fromEntries(
-      Object.keys(MODULE_VIEW_ACCESS).map((moduleKey) => [
-        moduleKey,
-        MODULE_VIEW_ACCESS[moduleKey].roles.includes(normalizedRole),
-      ]),
-    );
-  }
-
-  return Object.fromEntries(
-    Object.entries(MODULE_VIEW_ACCESS).map(([moduleKey, moduleConfig]) => [
-      moduleKey,
-      moduleKey === "overview"
-        ? true
-        : moduleKey === "settings"
-          ? false
-          : moduleConfig.roles.includes(normalizedRole),
-    ]),
-  );
-};
-
-const normalizeModuleViewAccess = (value = {}, role) => {
-  const normalizedRole = normalizeRole(role) ?? "Driver";
-  const defaults = createDefaultModuleViewAccess(normalizedRole);
-
-  return Object.fromEntries(
-    Object.keys(MODULE_VIEW_ACCESS).map((moduleKey) => {
-      if (moduleKey === "overview") {
-        return [moduleKey, true];
-      }
-
-      if (moduleKey === "settings") {
-        return [moduleKey, MODULE_VIEW_ACCESS[moduleKey].roles.includes(normalizedRole)];
-      }
-
-const allowedByRole = MODULE_VIEW_ACCESS[moduleKey].roles.includes(normalizedRole);
-      return [moduleKey, allowedByRole ? Boolean(value?.[moduleKey] || defaults[moduleKey]) : false];
-    }),
-  );
-};
 
 const sanitizeEmailLocalPart = (value) =>
   String(value ?? "")
@@ -880,35 +840,6 @@ const formatStamp = (value) =>
         minute: "2-digit",
       })
     : "Pending";
-
-const parseDateInputValue = (value) => {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(value ?? "").trim());
-
-  if (!match) {
-    return null;
-  }
-
-  const [, year, month, day] = match;
-  const date = new Date(Number(year), Number(month) - 1, Number(day));
-
-  return Number.isNaN(date.getTime()) ? null : date;
-};
-
-const toDateInputValue = (value = new Date()) => {
-  const date =
-    parseDateInputValue(value) ??
-    (value ? new Date(value) : null);
-
-  if (!date || Number.isNaN(date.getTime())) {
-    return "";
-  }
-
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-};
 
 const formatDateOnly = (value) => {
   const date =
@@ -1465,7 +1396,7 @@ const normalizeDriverRouteAssignments = (driver = {}, routes = []) => {
 
 const getDriverRouteSummary = (driver) =>
   String(driver?.routeSummary ?? driver?.routeNames?.join(" / ") ?? driver?.route ?? "")
-    .trim() || "No route assigned";
+    .trim() || "Route not assigned";
 
 const resolveVehicleRouteSelection = (draft = {}, routes = []) => {
   const selectedRouteId = String(draft.currentRouteId ?? "").trim();
@@ -1904,31 +1835,6 @@ const createEmptyDriverDayCashSummary = (workDate = toDateInputValue()) => ({
   cashUpRecord: null,
 });
 
-const getFinanceRecordWorkDate = (record = {}) => {
-  const candidate =
-    record.type === "expense"
-      ? String(record.expenseDate ?? "").trim()
-      : String(record.tripDate ?? "").trim();
-
-  return candidate || toDateInputValue(record.timestamp ?? new Date());
-};
-
-const getFinanceRecordDriverStaffId = (record = {}) => {
-  const normalizedDriverStaffId = String(
-    record.driverStaffId ??
-      record.driver_staff_id ??
-      (record.createdByRole === "Driver" ? record.createdBy : ""),
-  ).trim();
-
-  return normalizedDriverStaffId || null;
-};
-
-const getFinanceRecordDriverName = (record = {}) => {
-  const normalizedDriverName = String(record.driverName ?? record.driver_name ?? "").trim();
-
-  return normalizedDriverName || null;
-};
-
 const normalizeCashUpIdToken = (value) =>
   String(value ?? "")
     .trim()
@@ -2040,80 +1946,16 @@ const buildDriverDayCashSummary = (source, { driverStaffId, workDate = null } = 
     return createEmptyDriverDayCashSummary(resolvedWorkDate);
   }
 
-  const dayTransactions = [...(source?.financeTransactions ?? [])]
-    .filter(
-      (record) =>
-        ["income", "expense"].includes(record?.type) &&
-        getFinanceRecordDriverStaffId(record) === driverStaffId &&
-        getFinanceRecordWorkDate(record) === resolvedWorkDate,
-    )
-    .sort((left, right) => new Date(right.timestamp) - new Date(left.timestamp));
-  const incomeRecords = dayTransactions.filter((record) => record.type === "income");
-  const expenseRecords = dayTransactions.filter((record) => record.type === "expense");
-  const totalIncome = sumBy(incomeRecords, (record) => record.amountClaimed ?? record.amount);
-  const totalExpenses = sumBy(expenseRecords, (record) => record.amount);
-  const cashExpenses = sumBy(
-    expenseRecords.filter((record) => record.cashExpense),
-    (record) => record.amount,
-  );
-  const cashUpRecord =
-    [...(source?.dailyCashUps ?? [])]
-      .filter(
-        (entry) =>
-          String(entry.driverStaffId ?? "").trim() === driverStaffId &&
-          String(entry.workDate ?? "").trim() === resolvedWorkDate,
-      )
-      .sort(
-        (left, right) =>
-          new Date(right.checkedAt ?? right.updatedAt ?? right.createdAt ?? 0) -
-          new Date(left.checkedAt ?? left.updatedAt ?? left.createdAt ?? 0),
-      )[0] ?? null;
-  const resolvedDriverName =
-    getFinanceRecordDriverName(dayTransactions[0]) ||
-    String(cashUpRecord?.driverName ?? "").trim() ||
-    null;
+  const { dayTransactions, ...summary } = summarizeDriverDayCash(source ?? {}, {
+    driverStaffId,
+    workDate: resolvedWorkDate,
+  });
 
   return {
-    workDate: resolvedWorkDate,
+    ...summary,
     workDateLabel: formatDateOnly(resolvedWorkDate),
-    driverStaffId,
-    driverName: resolvedDriverName,
-    entryCount: dayTransactions.length,
-    incomeCount: incomeRecords.length,
-    expenseCount: expenseRecords.length,
-    totalIncome,
-    totalExpenses,
-    cashExpenses,
-    nonCashExpenses: totalExpenses - cashExpenses,
-    expectedCashIn: totalIncome - cashExpenses,
-    netAfterExpenses: totalIncome - totalExpenses,
     entries: dayTransactions.map((record) => buildDriverCashLedgerEntry(record)),
-    incomeRecords,
-    expenseRecords,
-    cashUpRecord,
   };
-};
-
-const normalizeCashUpWorkflowStatus = (status) => {
-  const normalized = String(status ?? "").trim().toLowerCase();
-
-  return ["pending", "counted", "verified", "banked"].includes(normalized)
-    ? normalized
-    : null;
-};
-
-const getFinanceRecordCashUpCoverageKey = (record = {}) => {
-  const driverStaffId = String(getFinanceRecordDriverStaffId(record) ?? "").trim();
-  const workDate = String(getFinanceRecordWorkDate(record) ?? "").trim();
-
-  return driverStaffId && workDate ? `${driverStaffId}::${workDate}` : null;
-};
-
-const getCashUpCoverageKey = (entry = {}) => {
-  const driverStaffId = String(entry.driverStaffId ?? "").trim();
-  const workDate = String(entry.workDate ?? "").trim();
-
-  return driverStaffId && workDate ? `${driverStaffId}::${workDate}` : null;
 };
 
 const buildCashUpTransactionIds = (summary) => [
@@ -2132,8 +1974,6 @@ const syncTransactionsForDriverCashUp = (transactions = [], summary, updater) =>
     linkedRecordIds.has(record.id) ? updater(record) : record,
   );
 };
-
-const isDriverCreatedFinanceRecord = (record = {}) => record.createdByRole === "Driver";
 
 const buildDriverCashUpAnalytics = (summary) => {
   const standardIncomeRecords = (summary?.incomeRecords ?? [])
@@ -2168,37 +2008,6 @@ const getDriverCashUpGapKm = (source, summary) =>
       return Math.abs(Number(record.openingOdo ?? 0) - Number(expectedOpening ?? 0));
     },
   );
-
-const getDriverCashUpWorkflowStatus = (entry, summary) => {
-  const explicitStatus = normalizeCashUpWorkflowStatus(entry?.status);
-  const linkedStatuses = [
-    ...(summary?.incomeRecords ?? []).map((record) =>
-      normalizeCashUpWorkflowStatus(record.status),
-    ),
-    ...(summary?.expenseRecords ?? []).map((record) =>
-      normalizeCashUpWorkflowStatus(record.status),
-    ),
-  ].filter(Boolean);
-
-  if (linkedStatuses.length === 0) {
-    return explicitStatus ?? "pending";
-  }
-
-  if (linkedStatuses.every((status) => status === "banked")) {
-    return "banked";
-  }
-  if (linkedStatuses.some((status) => status === "pending")) {
-    return "pending";
-  }
-  if (linkedStatuses.some((status) => status === "counted")) {
-    return "counted";
-  }
-  if (linkedStatuses.some((status) => status === "verified")) {
-    return "verified";
-  }
-
-  return explicitStatus ?? "pending";
-};
 
 const getDriverCashUpWorkflow = (summary, workflowStatus) => {
   if (!summary || summary.entryCount === 0) {
@@ -2795,24 +2604,6 @@ const buildDepositReference = (sequence, value = new Date()) => {
   const date = String(value.getDate()).padStart(2, "0");
 
   return `TFP-${day}-${month}${date}-${String(sequence).padStart(2, "0")}`;
-};
-
-const getExpectedOpeningOdo = (transactions, vehicles, vehicleId, excludedId = null) => {
-  const latestShift = [...transactions]
-    .filter(
-      (record) =>
-        record.type === "income" &&
-        record.incomeKind === "standard" &&
-        record.vehicleId === vehicleId &&
-        record.id !== excludedId,
-    )
-    .sort((left, right) => new Date(right.timestamp) - new Date(left.timestamp))[0];
-
-  if (latestShift?.closingOdo != null) {
-    return Number(latestShift.closingOdo);
-  }
-
-  return Number(vehicles.find((vehicle) => vehicle.id === vehicleId)?.currentOdometer ?? 0);
 };
 
 const getDriverLinkedVehicles = (snapshot) => {
@@ -3782,7 +3573,8 @@ const createDriverDraft = (driver) => ({
   licenseExpiryDate: driver?.licenseExpiryDate ?? "",
   prdpNumber: driver?.prdpNumber ?? "",
   prdpExpiryDate: driver?.prdpExpiryDate ?? "",
-  accessPassword: driver?.accessPassword ?? "",
+  accessPassword: "",
+  enableLogin: false,
 });
 
 const createDriverAllocationDraft = (staffId = "", vehicleId = "") => ({

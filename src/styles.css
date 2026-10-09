@@ -865,6 +865,47 @@ button {
   accent-color: var(--navy);
 }
 
+.finance-form-login-section {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0.4rem 0;
+}
+
+.finance-field-password {
+  position: relative;
+  display: flex;
+}
+
+.finance-field-password input {
+  flex: 1;
+  padding-right: 2.6rem;
+}
+
+.finance-field-password-toggle {
+  position: absolute;
+  right: 0.35rem;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.2rem;
+  height: 2.2rem;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  border-radius: 0.6rem;
+}
+
+.finance-field-password-toggle:hover,
+.finance-field-password-toggle:focus-visible {
+  color: var(--navy);
+  background: rgba(11, 37, 69, 0.08);
+}
+
 .finance-form-meta,
 .finance-form-actions,
 .record-actions,
@@ -2619,5 +2660,128 @@ button {
     font-size: 0.6rem;
     flex-shrink: 1;
     padding: 0.25rem 0.5rem;
+  }
+}
+
+.reports-panel {
+  display: grid;
+  gap: 1rem;
+}
+
+.report-record-list {
+  display: grid;
+  gap: 0.6rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.report-record-list legend {
+  margin-bottom: 0.35rem;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.report-record-option {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 3.2rem;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid rgba(11, 37, 69, 0.1);
+  border-radius: 0.85rem;
+  background: rgba(245, 247, 250, 0.9);
+  cursor: pointer;
+}
+
+.report-record-option[data-selected="true"] {
+  border-color: var(--navy);
+  box-shadow: inset 0 0 0 1px var(--navy);
+  background: var(--white);
+}
+
+.report-record-option input {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--navy);
+}
+
+.report-record-main {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.report-record-main strong {
+  color: var(--navy);
+  overflow-wrap: anywhere;
+}
+
+.report-record-main span,
+.report-record-main small {
+  color: var(--subtext);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.report-record-main small {
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.report-empty {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.9rem;
+  border: 1px dashed var(--border);
+  border-radius: 0.85rem;
+  color: var(--subtext);
+}
+
+.report-date-chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+}
+
+.report-preview {
+  display: grid;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.report-preview .finance-form-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.reports-panel .action-button.primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+@media (max-width: 719px) {
+  .report-record-option {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .report-record-option .status-chip {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .reports-panel .action-button.primary {
+    width: 100%;
   }
 }

@@ -1,7 +1,15 @@
-import { createClient } from "@supabase/supabase-js";
+import {
+  createServiceClient,
+  createUser,
+  updateUser,
+  resetPassword,
+  deleteUser,
+} from "../_lib/userLifecycle.js";
+import { resolveServerWorkspaceKey } from "../_lib/workspaceKey.js";
 
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const WORKSPACE_KEY = resolveServerWorkspaceKey();
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -18,7 +26,7 @@ const createResponse = (body, status = 200) =>
     },
   });
 
-const validateAdminSession = async (req) => {
+const validateSession = async (req, supabase) => {
   const authHeader = req.headers.get("authorization");
   if (!authHeader?.toLowerCase().startsWith("bearer ")) {
     return { error: "Missing or invalid authorization header", status: 401 };
@@ -29,17 +37,6 @@ const validateAdminSession = async (req) => {
     return { error: "Empty bearer token", status: 401 };
   }
 
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    return { error: "Server configuration incomplete", status: 503 };
-  }
-
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  });
-
   const {
     data: { user },
     error: userError,
@@ -49,24 +46,26 @@ const validateAdminSession = async (req) => {
     return { error: "Invalid or expired session token", status: 401 };
   }
 
-  const userRole = user.app_metadata?.role ?? user.user_metadata?.role ?? null;
-  if (!["Owner", "Admin", "Manager"].includes(userRole)) {
-    return { error: "Insufficient permissions for admin operations", status: 403 };
+  if (!user.email) {
+    return { error: "Session has no associated email address", status: 401 };
   }
 
-  return { user, userRole, supabase };
+  return { user };
 };
 
 export async function POST(req) {
-  const sessionValidation = await validateAdminSession(req);
-  if (sessionValidation.error) {
-    return createResponse(
-      { ok: false, error: sessionValidation.error },
-      sessionValidation.status,
-    );
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    return createResponse({ ok: false, error: "Server configuration incomplete" }, 503);
   }
 
-  const { user, userRole, supabase } = sessionValidation;
+  const supabase = createServiceClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const sessionValidation = await validateSession(req, supabase);
+
+  if (sessionValidation.error) {
+    return createResponse({ ok: false, error: sessionValidation.error }, sessionValidation.status);
+  }
+
+  const { user: sessionUser } = sessionValidation;
 
   let body;
   try {
@@ -75,9 +74,10 @@ export async function POST(req) {
     return createResponse({ ok: false, error: "Invalid request body" }, 400);
   }
 
-  const { action, email, name, role, password, actorId } = body;
+  const { action, email, name, role, password, staffId, moduleAccess } = body;
+  const allowedActions = ["create", "reset-password", "update", "delete"];
 
-  if (!action || !["create", "reset-password", "update"].includes(action)) {
+  if (!action || !allowedActions.includes(action)) {
     return createResponse({ ok: false, error: "Invalid action specified" }, 400);
   }
 
@@ -85,115 +85,38 @@ export async function POST(req) {
     return createResponse({ ok: false, error: "Valid email address required" }, 400);
   }
 
-  const normalizedEmail = email.trim().toLowerCase();
+  const shared = {
+    supabase,
+    workspaceKey: WORKSPACE_KEY,
+    requesterEmail: sessionUser.email,
+    email,
+  };
 
-  if (action === "create") {
-    if (userRole !== "Owner") {
-      return createResponse({ ok: false, error: "Only the owner can create new user accounts" }, 403);
+  let result;
+
+  try {
+    if (action === "create") {
+      result = await createUser({ ...shared, name, role, password, staffId });
+    } else if (action === "update") {
+      result = await updateUser({ ...shared, name, role, moduleAccess });
+    } else if (action === "reset-password") {
+      result = await resetPassword({
+        ...shared,
+        requesterRole: sessionUser.app_metadata?.role ?? null,
+        name,
+        password,
+      });
+    } else {
+      result = await deleteUser(shared);
     }
-
-    if (!role || !["Owner", "Admin", "Manager", "Driver", "Viewer"].includes(role)) {
-      return createResponse({ ok: false, error: "Valid role required for user creation" }, 400);
-    }
-
-    if (!password || password.length < 6) {
-      return createResponse({ ok: false, error: "Password must be at least 6 characters long" }, 400);
-    }
-
-    const existingUsers = await supabase.auth.admin.listUsers();
-    if (existingUsers.error) {
-      return createResponse({ ok: false, error: "Failed to check existing users" }, 502);
-    }
-
-    const existingUser = existingUsers.data.users.find(
-      (u) => u.email?.toLowerCase() === normalizedEmail,
+  } catch (error) {
+    return createResponse(
+      { ok: false, error: error?.message ?? "Unexpected server error during account operation" },
+      500,
     );
-
-    if (existingUser) {
-      return createResponse({ ok: false, error: "User already exists in Supabase Auth" }, 409);
-    }
-
-    const { data, error } = await supabase.auth.admin.createUser({
-      email: normalizedEmail,
-      password,
-      email_confirm: true,
-      user_metadata: {
-        name: name || normalizedEmail,
-        role,
-        staffId: body.staffId ?? null,
-      },
-      app_metadata: {
-        role,
-        staff_id: body.staffId ?? null,
-      },
-    });
-
-    if (error) {
-      return createResponse({ ok: false, error: error.message }, 502);
-    }
-
-    return createResponse({
-      ok: true,
-      message: `User ${normalizedEmail} created in Supabase Auth`,
-      user: {
-        id: data.user.id,
-        email: data.user.email,
-        role: data.user.app_metadata?.role ?? role,
-      },
-    });
   }
 
-  if (action === "reset-password" || action === "update") {
-    if (!["Owner", "Admin", "Manager"].includes(userRole)) {
-      return createResponse({ ok: false, error: "Insufficient permissions for password reset" }, 403);
-    }
-
-    const existingUsers = await supabase.auth.admin.listUsers();
-    if (existingUsers.error) {
-      return createResponse({ ok: false, error: "Failed to find user in Supabase Auth" }, 502);
-    }
-
-    const existingUser = existingUsers.data.users.find(
-      (u) => u.email?.toLowerCase() === normalizedEmail,
-    );
-
-    if (!existingUser) {
-      return createResponse({ ok: false, error: "User not found in Supabase Auth" }, 404);
-    }
-
-    const updates = {
-      email_confirm: true,
-      user_metadata: {
-        ...(existingUser.user_metadata ?? {}),
-        name: name || existingUser.user_metadata?.name || normalizedEmail,
-      },
-      app_metadata: {
-        ...(existingUser.app_metadata ?? {}),
-      },
-    };
-
-    if (password && password.length >= 6) {
-      updates.password = password;
-    }
-
-    const { data, error } = await supabase.auth.admin.updateUserById(existingUser.id, updates);
-
-    if (error) {
-      return createResponse({ ok: false, error: error.message }, 502);
-    }
-
-    return createResponse({
-      ok: true,
-      message: password ? `Password reset for ${normalizedEmail}` : `User ${normalizedEmail} updated`,
-      user: {
-        id: data.user.id,
-        email: data.user.email,
-        role: data.user.app_metadata?.role ?? existingUser.app_metadata?.role,
-      },
-    });
-  }
-
-  return createResponse({ ok: false, error: "Unknown action" }, 400);
+  return createResponse(result, result.status ?? (result.ok ? 200 : 400));
 }
 
 export async function OPTIONS() {

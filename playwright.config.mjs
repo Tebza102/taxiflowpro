@@ -2,6 +2,9 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests",
+  // tests/uat/ is the live Preview release gate; it only runs through
+  // playwright.uat.config.mjs (npm run uat:preview), never the mock suite.
+  testIgnore: ["**/uat/**"],
   timeout: 120_000,
   fullyParallel: false,
   workers: 1,

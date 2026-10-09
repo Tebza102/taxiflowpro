@@ -17,6 +17,7 @@
     "@supabase/supabase-js": "^2.49.8",
     "date-fns": "^4.1.0",
     "lucide-react": "^0.511.0",
+    "pdfkit": "^0.20.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

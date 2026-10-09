@@ -64,6 +64,17 @@ const signOut = async (page) => {
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
 };
 
+// Settings module pills toggle; Admin and Manager start with their role modules
+// on (see "Access by role" in Settings), so only click when the state differs.
+const setModuleAccess = async (accessForm, moduleLabel, enabled) => {
+  const pill = accessForm.getByRole("button", { name: moduleLabel, exact: true });
+  const isActive = /\bactive\b/.test((await pill.getAttribute("class")) ?? "");
+
+  if (isActive !== enabled) {
+    await pill.click();
+  }
+};
+
 const openModule = async (page, moduleLabel, expectedHeading) => {
   await moduleButton(page, moduleLabel).click();
   await expect(page.getByRole("heading", { name: expectedHeading })).toBeVisible();
@@ -87,7 +98,9 @@ test("owner can reach every main module and see embedded compliance", async ({ p
   assertNoRuntimeErrors();
 });
 
-test("manager and admin default to overview plus reset-only settings access", async ({
+// Since d3adf04 ("Fix admin and manager module access") Admin and Manager start
+// with their role modules on; the Owner narrows them per account in Settings.
+test("manager and admin default to their role modules plus reset-only settings access", async ({
   page,
 }) => {
   const assertNoRuntimeErrors = attachRuntimeCollectors(page);
@@ -96,9 +109,10 @@ test("manager and admin default to overview plus reset-only settings access", as
     await signIn(page, account.email);
     await expect(page.getByText(account.role).first()).toBeVisible();
     await expect(page.getByRole("heading", { name: "Daily flow" })).toBeVisible();
-    await expect(page.locator("button.module-button").filter({ hasText: "Money" })).toHaveCount(0);
-    await expect(page.locator("button.module-button").filter({ hasText: "Fleet & Operations" })).toHaveCount(0);
-    await expect(page.locator("button.module-button").filter({ hasText: "Drivers" })).toHaveCount(0);
+    await expect(moduleButton(page, "Money")).toBeVisible();
+    await expect(moduleButton(page, "Fleet & Operations")).toBeVisible();
+    await expect(moduleButton(page, "Drivers")).toBeVisible();
+    await expect(moduleButton(page, "Reports")).toBeVisible();
     await expect(moduleButton(page, "Settings")).toBeVisible();
 
     await openModule(page, "Settings", "User accounts");
@@ -215,7 +229,7 @@ test("owner-granted management module access persists after reload and re-login"
     const accessForm = page.locator("form.finance-form").filter({
       has: page.getByRole("button", { name: "Save access" }),
     });
-    await accessForm.getByRole("button", { name: grant.moduleLabel }).click();
+    await setModuleAccess(accessForm, grant.moduleLabel, true);
     await accessForm.getByRole("button", { name: "Save access" }).click();
     await expect(page.getByText(/updated as/i)).toBeVisible();
   }
@@ -319,7 +333,7 @@ test("owner settings rights allow admin to add a driver", async ({ page }) => {
   const accessForm = page.locator("form.finance-form").filter({
     has: page.getByRole("button", { name: "Save access" }),
   });
-  await accessForm.getByRole("button", { name: "Drivers" }).click();
+  await setModuleAccess(accessForm, "Drivers", true);
   await accessForm.getByRole("button", { name: "Save access" }).click();
   await expect(page.getByText(/updated as Admin\./i)).toBeVisible();
   await signOut(page);
@@ -430,7 +444,7 @@ test("owner settings rights allow manager to work in Fleet & Operations", async 
   const accessForm = page.locator("form.finance-form").filter({
     has: page.getByRole("button", { name: "Save access" }),
   });
-  await accessForm.getByRole("button", { name: "Fleet & Operations" }).click();
+  await setModuleAccess(accessForm, "Fleet & Operations", true);
   await accessForm.getByRole("button", { name: "Save access" }).click();
   await expect(page.getByText(/updated as Manager\./i)).toBeVisible();
   await signOut(page);

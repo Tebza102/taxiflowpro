@@ -32,6 +32,7 @@ import { DriverFullScreenView } from "./components/DriverFullScreenView";
 import { MobileActionScreen } from "./components/MobileActionScreen";
 import { MobileBottomSheet } from "./components/MobileBottomSheet";
 import { TripLegOptionalFields } from "./components/TripLegOptionalFields";
+import { ReportsPanel } from "./components/ReportsPanel";
 import { repository } from "./lib/dataGateway";
 import { getSafeDocument, getSafeWindow, safeMatchMedia } from "./lib/browserRuntime";
 import { logStartupError, logStartupEvent } from "./lib/runtimeDiagnostics";
@@ -5338,6 +5339,10 @@ function App() {
       stat: `${activeDrivers}`,
       sub: "Active drivers",
     },
+    reports: {
+      stat: "PDF",
+      sub: "Daily finance",
+    },
     settings: {
       stat: pendingPasswordResetCount > 0 ? `${pendingPasswordResetCount}` : `${appUsers.length}`,
       sub: pendingPasswordResetCount > 0 ? "Reset requests" : "User access",
@@ -5530,6 +5535,15 @@ function App() {
               onAllocateDriverShift={allocateDriverShift}
               onRevalidateLiveWorkspace={revalidateLiveWorkspace}
               onSelectDriverVehicle={selectDriverVehicle}
+            />
+          )}
+          {activeView === "reports" && (
+            <ReportsPanel
+              snapshot={currentSnapshot}
+              activeRole={activeRole}
+              canAccessReports={Boolean(authModuleAccess.reports)}
+              accessToken={authSession?.access_token ?? null}
+              backendMode={backendMode}
             />
           )}
           {activeView === "settings" && (
@@ -7777,6 +7791,12 @@ function FinancePanel({
                   Overview
                   <ChevronRight size={16} />
                 </button>
+                {["Owner", "Admin", "Manager"].includes(activeRole) && (
+                  <button className="cta-link" onClick={() => onNavigate("reports")} type="button">
+                    Download reports
+                    <ChevronRight size={16} />
+                  </button>
+                )}
               </div>
             </Panel>
           </div>

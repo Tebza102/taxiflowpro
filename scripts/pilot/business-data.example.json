@@ -1,0 +1,25 @@
+{
+  "business": { "name": "Pilot One Taxis" },
+  "profile": {
+    "legalEntity": "Pilot One Taxis (Pty) Ltd",
+    "district": "Example District",
+    "nextBankingWindow": "Friday 16:30",
+    "serviceIntervalKm": 10000
+  },
+  "routes": [
+    { "startStop": "Example Rank North", "endStop": "Example Mall", "code": "ENM" },
+    { "startStop": "Example Mall", "endStop": "Example Station" }
+  ],
+  "drivers": [
+    { "name": "Example Driver One", "phone": "000 000 0001", "route": "Example Rank North to Example Mall" },
+    { "name": "Example Driver Two", "route": "Example Mall to Example Station" }
+  ],
+  "vehicles": [
+    { "registration": "EX 100 GP", "model": "Minibus taxi", "route": "Example Rank North to Example Mall", "assignedDriverName": "Example Driver One", "currentOdometer": 120000, "seatCapacity": 15 },
+    { "registration": "EX 200 GP", "route": "Example Mall to Example Station", "assignedDriverName": "Example Driver Two" }
+  ],
+  "expensePresets": {
+    "asset": [{ "name": "Fuel", "descriptions": ["Diesel", "Petrol"] }],
+    "operational": [{ "name": "Rank fees", "descriptions": ["Monthly rank levy"] }]
+  }
+}

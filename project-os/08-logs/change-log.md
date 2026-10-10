@@ -684,3 +684,17 @@ Prepared. Installation is a human step.
 **Tests run:** none needed (documents only).
 
 **Next action:** `next-action.md` → 1r.
+
+### 2026-10-10 19:45 — Approval A final amendments (Task 24)
+
+**Changed by:** Claude Code (agent). Documents only; no hosted change, purchase or deploy.
+
+**Summary:**
+- **Data:** the first rehearsal uses synthetic businesses, Auth users and finance data. The encrypted production backup stays separate and is not restored. The release-plan rehearsal step is corrected to match.
+- **Cost:** Micro compute is incurred (≈ $0.01344/hour) and offset by the $10 included credit. Total ceiling $30 + tax across both providers, checked at creation and daily (new checklist row A19).
+- **Zero-cash closure:** the `settlement.closedWithoutDeposit` indicator is set on verified R 0 days; `deposit.lock` excludes them; no R 0 deposit; statuses unchanged. Negative expected cash and signed variance are explained.
+- **Vercel trial before purchase:** the trial team is created first; if it's unavailable, stop before any purchase.
+- **Evidence and clean-up:** evidence is retained before deletion (A20). Clean-up within 48 hours of sign-off, no later than day 10 (A21).
+- **Checklist Part A** rewritten (A1–A21).
+
+**Next action:** `next-action.md` → 1s.

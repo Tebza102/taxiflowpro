@@ -191,7 +191,7 @@ Vercel **Preview** environments get **no** production secret key.
 - Slot decision: the Free organisation already runs 2 active projects; pause one or upgrade.
 
 **Steps**
-1. Restore the encrypted backup; compare the manifest.
+1. Load the exact live-schema copy plus **synthetic** fixtures (Approval A: synthetic data only; the production backup is taken read-only and **not** restored).
 2. Run the pre-flight.
 3. Apply release files 01–04 (record durations).
 4. Create the `rehearsal` publishable and secret keys, deploy the Preview with the section 6 configuration using them, and **confirm the server functions work with `sb_` keys**.

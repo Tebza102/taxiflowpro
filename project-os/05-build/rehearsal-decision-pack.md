@@ -1,4 +1,4 @@
-# Hosted Rehearsal Decision Pack (revised 2026-10-10)
+# Hosted Rehearsal Decision Pack (final amendments 2026-10-10)
 
 Gathered **read-only**:
 - the Supabase connector's account, project and price lookups;
@@ -39,14 +39,16 @@ Gathered **read-only**:
 
 | Option | Isolation | Touches Birdie Squad or TaxiFlow production? | Estimated cost (USD, before tax) |
 |---|---|---|---|
-| **A. New Supabase org on Pro + 1 Micro project; new Vercel team on the Pro *trial*** | full | **No** | **≈ $25** (Supabase Pro month; one Micro covered by the $10 compute credit; Vercel trial $0) |
+| **A. New Supabase org on Pro + 1 Micro project; new Vercel team on the Pro *trial*** | full | **No** | **≈ $25**: $25 Supabase Pro plan fee (charged upfront for the month) + Micro compute **incurred at ≈ $0.01344/hour (≈ $10 for a full month), offset by the $10 included compute credit**; Vercel trial $0 |
 | A′. As A, but the Vercel trial is unavailable or already used: new Vercel team on paid Pro | full | No | **≈ $45** ($25 Supabase + $20 Vercel) |
 | B. Upgrade the "Apprigate" Supabase org (+ project) | shared org | **Yes** (Birdie Squad's plan and billing) | ≈ $45/month |
 | C. Branch of TaxiFlow production | branch | **Yes** (needs a paid "Apprigate" org) | $25 + $0.01344/hour (connector price; compute credits don't apply) |
 | D. Free project | full | **Yes** (needs a pause) | ruled out |
-| E. Local exact copy (done) | local | No | $0; can't prove the gateway keys, email, Vercel or a real-data restore |
+| E. Local exact copy (done) | local | No | $0; can't prove the gateway keys, email or Vercel |
 
 **Recommendation: A.** These are **estimates, not quotes.**
+- Micro compute is **charged**, and the included credit **offsets** it. It is not free: if the project ran longer than the credit covers, or more than one project ran, compute would exceed the credit.
+- **Total spending ceiling for the rehearsal: $30 plus applicable tax, across Supabase and Vercel combined.** Enforcement is in section 5.
 - Supabase charges the Pro plan fee **upfront** for the month. After cancelling, unused time becomes **credit in that organisation, not a refund**.
 - Taxes are added where they apply (Supabase and Vercel both bill in USD, before VAT or GST).
 - The estimate assumes the rehearsal finishes within the Vercel trial's 14 days. The Supabase project should be deleted, and its organisation downgraded, straight after sign-off.
@@ -110,23 +112,47 @@ On Vercel, spend management only notifies by default. The Vercel trial pauses at
 | C. Expenses above takings | R 100 | R 300 cash | −R 200 | **R 0** | R 0 | **+R 200** | **R 200** |
 | D. Expense-only, non-cash | R 0 | R 900 card | R 0 | **R 0** | R 0 | R 0 | R 0 |
 
-### 3d. How zero-cash days close: no fictitious deposit, no reimbursement banking
-- A day with **cash to hand in = R 0** (B, C, D) goes through the same review: the Admin records a **counted R 0**, then the Manager **verifies**.
-- At **verified** the day is **closed**. The existing closed-day guard locks its records (no edits, deletes or new work).
-- **Zero-cash days are not banked.** They are left out of deposit batches, and their final state is "Closed: no cash to bank" (stored status `verified`). The UI must show that label, not "awaiting banking".
-- **No R 0 deposit is ever created.** The deposit batch includes only days and records with cash to bank. If a batch would total R 0, there is nothing to bank and no deposit record is made.
-- **Uncovered amounts are never part of a deposit**: not added, not subtracted, and not counted as banked cash.
-- The deposit's reported cash-expense total counts only expenses covered by takings.
+### 3d. Negative expected cash, signed variance and the zero-cash closure indicator
+
+**Negative expected cash.** Expected cash = income − cash expenses. When a day's cash expenses are larger than its income, expected cash is **below zero**. That means the expenses paid in cash were more than the cash collected that day.
+- It does **not** mean the driver must hand in a negative amount.
+- It does **not** mean the business owes the driver: the funding source is unconfirmed.
+- The day therefore has:
+  - **cash to hand in = R 0**;
+  - **uncovered cash expenses** = the size of the shortfall, labelled "funding source unconfirmed".
+
+**Signed variance.** Variance = counted − expected, kept with its sign, exactly as today.
+- On a normal day a **negative** variance means less cash was counted than expected (a shortage); a **positive** one means more.
+- On a negative-expected day where R 0 is counted, the variance is **positive** and equal to the uncovered amount (example B: 0 − (−200) = **+R 200**). That isn't extra cash. The screen shows it **next to** "uncovered cash expenses R 200 (funding source unconfirmed)", so the reason is visible. The variance itself is not changed or re-based.
+
+**Zero-cash closure indicator** (the workflow contract is unchanged)
+- **Status values stay exactly `pending | counted | verified | banked`.**
+- When a day checking is **verified** and its cash to hand in is R 0, the server records an explicit indicator on the day checking:
+  `settlement: { cashToHandIn: 0, uncoveredCashExpenses, closedWithoutDeposit: true, closedAt, closedBy }`.
+  The status stays `verified`.
+- `closedWithoutDeposit: true` means the day is **final**:
+  - the closed-day guard already locks a verified day's records (no edits, deletes or new work);
+  - `deposit.lock` **excludes** these days, so they never become `banked`, are never in a deposit, and **no R 0 deposit record is ever created**;
+  - the UI and report show "Closed: no cash to bank" instead of "awaiting banking".
+- Uncovered amounts are never added to or subtracted from any deposit, and are never reported as banked cash.
 
 ### 3e. Smallest safe pilot implementation (recommended; no payables)
 1. **Banking queue:** include day checkings with any entry (`entryCount > 0`).
-2. **Server:** compute and store `cashToHandIn` and `uncoveredCashExpenses` on submit, hand-in and verify.
-   - `deposit.lock` excludes zero-cash verified days.
+2. **Server:** compute `cashToHandIn` and `uncoveredCashExpenses` on submit, hand-in and verify.
+   - On verify with `cashToHandIn = 0`, write the `settlement.closedWithoutDeposit` indicator (section 3d). The status stays `verified`.
+   - `deposit.lock` excludes those days.
    - The deposit maths are otherwise unchanged; variance stays signed.
 3. **UI:** show "Cash to hand in", "Counted", "Variance (signed)", and when relevant, "Cash expenses above takings: R X, funding source unconfirmed". Zero-cash verified days are labelled "Closed: no cash to bank".
 4. **Report:** a separate informational line for uncovered amounts.
 5. **Not now:** payables, a reimbursement settlement action, or a new funding-source field.
-6. **Tests:** examples A–D on the server and in the browser; deposits exclude zero-cash days and never include uncovered amounts; no R 0 deposit; the closed-day lock after verify; signed variance preserved.
+6. **Tests:**
+   - examples A–D on the server and in the browser;
+   - the status values are unchanged;
+   - the `closedWithoutDeposit` indicator is set only on verified zero-cash days;
+   - deposits exclude those days and never include uncovered amounts;
+   - no R 0 deposit;
+   - the closed-day lock after verify;
+   - signed variance preserved.
 
 ## 4. Cutover ordering and new keys
 - **Production window start:**
@@ -139,20 +165,54 @@ On Vercel, spend management only notifies by default. The Vercel trial pauses at
 
 ## 5. Two bounded approvals (replace the per-step approvals)
 
-### Approval A: hosted rehearsal
-**Scope (all of it, nothing else):**
-- create the Supabase organisation "Apprigate Rehearsal" on Pro, with one Micro project in eu-west-1 and the Spend Cap on;
-- create a new Vercel team on the Pro **trial** (no payment method) and one project `taxiflow-rehearsal` in it;
-- in those two only: create and delete keys, configure Auth and SMTP (test sender), set variables, deploy the reviewed commit, and run the operator scripts with synthetic businesses and test mailboxes;
-- read-only queries and the encrypted backup of TaxiFlow production;
-- restore that backup into the rehearsal project; apply release files 01–04 there;
-- afterwards: delete the rehearsal keys and project, downgrade the rehearsal organisation, and let the Vercel trial lapse or downgrade it.
+### Approval A: hosted rehearsal (final)
 
-**Spend limit:** estimated ≈ **$25 plus applicable tax**; hard ceiling **$30 + tax** on the Supabase side; **$0 on Vercel**. If the Vercel trial is unavailable, stop and ask (option A′ adds $20).
+**Data:** the first hosted rehearsal uses **synthetic data only**: synthetic businesses, synthetic Auth users (test mailboxes Tebogo controls) and synthetic finance records.
+- **No real production data is restored or copied** into the rehearsal under this approval.
+- The production encrypted backup may be taken **read-only**, to rehearse the backup procedure. It is stored separately (encrypted, outside the repo) and **is not restored anywhere**.
+- **Prerequisite (to be built and tested locally before A6, no hosted change):** a hosted rehearsal seeding procedure. It loads the exact live-schema copy plus the synthetic fixtures on the rehearsal project only; Auth users are created through the Admin API, with target guards.
+
+**Order of spend (trial first):**
+1. Create the **Vercel Pro trial team** first, with **no payment method**.
+2. Only if the trial is available, create the **Supabase Pro organisation** (the only paid item) with one Micro project in eu-west-1, the Spend Cap on and **no add-ons**.
+3. If the trial is unavailable, or asks for a payment method: **stop before any purchase** and ask.
+
+**Scope (all of it, nothing else):** inside the rehearsal org/project and the trial team only:
+- create and delete keys (deactivating the legacy keys first);
+- configure Auth and test SMTP;
+- set variables and deploy the reviewed commit;
+- load synthetic data and apply release files 01–04;
+- run the checklist (Part A);
+- run the operator scripts with synthetic businesses;
+- one read-only inventory and an encrypted backup of TaxiFlow production, not restored;
+- the evidence export and the clean-up below.
+
+**Spend:** estimate ≈ $25 plus applicable tax. **Total ceiling $30 plus tax across both providers.**
+- Before creation: confirm the shown price.
+- After creation and daily: check Supabase's "Upcoming invoice" and usage.
+- **Stop** if the projected total exceeds the ceiling, or if any item outside the spend cap appears (section 1c). Vercel can't charge without a payment method.
+
+**Clean-up timing and evidence:**
+1. **Before deleting anything, retain the evidence:**
+   - the Part A results table (pass/fail per row);
+   - command outputs and assertion results;
+   - migration durations;
+   - the inventory comparison;
+   - deployment IDs and the commit SHA;
+   - screenshots of the PDF page, home-screen icons and email receipt (synthetic addresses only);
+   - Supabase usage and invoice-preview captures;
+   - catalogue exports (policies and grants after 01–04).
+   - Store it in `project-os/evidence/rehearsal-<date>/` (no secrets, keys or personal data). Raw logs that might contain identifiers go to an encrypted folder outside the repo.
+2. **Clean up within 48 hours of sign-off, and no later than day 10 after creation** (before the 14-day Vercel trial ends and well inside the Supabase billing month):
+   - delete the rehearsal secret key and the project;
+   - downgrade the rehearsal org to Free;
+   - leave the Vercel trial team with no payment method so it lapses, or keep it only if Approval B decides so.
+3. **If the rehearsal fails or stalls:** retain the evidence, then clean up by the same deadline. A later rehearsal needs a new Approval A.
 
 **Out of scope:**
 - any write to TaxiFlow production, Birdie Squad, the "Apprigate" Supabase org or the `apprigate` Vercel team;
-- DNS changes; purchases beyond the limit; real pilot data loads.
+- restoring or copying real data; DNS changes;
+- any purchase other than the rehearsal Supabase Pro org; any paid Vercel plan.
 
 ### Approval B: production cutover (only after rehearsal sign-off)
 **Scope:**
@@ -176,7 +236,8 @@ On Vercel, spend management only notifies by default. The Vercel trial pauses at
 
 The agent stops, leaves resources as they are (production: maintenance page up, legacy keys stay deactivated) and reports. It does not continue until Tebogo answers.
 1. **Unexpected cost:**
-   - any price, invoice preview or usage charge above the approved estimate or ceiling;
+   - any price, invoice preview or usage charge above the approved estimate, or a projected total above **$30 + tax** (Approval A);
+   - the Vercel trial unavailable (stop before the Supabase purchase);
    - any item outside the spend cap (section 1c) appearing;
    - a request for a payment method on the Vercel trial;
    - the plan fee shown differing from the estimate.
@@ -189,3 +250,5 @@ The agent stops, leaves resources as they are (production: maintenance page up, 
 - Installed-app icons on real Android and iOS phones (A15).
 - Hosted setup-email delivery, link and password set (A13).
 - Expense-only rule: decision, implementation and tests (A14).
+- Hosted rehearsal seeding procedure (synthetic data): build and test locally before A6.
+- Rehearsal with real production data: **not** under Approval A; it would need a separate approval.

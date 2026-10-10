@@ -13,41 +13,43 @@ Status: **draft for review; nothing executed.** Revised 2026-10-10 for **two bou
 
 ---
 
-## Part A: Hosted rehearsal (Authorization A)
+## Part A: Hosted rehearsal (Approval A)
 
-**Approval A** covers exactly the scope in decision-pack section 5:
-- a new Supabase org on Pro with one Micro project; estimate ≈ $25 + tax, ceiling $30 + tax;
-- a new Vercel team on the Pro **trial** ($0, no payment method) with the project `taxiflow-rehearsal`;
-- rehearsal keys, Auth and SMTP;
-- restoring the production backup into the rehearsal project;
-- clean-up afterwards.
+**Approval A** covers exactly the scope in decision-pack section 5 ("Approval A: hosted rehearsal (final)"):
+- **synthetic data only**;
+- the Vercel trial team first, then one Supabase Pro rehearsal org with a Micro project;
+- a total ceiling of **$30 + tax**;
+- evidence retained before clean-up, and clean-up within 48 hours of sign-off and no later than day 10.
 
-Production, Birdie Squad and the `apprigate` Vercel team are out of scope.
+Production, Birdie Squad and the `apprigate` Vercel team are out of scope. Real production data is never restored.
 
-**Inputs needed first:** decision-pack section 2, items 3–8 and 10–13 (the rehearsal URL and email inputs), plus the rehearsal date.
+**Inputs needed first:** decision-pack section 2, items 3–8 and 10–13, plus the rehearsal date. The synthetic hosted seeding procedure must already be built and tested locally.
 
 | # | Target | Action | Expected result | Stop if |
 |---|---|---|---|---|
-| A1 | Local repo | `node scripts/localdb/setup.mjs hosted`, then `node scripts/localdb/hosted-rehearsal-tests.mjs`; record the commit SHA | 22/22 | any FAIL, or the SHA is not the reviewed commit |
+| A1 | Local repo | `node scripts/localdb/setup.mjs hosted`, then `node scripts/localdb/hosted-rehearsal-tests.mjs`; run the local test of the synthetic hosted seeding procedure; record the commit SHA | 22/22; the seeding test passes | any FAIL, or the SHA is not the reviewed commit |
 | A2 | Production DB (read only) | Re-run the inventory queries (`hosted-inventory.md`) | Same relations, policies, grants and mapping counts as recorded | any difference: re-review release file 01 first |
-| A3 | Production DB (read only) | Encrypted consistent backup (`release-plan.md` section 3) plus manifest | decrypts; the manifest matches the row counts and hashes | backup fails or the manifest doesn't match |
-| A4 | Supabase and Vercel | Create the org "Apprigate Rehearsal" (Pro, Spend Cap on) with one Micro project in eu-west-1, **no add-ons**; create a new Vercel team on the **Pro trial** with **no payment method** | the project is active; the price shown matches the estimate; the trial team exists | the price differs from the estimate or ceiling; the trial is unavailable or asks for a payment method; any add-on outside the spend cap appears |
-| A5 | Rehearsal project | Create the publishable `rehearsal-web` and secret `rehearsal-server` keys; **deactivate the legacy anon and service_role keys at once** | legacy-key requests → **401**; new keys work | a legacy key still works |
-| A6 | Rehearsal project | Restore the backup (A3): schema copy, data, Auth users | row counts and hashes match the manifest | any mismatch |
-| A7 | Rehearsal project | Apply release files 01, 02, 03 and 04, each in its own transaction; record the duration of each | each file commits; 01's assertions pass | any error (the file rolls back): stop and fix forward locally |
-| A8 | Rehearsal project | Run the `hosted-rehearsal-tests.mjs` checks as SQL, plus the API checks with anon, Owner and Driver tokens | no browser access to the 10 relations; only `businesses`/`business_memberships` readable by members | any browser access |
-| A9 | Rehearsal project | Configure Auth: Site URL = the rehearsal URL; redirect allow-list = the rehearsal URL; custom SMTP (sandbox or test sender) | settings saved | — |
-| A10 | Vercel (`taxiflow-rehearsal` project in the **trial team**) | Set its variables: `VITE_BACKEND_MODE=live`, `VITE_TENANT_MODE=true`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`=`rehearsal-web`, `TAXIFLOW_TENANT_MODE=true`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`=`rehearsal-web`, `SUPABASE_SERVICE_ROLE_KEY`=`rehearsal-server`; deploy the reviewed commit | the build succeeds; `/api/business/*` routes respond (401 without a token) | the build fails or `/api/business/*` returns 404 |
-| A11 | Rehearsal app | **New-key compatibility:** sign in as the mapped Owner; load the workspace; one finance action; Business access list; report preview and PDF | all work with only the new keys | any 401/403 caused by the keys |
-| A12 | Rehearsal app | Acceptance checks 1–6 (`release-plan.md` section 9): every mapped user's role; the full money flow (capture → submit → count → verify → bank → report); stale-save conflict; closed day; isolation; legacy routes 410 | all pass | any fail |
-| A13 | Rehearsal app and email | Operator: `scripts/hosted/onboard-business.mjs` dry run, then apply for one synthetic business (a test mailbox as Owner); the **setup email arrives**, the link works and a password is set; then `assign-initial-owner.mjs` dry run on an owner-less test business, and `load-business-data.mjs` dry run and apply | emails delivered; procedures behave as tested locally | the email isn't delivered, or the link fails |
-| A14 | Rehearsal app | **Expense-only rule** (if implemented): decision-pack examples A–D | cash to hand in, signed variance and "funding source unconfirmed" as specified; zero-cash days close at verified and are **not banked**; no R 0 deposit | wrong totals; an uncovered amount appears in a deposit; a R 0 deposit is created |
-| A15 | Phones | Install the rehearsal app on Android and iOS; check the home-screen icons (maskable) | icons correct, not clipped | wrong icon |
-| A16 | Rehearsal app | Download a Daily Finance Report PDF and inspect the rendered page visually | logo, colours and layout correct | a defect |
-| A17 | Rehearsal project | Recovery drills: one-business restore (snapshot plus request log); delete the secret key and confirm the app fails closed; deploy the maintenance page; re-promote the release-candidate deployment | each behaves as documented | any surprise |
-| A18 | Supabase and Vercel | Delete the `rehearsal-server` key and the rehearsal project; downgrade the rehearsal org; let the Vercel trial lapse (no payment method), or keep the team for Approval B if chosen | no rehearsal resources left running; total spend within the ceiling | spend above the ceiling |
+| A3 | Production DB (read only) | Encrypted consistent backup plus manifest (`release-plan.md` section 3); store it encrypted, outside the repo; **do not restore it** | decrypts; the manifest matches | backup or manifest fails |
+| A4 | Vercel (new team) | Create a team on the **Pro trial**, with **no payment method** | the trial is active, $0 | the trial is unavailable or asks for a payment method: **stop before any purchase** |
+| A5 | Supabase (new org) | Create the org "Apprigate Rehearsal" (Pro, Spend Cap on) with one Micro project in eu-west-1, **no add-ons**; capture the shown price and the Upcoming invoice | the price matches the estimate (Pro $25; Micro compute incurred and offset by the $10 credit); projected total ≤ $30 + tax | a projected total above the ceiling; any add-on outside the spend cap |
+| A6 | Rehearsal project | Create the publishable `rehearsal-web` and secret `rehearsal-server` keys; **deactivate the legacy anon and service_role keys** | legacy-key requests → **401**; the new keys work | a legacy key still works |
+| A7 | Rehearsal project | Load the **exact live-schema copy plus the synthetic fixtures** with the guarded seeding procedure (synthetic businesses, Auth users and finance records) | the counts match the synthetic manifest | a mismatch; any real data detected |
+| A8 | Rehearsal project | Apply release files 01, 02, 03 and 04, each in its own transaction; record the durations | each commits; 01's assertions pass | an error (the file rolls back) |
+| A9 | Rehearsal project | Access checks (`hosted-rehearsal-tests.mjs` as SQL, plus the API with anon, Owner and Driver tokens) | no browser access to the 10 relations; only member reads of `businesses`/`business_memberships` | any browser access |
+| A10 | Rehearsal project | Auth: Site URL and redirect allow-list = the rehearsal URL; custom test SMTP | saved | — |
+| A11 | Vercel (`taxiflow-rehearsal` in the trial team) | Set the variables (as in the decision pack and `release-plan.md` section 6, with the rehearsal keys); deploy the reviewed commit | the build succeeds; `/api/business/*` responds (401 without a token) | the build fails or `/api/business/*` returns 404 |
+| A12 | Rehearsal app | **New-key compatibility:** synthetic Owner sign-in, workspace, a finance action, Business access, report preview and PDF | all work with the new keys only | any 401/403 caused by the keys |
+| A13 | Rehearsal app | Acceptance checks 1–6 (`release-plan.md` section 9) with synthetic users | all pass | any fail |
+| A14 | Rehearsal app and email | Operator scripts (dry run, then apply) for one synthetic business; the **setup email reaches a test mailbox**, the link works and a password is set; `assign-initial-owner` and `load-business-data` | as tested locally; email delivered | email not delivered, or a script misbehaves |
+| A15 | Rehearsal app | Expense-only rule (if implemented): examples A–D | indicator, signed variance, "funding source unconfirmed" and no deposit for zero-cash days, as specified | wrong totals; an uncovered amount or a R 0 deposit appears |
+| A16 | Phones | Install the rehearsal app on Android and iOS; screenshot the home-screen icons | correct icons, not clipped | a defect |
+| A17 | Rehearsal app | Download a PDF; screenshot the rendered page | correct logo, colours and layout | a defect |
+| A18 | Rehearsal project | Recovery drills on **synthetic** data: one-business restore (snapshot plus request log); delete a secret key and confirm the app fails closed; maintenance-page deployment; re-promote the release-candidate deployment | as documented | any surprise |
+| A19 | Cost (daily) | Check the Supabase Upcoming invoice and usage, and that the Vercel trial still has no payment method | projected total ≤ $30 + tax | the ceiling is exceeded, or a non-capped item appears |
+| A20 | Evidence | Export the evidence listed in decision-pack section 5 to `project-os/evidence/rehearsal-<date>/` (no secrets or personal data); raw logs encrypted outside the repo | the evidence is complete and reviewed by Tebogo | evidence missing: don't clean up yet |
+| A21 | Clean-up (within 48 hours of sign-off, no later than day 10) | Delete the rehearsal secret key and the project; downgrade the org to Free; leave the Vercel trial with no payment method so it lapses (unless Approval B keeps it) | nothing left running; total spend ≤ ceiling | spend above the ceiling |
 
-**Rehearsal sign-off:** Tebogo records the pass/fail result per row, the durations from A7, and every open issue. Part B needs a full pass, or approved exceptions.
+**Rehearsal sign-off:** Tebogo records the pass/fail result per row, the durations from A8 and every open issue. Approval B needs a full pass, or approved exceptions.
 
 ---
 

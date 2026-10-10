@@ -8,6 +8,13 @@ The local test gaps are closed and committed locally (`a424d84`, `00df61a`, `78d
 1a. ~~Commit the UAT safeguards~~ — done locally: `105e3385ef9f9f6c022bd7aef9c34c7a9e215ee0` (tooling + tests) and `924ec70f9ae41da6ef57cca644ee19691d475cdc` (Project OS). Not pushed.
 1c-progress (2026-10-10 01:06): Docker Desktop 4.94.0 installed per-user (WSL 2, Linux containers, Windows containers off). Installer verified by SHA-256 and Authenticode. Terms accepted by Tebogo; engine 29.8.2 running; `docker run --rm hello-world` passed; port 2375 not exposed. **Next:** Supabase local init per `project-os/05-build/local-supabase-setup.md` steps 4–8, on Tebogo's go-ahead (open a new terminal so the Docker PATH entry is loaded).
 1d-progress (2026-10-10 02:01): ~~local Supabase binding blocker~~ resolved with option 3 (Compose, explicit 127.0.0.1 ports, CLI disabled by an invalid sentinel config). Verify 14 PASS / 1 WARN; synthetic drill passed for schema, Auth and snapshot. Committed locally; not pushed.
+1s (2026-10-10): Approval A is final (Task 24).
+
+**Before Part A can run:**
+1. **Tebogo grants Approval A** (`rehearsal-decision-pack.md` section 5).
+2. The email inputs are supplied.
+3. The agent builds and locally tests the **guarded synthetic hosted seeding procedure** (no hosted change).
+4. The expense-only rule (with the `closedWithoutDeposit` indicator) is implemented and tested locally if chosen.
 1r (2026-10-10): decision pack revised (Task 23).
 
 **Tebogo:**

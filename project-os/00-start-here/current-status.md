@@ -33,6 +33,15 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Approval A finalised (Task 24; documents only)
+
+- **Synthetic-only first rehearsal.** The production backup is taken read-only, kept encrypted and separate, and not restored.
+- **Cost wording:** Micro compute is incurred and offset by the included credit. **Total ceiling $30 + tax**, checked at creation and daily.
+- **Zero-cash closure:** the explicit `settlement.closedWithoutDeposit` indicator on verified days; statuses unchanged; no deposits.
+- **Vercel trial first:** availability confirmed before any purchase.
+- **Evidence before clean-up:** clean-up within 48 hours of sign-off, and by day 10 at the latest.
+- **Prerequisite:** a guarded synthetic hosted seeding procedure, to be built and tested locally.
+
 ### Decision pack revised (Task 23; read-only; nothing created or purchased)
 
 - **Vercel commercial use verified** from Vercel's Fair Use Guidelines (2026-09-14): Hobby is non-commercial only, so TaxiFlow needs Pro. The rehearsal uses a new Vercel Pro **trial** team ($0, no payment method).

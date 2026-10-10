@@ -520,3 +520,33 @@ Prepared. Installation is a human step.
 **Risks remaining:** see `tenant-design.md` → Remaining after Task 17.
 
 **Next action:** `next-action.md` → 1l.
+
+### 2026-10-10 14:15 — Pilot onboarding with authoritative memberships (local only; Task 18)
+
+**Changed by:** Claude Code (agent). Local synthetic environment only. No push, hosted change, live UAT or deploy.
+
+**Steps (SAST):**
+- 12:55 — Preflight @ `c54c482`.
+- Migration `20261010113000_pilot_onboarding.sql` (+ rollback):
+  - last-active-Owner trigger;
+  - service-only `create_business_with_owner` and `apply_membership_change`;
+  - browser `set_business_membership` withdrawn.
+- Code:
+  - `api/_lib/tenantOnboarding.js` (Auth find-or-create plus setup email, directory upkeep, actions, driver profiles);
+  - `api/business/members.js`;
+  - legacy `auth-users`/`bootstrap-workspace` return 410 when `TAXIFLOW_TENANT_MODE=true`;
+  - operator `scripts/localdb/onboard-business.mjs`;
+  - Settings → Business access (`TenantAccessPanel.jsx`).
+- 13:08 — `onboarding-tests.mjs` 64/64 on the first run.
+- 13:25 — Browser onboarding spec 1/1. It had one selector fix: a select's label text includes its options.
+- Tests moved off the withdrawn RPC to the server route: `server-auth-tests.mjs` and `tenant-tests.mjs` (access). The access no-change check now proves that only Business A's directory changed.
+
+**Tests run (fresh resets):**
+- Onboarding 64/64; browser 7/7 (Task 17 finance plus onboarding); server auth 26/26; finance actions 56/56; capture 43/43; record 36/36; verify 16 PASS/0 WARN; tenant access 36/36; rollback 8/8; drill MATCH (snapshots, businesses, memberships, request log, Auth).
+- Node 313/313; sync guards and build pass; demo-mode Playwright 28/28.
+
+**Result:** Pass.
+
+**Risks remaining:** `tenant-design.md` → Remaining pilot blockers after Task 18.
+
+**Next action:** `next-action.md` → 1m.

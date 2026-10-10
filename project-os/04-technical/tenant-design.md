@@ -367,3 +367,62 @@ Browser proof: `tests/localdb-browser/tenant-finance.spec.js` via `playwright.lo
 3. Hosted migration plan, and hosted or live UAT (not done).
 4. An expense-only driver day is not shown in the existing Banking queue. This is pre-existing UI behaviour, observed in Task 17 and not changed.
 5. If Save is clicked while a refresh is still loading, it is refused with "The workspace is not loaded. Refresh before saving." This is safe but abrupt.
+
+## Pilot onboarding (Task 18, local only)
+
+Business memberships are the only source of access. The legacy user and bootstrap routes (`api/admin/auth-users.js`, `api/admin/bootstrap-workspace.js`) return 410 when the server runs with `TAXIFLOW_TENANT_MODE=true`. The frontend already refused them in tenant mode.
+
+### Database (`scripts/localdb/migrations/20261010113000_pilot_onboarding.sql`, local hardened variant)
+- **Last-Owner guard:** a trigger on `business_memberships` refuses any update or delete that would leave a business without an active Owner. It locks the business row so concurrent changes are serialized.
+- **`create_business_with_owner`** (service_role only): creates the business, its workspace snapshot (`workspace_key` = slug) and the Owner membership in one transaction. It is idempotent by slug; a different Owner trying to reuse a slug gets `slug_taken`.
+- **`apply_membership_change`** (service_role only): checks that the actor is an active Owner of the business, then changes the membership and the business directory snapshot (with a version check) in one transaction. Its rules:
+  - only Admin, Manager or Driver can be assigned;
+  - Owners cannot be changed here, except an Owner's own driver link;
+  - nobody can change their own role or active flag.
+- **One membership path:** the foundation's browser-callable `set_business_membership` is withdrawn (execute revoked).
+- **Rollback:** `rollback/20261010113000_pilot_onboarding.down.sql`.
+
+### Operator procedure (creates businesses and Owners)
+`node scripts/localdb/onboard-business.mjs --slug <slug> --name "<name>" --owner-email <email> --owner-name "<name>" [--owner-drives]`
+
+- Local stack only. It uses `createBusinessWithOwner` in `api/_lib/tenantOnboarding.js`.
+- It finds or creates the Owner's Auth account. A new account has no password and gets a password-setup (recovery) email. An existing account is not changed.
+- `--owner-drives` also creates the Owner's driver profile and link (one login).
+- Repeating the command is safe.
+- A hosted version needs its own reviewed procedure with explicit target confirmation (not built; see the gaps below).
+
+### Owner access management (`/api/business/members`, Owner; Admin may view)
+- `member.grant` finds or creates the person's account (a new one gets the setup email), then sets the membership and directory entry. An existing account keeps its password and its other businesses.
+- `member.update` changes a member's role, driver link or module toggles.
+- `member.deactivate` and `member.reactivate`. The tenant auth check on every request blocks a removed user's reads and writes immediately, even with a still-valid token.
+- `owner.link_driver` sets the Owner's own driver link (owner-driver, one login).
+- `driver.save_profile` creates a driver profile with no sign-in; a Driver membership links one login to one profile. The existing unique index prevents two logins on one profile. Removing a sign-in keeps the profile.
+- **Retries and partial failures:**
+  - every change is recomputed from current server state and is idempotent;
+  - validation (for example, an unknown driver profile) happens before any account is created;
+  - if the account was created but the membership was refused, the response reports `partial` and a recovery note. That account has no access (no membership), and repeating the corrected request reuses it.
+- **Browser:** in tenant mode, Settings shows `src/components/TenantAccessPanel.jsx` (people, grant, remove/restore, driver profiles, "I also drive as") instead of the legacy user tools. After each change the workspace is reloaded so the loaded version stays current.
+
+### Evidence (2026-10-10)
+- **`scripts/localdb/onboarding-tests.mjs`:** 64/64 with real local Auth. Password setup was completed through the real local Mailpit email.
+  - Three businesses; the operator retry and slug hijack are refused.
+  - Public self-appointment refused: the RPCs, a direct insert, and the route for a non-member.
+  - Admin (new account), Manager (an existing account that is also Manager in Business A, whose A access and password were unchanged), and a driver profile followed by a linked Driver.
+  - Partial failure and retry; role access.
+  - Self-escalation and Owner-minting refused; the database refuses to deactivate, demote or delete the last Owner.
+  - Owner-driver, both at operator onboarding and by self-link.
+  - Cross-business changes and reads refused.
+  - Deactivation blocks the same token's read and write; reactivation works again; removing a Driver keeps the profile; removing access in one business keeps another.
+  - Legacy routes return 410.
+- **`tests/localdb-browser/tenant-onboarding.spec.js`:** 1/1. Operator → Owner sets a password from the email → driver profile → Driver grant → Admin grant → owner-driver self-link (the "Capture as" bar appears) → Driver signs in → the Owner removes the Admin while the Admin is signed in: the Admin's browser read and write get 403, and a reload shows no business.
+- **`tests/tenant-onboarding.test.mjs`:** 2/2.
+
+### Fleet, routes, settings and presets for the pilot (outside this task)
+In tenant mode these writes are still blocked. Before go-live, the operator collects each Owner's vehicles, routes (with stops, so trip capture can prefill them), expense presets and banking details. The operator loads them with a reviewed operator procedure: the same service-role, validated, version-checked pattern as `onboard-business.mjs`, not yet written. During the pilot, changes go through operator requests until tenant server actions for fleet, routes, settings and presets exist (the next task). Until then, routes without stops still work: the stops are typed in (proven in Task 17).
+
+### Remaining pilot blockers after Task 18
+1. Tenant server actions for fleet, routes, driver details beyond name, settings and presets (or the operator data-load procedure above).
+2. A hosted onboarding procedure, plus a hosted migration plan for the foundation, finance actions and onboarding migrations. Review, backup and rollback first; nothing hosted has been done.
+3. Hosted email: the Supabase project's SMTP and redirect URLs for the password-setup email (local uses Mailpit).
+4. Live or hosted UAT of the pilot flows.
+5. A removed user sees the generic "Account not mapped" screen; clearer wording is optional.

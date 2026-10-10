@@ -33,6 +33,16 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Pilot onboarding (Task 18, local only)
+
+Business memberships are now the only source of access, with one server path for changes.
+- The operator procedure creates a business and its initial Owner (`scripts/localdb/onboard-business.mjs`; the new Owner sets a password from the setup email).
+- Owners grant, remove and restore Admin, Manager and Driver access, keep driver profiles without sign-in, and link their own login as an owner-driver (Settings → Business access).
+- The database keeps at least one active Owner per business.
+- Legacy user and bootstrap routes return 410 in tenant mode.
+- Proof with real local Auth: onboarding 64/64; browser onboarding 1/1. This covers three businesses, role access, owner-driver, deactivation blocking a still-signed-in user, isolation, retries and partial failure.
+- Fleet, routes, settings and presets stay outside this task. How they will be supplied for the pilot is in `tenant-design.md` → Task 18. Not pushed; nothing hosted.
+
 ### Tenant-aware frontend finance workflow (Task 17, local only)
 
 Behind `VITE_TENANT_MODE=true` (live mode), the browser reads only through the server and writes finance only as explicit server actions.

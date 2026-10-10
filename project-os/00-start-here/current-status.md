@@ -33,7 +33,13 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
-### UAT safeguards added 2026-10-09 (uncommitted)
+### Local commits after the deployed SHA (not pushed)
+
+- `105e3385ef9f9f6c022bd7aef9c34c7a9e215ee0` — UAT safeguards (tooling + 26 mock tests). The deployed Preview is still `628121b`.
+- `924ec70f9ae41da6ef57cca644ee19691d475cdc` — Project OS records.
+- Isolated local database (2026-10-10 02:01): **running and verified, loopback-only** (Docker Compose with explicit `127.0.0.1` ports; the Supabase CLI is disabled in the workdir). `verify.mjs` gives 14 PASS and 1 expected WARN (flagged live-mirror policies). The synthetic drill recovered schema (from migrations), Auth (users + identities) and snapshot (hash/keys/counts/updated_at/updated_by match; all synthetic sign-ins work). A snapshot-only restore is refused by the FK, proving it incomplete. Live restore remains unverified. See `project-os/05-build/local-supabase-setup.md`.
+
+### UAT safeguards added 2026-10-09 (committed locally as `105e338`)
 
 `scripts/uat/lib/safeguards.mjs`, `scripts/uat/run-preview-uat.mjs`, `tests/uat/preview.spec.js`, `playwright.uat.config.mjs`, `tests/uat-safeguards.test.mjs`. Before any live write the runner now requires:
 - the exact verified immutable Preview host (`UAT_EXPECTED_DEPLOYMENT_HOST`), refusing known production hosts, branch/project aliases and custom domains;

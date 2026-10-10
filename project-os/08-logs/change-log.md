@@ -267,3 +267,122 @@ Pass (local, mocks only). Not committed, not pushed.
 
 **Next action:**
 - `next-action.md` → 1a/1b.
+
+### 2026-10-09 23:26 — Safeguards committed; isolated local database prepared (not installed)
+
+**Changed by:** Claude Code (agent)
+
+**Commits (local, not pushed):**
+- `105e3385ef9f9f6c022bd7aef9c34c7a9e215ee0` Make Preview UAT refuse unsafe targets and fixtures before any live write
+- `924ec70f9ae41da6ef57cca644ee19691d475cdc` Record verified Preview push, UAT inventory and safeguards in Project OS
+
+**Files changed (uncommitted):**
+- `project-os/05-build/local-supabase-setup.md` (new), `current-status.md`, `next-action.md`, this log
+
+**Summary:**
+Read-only machine check:
+- Windows 11 Home 26H2 build 26300; WSL 2.7.10 with Ubuntu on WSL 2; virtualization on.
+- 15.3 GB RAM, but only 1.1 GB free at check time; 209.7 GB disk free.
+- LanmanServer running/automatic; user is a local admin (not elevated); no pending reboot.
+- No Docker or Supabase CLI.
+
+From the official Supabase CLI and Docker Desktop docs, wrote the shortest setup: per-user Docker Desktop on WSL 2, a pinned `npx supabase` CLI in a folder outside the repo, analytics off, baseline schema as a migration. Also wrote the post-setup verification list. Nothing installed.
+
+**Tests run:**
+- None new. The committed tooling is byte-identical to the content that passed 264/264 at 23:09.
+
+**Result:**
+Prepared. Installation is a human step.
+
+**Risks remaining:**
+- Docker's requirement list names Pro/Enterprise/Education. Home is described as Linux-containers-only, which suffices but is not explicitly listed.
+- Low free RAM.
+- Docker licence eligibility to be confirmed by Tebogo.
+- Restore drill still unverified; live access risks and tenant isolation unchanged.
+
+**Next action:**
+- `next-action.md` → 1c.
+
+### 2026-10-10 00:58 — Docker Desktop installed per-user (not yet started)
+
+**Changed by:** Claude Code (agent), authorised by Tebogo. Machine change only; no repo code, database or live project touched.
+
+**Steps (times SAST):**
+- 2026-10-09 23:41 — Preflight: 15.3 GB RAM, 0.4 GB free, about 5 GB commit headroom. Excel, Word and OneNote were open (possible unsaved work), so nothing was closed and no restart was made.
+- 23:42 — Official source: Docker Desktop 4.94.0, build 241994 (release notes, 2026-10-05). Downloaded `https://desktop.docker.com/win/main/amd64/241994/Docker%20Desktop%20Installer.exe` (635,493,296 bytes) and the build's `checksums.txt` into `C:\Users\appri\Downloads\docker-desktop-4.94.0-241994\`.
+- 23:45 — Verified: SHA-256 `a9814e31049d66156477a86614e83365669677733014ec72f74229623ff3890a` matches Docker's `checksums.txt`. Authenticode Valid, signer "Docker Inc" (DigiCert Trusted G4 Code Signing CA1), timestamped. File/product version 4.94.0.241994.
+- 23:46 — Ran `Docker Desktop Installer.exe install --user --backend=wsl-2 --no-windows-containers`. Deliberately **no** `--accept-license`, no `--always-run-service`, no TCP 2375 exposure.
+- 23:48 — Install log `%LOCALAPPDATA%\Docker\install-cli-log.txt`: CLI plugins installed, no errors. The installer then waited on its "Installation succeeded / Close" screen. That screen, not a Windows UAC prompt, held the task open.
+- 2026-10-10 00:58 — Installer window closed (not by the agent); exit code 0. Install dir `%LOCALAPPDATA%\Programs\DockerDesktop`; `docker --version` → 29.8.2 (build 7fc2dff).
+
+**Not done yet:**
+- Docker Desktop not started.
+- Subscription Service Agreement not accepted (Tebogo must review and accept it).
+- `docker run --rm hello-world` not run.
+- Supabase not initialised; no database changed.
+
+**Risks remaining:**
+- About 0.4–0.8 GB free RAM. Starting the WSL 2 VM needs several GB; save open Office work first.
+
+**Next action:**
+- Tebogo saves work and confirms. The agent launches Docker Desktop; Tebogo accepts the terms; the agent runs `hello-world` and logs engine status.
+
+### 2026-10-10 01:06 — Docker Desktop started; terms accepted by Tebogo; hello-world passed
+
+**Changed by:** Tebogo (terms acceptance) and Claude Code (launch and checks). Machine only; no repo code, database or live project touched.
+
+**Steps (SAST):**
+- 01:03 — Memory check after Tebogo saved work and closed apps: 1.9 GB free, 12 GB commit headroom (was 0.4 / 5 GB).
+- 01:03 — Agent launched `%LOCALAPPDATA%\Programs\DockerDesktop\Docker Desktop.exe`. The agent did not click anything in the Docker window.
+- 01:05:29 — Engine became ready after Tebogo reviewed and accepted the Docker Subscription Service Agreement in the Docker Desktop window. Docker's docs say Desktop does not run until the terms are accepted; the settings file holds no readable acceptance field, so this is behavioural evidence.
+- 01:05:49 — First `docker run --rm hello-world` failed (exit 127): `docker-credential-desktop` not on `%PATH%`. Cause: the agent's shell predates the install. The installer had added `...\DockerDesktop\resources\bin` to the user PATH, and the helper exists. No setting was changed.
+- 01:06:06 — Re-ran with that folder prepended to PATH for the command only. Pulled `hello-world:latest` (digest `sha256:5e23090353324d887c48ad5e5c56d294eab81588df9605b07d1afe895f9cc8f8`); printed "Hello from Docker!"; exit 0; no leftover containers (`--rm`).
+
+**Engine status:** client and server 29.8.2; context `docker-desktop`; `linux/amd64`; WSL 2 kernel 6.18.33.2-microsoft-standard-WSL2; 8 CPUs; about 7.4 GiB memory to the VM. TCP port 2375 not listening; no TCP-expose setting.
+
+**Not done:** Supabase not initialised; no database changed.
+
+**Next action:**
+- `project-os/05-build/local-supabase-setup.md` steps 4–8, on Tebogo's go-ahead. Open a new terminal first so the Docker PATH entry is loaded.
+
+### 2026-10-10 01:39 — Local Supabase initialised; blocked on loopback-only port binding (stack stopped)
+
+**Changed by:** Claude Code (agent). Local machine and repo files only. No hosted database, Auth, DNS, push or deploy.
+
+**Steps (SAST):**
+- 01:21 — Preflight; the runner file showed no diff. Docker was down: Desktop had idle-shut down at 01:11 ("efficiency mode"). Restarted once; engine ready 01:22:44.
+- 01:22 — Supabase CLI: npm latest = 2.120.0 (pinned); read `init`/`db reset` help and the config docs.
+- 01:23 — Read the live table definition only (columns, PK, FK to auth.users, PostgreSQL 17.6). The code uses only `workspace_snapshots`.
+- 01:24 — `supabase init --workdir C:\Users\appri\taxiflow-localdb`. Disabled analytics (the generated config had it **on**, despite the docs' default), edge runtime, realtime, storage and Studio. Migrations created with `supabase migration new`.
+- 01:28–01:32 — `supabase start` (image pulls about 4 min): 3 migrations and the synthetic seed applied.
+- 01:32:53 — `node scripts/localdb/verify.mjs`: 11 PASS / 1 WARN (live-mirror policies) / **1 FAIL (ports on 0.0.0.0/[::])**. Stopped the stack at 01:34:20.
+- 01:34 — Created `taxiflow-localdb-loopback` (bridge, `host_binding_ipv4=127.0.0.1`); scripts now pass `--network-id` and refuse to run without it. Restarted 01:35:20: **still 0.0.0.0/[::]**. Stopped 01:36:31.
+- 01:37 — Diagnosis with an alpine container: Docker Desktop ignores the network default for an unspecified HostIp; an explicit `127.0.0.1:` binding works. Two failed attempts, so changes stopped. Diagnostic container and image removed.
+- 01:38 — `node --test tests/*.test.mjs` 273/273 (includes 9 new local-guard tests); sync guards and build pass. Scan: no keys or live URLs in the new files.
+
+**Drill:** NOT run (stack must stay stopped until the binding decision). Once run, it covers snapshot (phase A) and schema-from-migrations (phase B). Auth is excluded by design: phase B shows the `updated_by` FK fails with no Auth users.
+
+**Files (uncommitted):** `scripts/localdb/**`, `tests/localdb-guard.test.mjs`, `project-os/05-build/local-supabase-setup.md`, `current-status.md`, `next-action.md`, this log.
+
+**Next action:** Tebogo picks a binding option (`local-supabase-setup.md` → Binding blocker).
+
+### 2026-10-10 02:04 — Local Supabase on Docker Compose (loopback-only); synthetic drill passed for schema, Auth and snapshot
+
+**Changed by:** Claude Code (agent). Local machine and repo only. No hosted, live, global Docker or firewall changes.
+
+**Steps (SAST):**
+- 01:48 — Preflight: Docker 29.8.2 up; reused the 5 images the CLI pulled; nothing new downloaded.
+- 01:49 — Preserved first: `supabase_db_taxiflow-localdb` archived (7.9 MB, 1,521 entries, SHA-256 `07deac3a…5411`) plus a copy of the CLI config. The volume itself is kept.
+- 01:50–01:53 — Compose stack (`scripts/localdb/compose`) with explicit `127.0.0.1:54321/54322/54324` ports, Kong template and official-style db-init. Two evidence-based fixes:
+  - `supabase_functions_admin` is absent from image 17.11.0.004, so roles.sql now alters only existing roles;
+  - the Kong placeholder replace only hit the first occurrence, so it now uses `replaceAll` plus a placeholder guard.
+- 01:54 — `setup.mjs reset`: 3 migrations and the seed applied. Bindings: exactly 3 loopback mappings. Windows listeners: 127.0.0.1 only.
+- 01:54 — `verify.mjs`: 14 PASS, 1 WARN (flagged policies), 0 FAIL.
+- 01:56 — `drill.mjs`: snapshot-before-Auth refused by the FK (incomplete-recovery evidence). Auth users and identities, then the snapshot, restored; all checks MATCH; 5/5 synthetic sign-ins; anon denied.
+- 01:58 — Found that the CLI still runs with config.toml merely absent (it falls back to defaults). Fixed with an invalid sentinel config.toml enforced by the guard and `prepare`; `supabase status` now fails with `CliConfigParseError`. Removed the unused `taxiflow-localdb-loopback` network.
+- 02:00 — Final drill and verify on the final code: both pass.
+- 02:01 — `node --test tests/*.test.mjs` 278/278 (14 local-guard tests); sync guards and build pass; 28 mock specs listed; secret scan clean.
+
+**Coverage:** schema (rebuilt from migrations), Auth (users + identities incl. password hashes), snapshot. **Not covered:** Auth sessions/tokens/MFA/audit, storage, hosted configuration, any live restore.
+
+**Next action:** `next-action.md` → 1e.

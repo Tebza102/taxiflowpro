@@ -97,12 +97,17 @@ language plpgsql
 set search_path = ''
 as $$
 begin
-  if tg_table_name = 'workspace_snapshots' and new.business_id is distinct from old.business_id then
-    raise exception 'A workspace snapshot cannot be moved to another business.' using errcode = '42501';
-  end if;
-  if tg_table_name = 'business_memberships'
-     and (new.business_id is distinct from old.business_id or new.user_id is distinct from old.user_id) then
-    raise exception 'A membership cannot be moved to another business or user.' using errcode = '42501';
+  -- Separate branches: PL/pgSQL resolves every NEW field named in an
+  -- expression, so a combined condition naming new.user_id breaks every
+  -- workspace_snapshots update (that table has no user_id).
+  if tg_table_name = 'workspace_snapshots' then
+    if new.business_id is distinct from old.business_id then
+      raise exception 'A workspace snapshot cannot be moved to another business.' using errcode = '42501';
+    end if;
+  elsif tg_table_name = 'business_memberships' then
+    if new.business_id is distinct from old.business_id or new.user_id is distinct from old.user_id then
+      raise exception 'A membership cannot be moved to another business or user.' using errcode = '42501';
+    end if;
   end if;
   return new;
 end;
@@ -179,9 +184,11 @@ revoke all on table public.business_memberships from anon, authenticated;
 grant select on table public.businesses to authenticated;
 grant select on table public.business_memberships to authenticated;
 
-revoke all on function taxiflow_private.is_active_member(uuid, text[]) from public, anon, authenticated;
+revoke all on function taxiflow_private.is_active_member(uuid, text[]) from public, anon, authenticated, service_role;
 revoke all on function taxiflow_private.forbid_tenant_reassignment() from public, anon, authenticated;
-revoke all on function public.set_business_membership(uuid, uuid, text, boolean, text) from public, anon, authenticated;
+-- service_role is revoked too: the RPC is only for signed-in Owners (auth.uid());
+-- server-side ownership changes must use explicit, separately reviewed code.
+revoke all on function public.set_business_membership(uuid, uuid, text, boolean, text) from public, anon, authenticated, service_role;
 grant usage on schema taxiflow_private to authenticated;
 grant execute on function taxiflow_private.is_active_member(uuid, text[]) to authenticated;
 grant execute on function public.set_business_membership(uuid, uuid, text, boolean, text) to authenticated;

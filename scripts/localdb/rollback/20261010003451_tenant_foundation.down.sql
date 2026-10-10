@@ -1,3 +1,8 @@
+-- NOT A PRODUCTION RECOVERY PROCEDURE. This rollback deliberately restores the
+-- flagged live-mirror access (any authenticated user can read and overwrite the
+-- whole snapshot). It exists only to prove local compatibility and lossless
+-- re-application. A real incident needs a reviewed forward fix or a restore
+-- from a verified backup, never this file.
 -- Rollback of 20261010003451_tenant_foundation.sql (LOCAL only).
 -- Restores the PRE-TENANT ACCESS behaviour, i.e. the flagged live-mirror
 -- (known insecure) policies and grants that the unchanged app needs, and

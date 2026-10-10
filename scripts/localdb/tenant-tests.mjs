@@ -146,6 +146,14 @@ const access = async () => {
   record(!newhireAfter.error && newhireAfter.data.length === 0, "deactivated member loses access", describe(newhireAfter));
   const serverRead = await service.from("workspace_snapshots").select("workspace_key, business_id");
   record(!serverRead.error && serverRead.data.length === 2, "server (service role) can read the per-business snapshots", describe(serverRead));
+  // Regression for the trigger defect found in Task 12: a legitimate
+  // same-business snapshot update must pass the reassignment trigger.
+  guard();
+  const legit = await service.from("workspace_snapshots").update({ updated_at: new Date().toISOString() }).eq("business_id", BUSINESS_A_ID).select("workspace_key");
+  record(!legit.error && legit.data?.length === 1, "server can update its own business snapshot (same business passes the trigger)", describe(legit));
+  guard();
+  const legitMember = psql(`update public.business_memberships set updated_at = now() where user_id = '${userId("owner@example.com")}';`, { allowFailure: true });
+  record(legitMember.status === 0, "a legitimate membership update passes the trigger", legitMember.stderr.trim().split(/\r?\n/)[0]);
 
   const after = snapshotHashes();
   record(stableStringify(before) === stableStringify(after), "no snapshot changed during the access tests", Object.keys(after).join(", "));

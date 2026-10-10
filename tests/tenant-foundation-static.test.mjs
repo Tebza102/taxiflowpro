@@ -45,7 +45,15 @@ test("membership RPC: security definer with fixed search_path, Owner-only, no se
   assert.match(rpc, /p_user_id = caller/);
   assert.match(rpc, /p_role not in \('Admin', 'Manager', 'Driver'\)/);
   assert.match(rpc, /existing\.role = 'Owner'/);
-  assert.match(code, /revoke all on function public\.set_business_membership\([^)]*\) from public, anon, authenticated;/);
+  assert.match(code, /revoke all on function public\.set_business_membership\([^)]*\) from public, anon, authenticated, service_role;/);
+  assert.match(code, /revoke all on function taxiflow_private\.is_active_member\([^)]*\) from public, anon, authenticated, service_role;/);
+});
+
+test("reassignment trigger uses separate per-table branches (no NEW field from the other table)", () => {
+  const fn = code.slice(code.indexOf("create or replace function taxiflow_private.forbid_tenant_reassignment"), code.indexOf("drop trigger if exists workspace_snapshots_no_tenant_reassignment"));
+  assert.match(fn, /if tg_table_name = 'workspace_snapshots' then\s+if new\.business_id is distinct from old\.business_id then/);
+  assert.match(fn, /elsif tg_table_name = 'business_memberships' then/);
+  assert.doesNotMatch(fn, /tg_table_name = '[a-z_]+'\s+and/);
 });
 
 test("tenant reassignment triggers cover snapshots and memberships", () => {
@@ -57,6 +65,7 @@ test("rollback keeps tenant data (no drop table / drop column) and is explicit a
   const downCode = down.replace(/--.*$/gm, "");
   assert.doesNotMatch(downCode, /drop table|drop column|delete from|truncate/i);
   assert.match(down, /known insecure/i);
+  assert.match(down, /NOT A PRODUCTION RECOVERY PROCEDURE/);
 });
 
 test("tenant seed: synthetic only, two businesses, owner-driver linkage, inactive and non-member identities", () => {

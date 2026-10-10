@@ -33,6 +33,16 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Scoped server finance writes (Task 13, branch `agent/tenant-db-foundation`, local only)
+
+`POST /api/business/finance-actions` supports `cashup.submit` (Driver, own staff id from the membership), `cashup.record_handin` (Owner/Admin, pending→counted) and `cashup.verify` (Owner/Manager, counted→verified).
+- Explicit fields only; no browser snapshot.
+- tenantAuth, then a service role pinned to the business.
+- Atomic replay check + `updated_at` CAS + request log in `public.commit_finance_action`.
+- Actor and audit generated server-side.
+- Evidence: integration 37/37 with real local tokens; Node 296/296; build passes.
+- Capture, standalone count/verify, deposit/banking and edit/delete are **not yet** server actions; no frontend integration. See `project-os/04-technical/tenant-design.md`.
+
 ### Tenant server authorization (Task 12, branch `agent/tenant-db-foundation`, local only)
 
 `api/_lib/tenantAuth.js` validates the token, resolves the active membership from the database with the caller's token, requires an explicit business when ambiguous (never falls back to `taxiflow-live`), and uses the service role only after authorization, pinned to that business. `snapshotLoader` and the report preview/PDF routes now use it, with role-scoped projections (Driver: own linked records only).

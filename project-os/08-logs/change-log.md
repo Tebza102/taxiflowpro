@@ -426,3 +426,21 @@ Prepared. Installation is a human step.
 **Gaps:** server write endpoint, membership-based user lifecycle/bootstrap, frontend gateway, hosted plan. See `tenant-design.md`.
 
 **Next action:** `next-action.md` → 1g.
+
+### 2026-10-10 08:43 — Scoped server finance writes (local only; Task 13)
+
+**Changed by:** Claude Code (agent). Local synthetic environment only; no push, hosted, live or deploy.
+
+**Steps (SAST):**
+- 08:30 — Preflight: `agent/tenant-db-foundation` @ `2b18e2f`, tree clean. Mapped the existing finance save operations and roles (`src/App.jsx`, `src/lib/appRuntime.js`).
+- 08:31 — Migration `20261010063144_finance_actions.sql`: `finance_action_requests` log plus the atomic `commit_finance_action` (service_role only). Rollback added.
+- 08:32 — `api/_lib/financeActions.js` (validation, roles, transitions, server actor/audit) and `api/business/finance-actions.js` (tenantAuth → load → replay check → apply → atomic commit).
+- 08:33 — Synthetic fixtures made workflow-consistent (pending day cash-up, expected 700; a second driver day; Business B with its own cash-up and driver), keeping all four statuses present.
+- 08:34 — `tests/finance-actions.test.mjs` 7/7.
+- 08:35–08:41 — `node scripts/localdb/finance-action-tests.mjs` 37/37 on the first run.
+- 08:42 — `node --test tests/*.test.mjs` 296/296; sync guards and build pass; secret scan clean.
+- 08:43–08:59 — Regression on fresh resets: finance actions 37/37, tenant access 35/35, rollback 8/8, verify 16 PASS/0 WARN, server auth 26/26, drill PASS (schema, Auth, tenants, snapshots).
+
+**Supported:** `cashup.submit`, `cashup.record_handin`, `cashup.verify`. **Not yet:** capture, standalone count/verify, `lockDeposit`, edit/delete.
+
+**Next action:** `next-action.md` → 1h.

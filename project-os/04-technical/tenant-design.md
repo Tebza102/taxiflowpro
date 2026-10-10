@@ -99,3 +99,66 @@ Before every mutation the tests re-check the local marker, the exact loopback bi
 3. **`userLifecycle.js` / `api/admin/auth-users.js` / `bootstrap-workspace.js`:** still `appUsers`/`taxiflow-live` based; they must move to `business_memberships`.
 4. **Mock mode:** a signed-in caller is authorized through memberships but still sees demo data. The unauthenticated demo stays non-production only.
 5. **Hosted:** migration plan, encrypted live backup, compatibility window, rehearsal on a hosted-like copy. Nothing is applied anywhere hosted.
+
+## Scoped server writes (Task 13, local only)
+
+### Existing finance save operations (src/App.jsx) and the role/action matrix
+
+Roles are the existing workflow's (`src/lib/appRuntime.js`: `canRecordCashHandoverForRole`, `canVerifyCashCheckForRole`, `canFinishDepositForRole`, `canEditModuleUpdates`). No new permissions were created.
+
+| Existing operation | Who (current app rule) | Transition | Server action | Status |
+|---|---|---|---|---|
+| `submitDriverCashUp` (day checking) | Driver (own staff id) | day → pending (resets unless banked) | `cashup.submit` | **Implemented** |
+| `verifyIncome` on a driver day cash-up, pending | Owner, Admin | pending → counted | `cashup.record_handin` | **Implemented** |
+| `verifyIncome` on a driver day cash-up, counted | Owner, Manager | counted → verified | `cashup.verify` | **Implemented** |
+| `verifyIncome` on a standalone income record | Owner/Admin count; Owner/Manager verify | pending → counted → verified | — | Not yet |
+| `lockDeposit` (finish deposit) | Owner, Manager (+ finance edit) | verified → banked | — | Not yet |
+| `saveStandardIncome` / `saveSpecialIncome` / `saveExpense` (capture) | Driver (own) and management with finance edit | creates pending records | — | Not yet |
+| `deleteTransaction`, edit entry | finance edit permission; never banked | — | — | Not yet |
+
+### Endpoint `POST /api/business/finance-actions`
+
+Files: `api/business/finance-actions.js`, `api/_lib/financeActions.js`, migration `scripts/localdb/migrations/20261010063144_finance_actions.sql` (+ rollback).
+
+- **Body:** `{ action, requestId (UUID, reused on retry), expectedVersion (snapshot updated_at), fields }`. Unknown envelope keys or fields (`snapshot`, `businessId`, `role`, `appUsers`, `driverStaffId`, …) are refused (400).
+- **Authorization:** `tenantAuth` (token + active membership + business selection). Service role only afterwards, pinned to that `business_id`.
+- **Server-enforced rules:**
+  - The role matrix above.
+  - Driver ownership comes from the membership's `driver_staff_id`, never from the request.
+  - Transitions are computed by the shared `getDriverCashUpWorkflowStatus`, and banked is immutable.
+  - Expected cash in comes from the shared `summarizeDriverDayCash`. The response returns signed `variance` (actual − expected) and `shortage`.
+- **Atomic commit:** `public.commit_finance_action` (security definer, `search_path=''`, EXECUTE for `service_role` only) does three things in one transaction:
+  - replay check on `(business_id, request_id)`;
+  - compare-and-swap on `updated_at`;
+  - request log in `public.finance_action_requests` (RLS on, no browser grants).
+
+  A stale version returns 409 and changes nothing. A retried request returns the original result (`replayed: true`). A reused request id with different content or a different user returns 409.
+- **What can change:** only the target day cash-up, its linked finance records and one server-generated audit event (`actorId` = auth user id, `actorRole`, `source: server`, `requestId`). Memberships, businesses, `appUsers`, business identity and unrelated records cannot change through this endpoint.
+
+### Evidence (2026-10-10)
+
+- `tests/finance-actions.test.mjs` 7/7 (pure rules).
+- `node scripts/localdb/finance-action-tests.mjs` **37/37** with real local tokens and two businesses. Denied actions are paired with authorized ones:
+  - no/invalid token; inactive and non-member;
+  - Driver and Manager denied the hand-in, then Admin succeeds;
+  - Admin denied the verify, then Manager succeeds;
+  - forged snapshot, role, business and staff-id fields; forged token metadata;
+  - cross-business cash-up id (404) and Business B selection (403);
+  - stale version and a pre-hand-in version (409, nothing written);
+  - retry replayed without a second write; reused request id refused; double hand-in refused;
+  - owner-driver denied the Driver-only submit; drivers submit only in their own business;
+  - all other snapshot keys, memberships, businesses and business identity unchanged; the request log has exactly the applied actions; the browser cannot read the log or call the commit function.
+- Expected 700 / actual 680 / variance −20 / shortage 20.
+
+### Lessons
+
+- Fixtures must follow the real workflow state. The old seed had a cash-up marked "counted" whose linked records were pending, which the shared contract treats as pending.
+- The idempotency check must run before applying the action, so a retry after the snapshot has moved on returns the original result instead of a 409.
+
+### Remaining gaps after Task 13
+
+1. Server actions for capture (`saveStandardIncome`/`saveSpecialIncome`/`saveExpense`), standalone count/verify, `lockDeposit` (banked) and edit/delete, each with the same pattern.
+2. Server actor ids are auth user ids. Report/UI name resolution (`describeActor`) still expects staff/app ids, so names may show as unknown until the display layer maps membership users.
+3. The frontend still uses direct table access; no integration yet. `userLifecycle`/bootstrap are still `appUsers`-based.
+4. `finance_action_requests` is not part of the drill export; it is an operational log, and losing it only weakens retry protection for in-flight requests.
+5. Hosted: nothing applied.

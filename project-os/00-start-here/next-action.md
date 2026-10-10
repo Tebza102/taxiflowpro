@@ -8,6 +8,23 @@ The local test gaps are closed and committed locally (`a424d84`, `00df61a`, `78d
 1a. ~~Commit the UAT safeguards~~ — done locally: `105e3385ef9f9f6c022bd7aef9c34c7a9e215ee0` (tooling + tests) and `924ec70f9ae41da6ef57cca644ee19691d475cdc` (Project OS). Not pushed.
 1c-progress (2026-10-10 01:06): Docker Desktop 4.94.0 installed per-user (WSL 2, Linux containers, Windows containers off). Installer verified by SHA-256 and Authenticode. Terms accepted by Tebogo; engine 29.8.2 running; `docker run --rm hello-world` passed; port 2375 not exposed. **Next:** Supabase local init per `project-os/05-build/local-supabase-setup.md` steps 4–8, on Tebogo's go-ahead (open a new terminal so the Docker PATH entry is loaded).
 1d-progress (2026-10-10 02:01): ~~local Supabase binding blocker~~ resolved with option 3 (Compose, explicit 127.0.0.1 ports, CLI disabled by an invalid sentinel config). Verify 14 PASS / 1 WARN; synthetic drill passed for schema, Auth and snapshot. Committed locally; not pushed.
+1p (2026-10-10): release candidate prepared (Task 21). **Decisions for Tebogo before the hosted rehearsal** (`release-plan.md` section 11):
+1. The rehearsal project slot.
+2. The SMTP provider, domain and production URL.
+3. The legacy business name and its pilot role.
+4. The maintenance window.
+5. The expense-only-day rule (R1–R4) or the interim guidance.
+6. Whether to drop the empty legacy tables later.
+
+**Next (after the decisions):**
+- implement and test the expense-only rule if accepted;
+- then the hosted rehearsal (`release-plan.md` section 9) with approval at each step.
+
+Re-run the local rehearsal:
+```
+node scripts/localdb/setup.mjs hosted
+node scripts/localdb/hosted-rehearsal-tests.mjs
+```
 1o (2026-10-10): pilot data loader and hosted release plan done (Task 20; plan only, nothing hosted). **Decisions for Tebogo** (`release-plan.md` section 11):
 - the rehearsal project slot;
 - the SMTP provider, domain and production URL;

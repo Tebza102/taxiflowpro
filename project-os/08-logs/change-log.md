@@ -611,3 +611,40 @@ Prepared. Installation is a human step.
 - `tests/branding.spec.js` 6/6 (including warning contrast); demo suite 34/34; Node 313/313; build pass.
 
 **Next action:** `next-action.md` → 1o.
+
+### 2026-10-10 17:55 — Release candidate: live inventory, hosted foundation, rehearsal, cutover and operator procedures (Task 21)
+
+**Changed by:** Claude Code (agent). The hosted project was **read only**: catalogue `SELECT`s through the Supabase connector, metadata only. No hosted write, deploy, push, DNS or email change.
+
+**Summary:**
+- **Inventory** (`project-os/05-build/hosted-inventory.md`):
+  - 10 public relations (9 tables plus a view);
+  - legacy tables with RLS off and anon/authenticated ALL including TRUNCATE;
+  - 3 `using (true)` snapshot policies; open default privileges;
+  - no functions, triggers or migration history; `20260405` and `20260810` were never applied;
+  - all 5 users map, including an Owner.
+- **Release files** (`supabase/release/tenant-pilot/01_tenant_foundation.sql`, generated from the tested local core plus `scripts/localdb/hosted-copy/hosted-access.sql`):
+  - 02/03 unchanged; 03's revoke of the browser RPC is now conditional;
+  - new 04 `20261011090000_assign_initial_owner.sql` (+ local rollback).
+- **Rehearsal:**
+  - `scripts/localdb/hosted-copy/20261009232600_live_schema_copy.sql` (an exact synthetic live schema);
+  - `setup.mjs hosted` and `hosted-pre` (negative control);
+  - `scripts/localdb/hosted-rehearsal-tests.mjs`.
+- **Operator procedures:**
+  - `scripts/pilot/assign-initial-owner.mjs`;
+  - guarded hosted CLIs `scripts/hosted/{onboard-business,assign-initial-owner,load-business-data}.mjs` with `scripts/hosted/lib/hosted-target.mjs`;
+  - `scripts/localdb/operator-procedure-tests.mjs`;
+  - `tests/hosted-target.test.mjs`.
+- **Release plan:**
+  - verified Supabase key method (new publishable/secret keys, then deactivate the legacy keys; the legacy keys cannot be rotated);
+  - credential plan; Vercel lockout and clean-up;
+  - first-release recovery (no previous tenant build): maintenance page plus forward fix; the old build is never revived.
+- **Expense-only days:** `project-os/05-build/expense-only-days.md`. Cause: the `incomeCount > 0` queue filter. Rule R1–R4 recommended; no code change.
+- **Test-only change:** `tenant-tests.mjs` treats PGRST202 (function absent) as a refusal.
+
+**Tests run:**
+- **Hosted rehearsal database (fresh build each):** rehearsal 22/22 (files 01–04); negative control fails as designed; server auth 26/26; finance actions 56/56; capture 43/43; record 36/36; onboarding 64/64; loader 46/46; tenant access 36/36; operator 14/14; browser 9/9.
+- **Local mode:** operator 14/14; tenant access 36/36; rollback 8/8; onboarding 64/64; server auth 26/26; verify 16/0/0; drill MATCH.
+- Node 317/317; build pass; secret scan clean.
+
+**Next action:** `next-action.md` → 1p.

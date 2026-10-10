@@ -33,6 +33,26 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Release candidate prepared (Task 21; hosted inventory read-only; nothing applied)
+
+- **Read-only live inventory** (metadata only), in `project-os/05-build/hosted-inventory.md`:
+  - 10 public relations (9 tables plus a view);
+  - the 8 empty legacy tables have **RLS off and anon/authenticated ALL, including TRUNCATE**;
+  - `workspace_snapshots` has 3 `using (true)` policies and grants anon TRUNCATE;
+  - the default privileges are open;
+  - no functions or triggers;
+  - all 5 users would map, including an Owner.
+- **Release files 01–04** (`release-plan.md` section 1):
+  - 01 is the generated hosted foundation;
+  - 04 is the new operator-only `assign_initial_owner`.
+  - Rehearsed locally on an exact synthetic copy of the live schema: rehearsal checks 22/22, the negative control fails as expected, and every server and browser suite passes on the rehearsal database.
+- **Cutover plan corrected:**
+  - new publishable/secret keys, then deactivate the legacy keys (verified in the Supabase docs);
+  - Vercel clean-up;
+  - first-release recovery via a maintenance page and forward fix.
+- **Guarded hosted operator procedures** in `scripts/hosted/`. Not run.
+- **Expense-only days:** analysed, with rule R1–R4 recommended (`expense-only-days.md`). This needs Tebogo's decision.
+
 ### Pilot data-load and hosted release preparation (Task 20, local only)
 
 - **Operator loader:** `scripts/localdb/load-business-data.mjs` (local only).

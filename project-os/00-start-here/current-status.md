@@ -33,6 +33,29 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Feature freeze: release sequence only (2026-10-11)
+
+**No new features.** Only the release sequence in `05-build/pilot-release-checklist.md` remains, plus fixes for defects it exposes:
+1. finish the email (section 3);
+2. production credentials and a backup connection proof (rows 2–3);
+3. maintenance and blocking old access (rows 4–6);
+4. final backup (row 6a);
+5. migrations and deployment (rows 7–11);
+6. live verification of login, isolation, saving and reports (rows 10, 12–13);
+7. the first Owner.
+
+**Hosted-only unknowns and where they are proven** (each at a point where failure is safe):
+
+| Unknown | Proven at | If it fails |
+|---|---|---|
+| Backup connection (pooler, TLS, Docker) | row 2 | stop before the window |
+| Authenticated SMTP, DKIM and SPF alignment | email tests E1–E5 | stop before the window |
+| New keys with the server functions | row 10, on the `--skip-domain` URL behind maintenance | stays in maintenance |
+| `/api/business/*` routing | row 10, same | stays in maintenance |
+| Setup links on `taxiflow.co.za` | row 12 (E6) | hold onboarding |
+
+**Legacy exposure:** `taxiflow.co.za` serves the legacy build until row 5.
+
 ### Official email on taxiflow.co.za (Task 32; IN PROGRESS; nothing created yet)
 
 - The **`apprigate.com` sender plan is replaced.** Official TaxiFlow mail uses `support@taxiflow.co.za` (monitored) and `notifications@taxiflow.co.za` (Supabase sender, "TaxiFlow"). Plan and tests are in `05-build/pilot-release-checklist.md` section 3. Older notes that mention `apprigate.com` mail are superseded.

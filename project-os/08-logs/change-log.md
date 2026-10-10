@@ -919,3 +919,21 @@ Prepared. Installation is a human step.
 - The project has no build overrides; the maintenance `vercel.json` skips the build.
 
 **Remaining:** the legacy app stays exposed on the domain until row 5 (the window).
+
+### 2026-10-10 23:35 SAST — Official email moved to taxiflow.co.za: verified mail setup, plan prepared (Task 32, in progress)
+
+**Changed by:** Claude Code (agent). Read-only DNS, TLS and SMTP EHLO checks (no AUTH attempted, no email sent). Project OS only. No mailbox, DNS, Supabase or Vercel change yet.
+
+**Findings:**
+- Zone: MX `0 mail.taxiflow.co.za`; SPF `v=spf1 +a +mx +ip4:164.160.91.17 include:spf.zamailgate.com ~all`; DKIM `default` RSA 2048; DMARC `p=none`; autodiscover SRV.
+- Exim 4.100.1 on `cp24-jhb.za-dns.com` (reverse DNS matches); AUTH PLAIN LOGIN; 50 MB limit.
+- TLS covers `cp24-jhb.za-dns.com` (valid) but `mail.taxiflow.co.za` gives a hostname mismatch.
+- SPF `+a` now includes the Vercel apex IP 216.198.79.1.
+
+**Plan:**
+- support and notifications mailboxes; forwarder notifications → support;
+- edit the single SPF record to remove `+a`;
+- Supabase SMTP via `cp24-jhb.za-dns.com:465`, sender "TaxiFlow" `notifications@taxiflow.co.za`;
+- Site URL and redirects at row 12.
+
+**Files:** `project-os/05-build/pilot-release-checklist.md` (X2, section 3 replaced, section 5 note), current-status, next-action.

@@ -33,6 +33,17 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Official email on taxiflow.co.za (Task 32; IN PROGRESS; nothing created yet)
+
+- The **`apprigate.com` sender plan is replaced.** Official TaxiFlow mail uses `support@taxiflow.co.za` (monitored) and `notifications@taxiflow.co.za` (Supabase sender, "TaxiFlow"). Plan and tests are in `05-build/pilot-release-checklist.md` section 3. Older notes that mention `apprigate.com` mail are superseded.
+- **Verified from outside:**
+  - the cPanel mail zone is complete (MX, one SPF, DKIM `default`, DMARC `p=none`, autodiscover);
+  - Exim on `cp24-jhb.za-dns.com` offers AUTH PLAIN/LOGIN on 465 and 587;
+  - the TLS certificate covers `cp24-jhb.za-dns.com` only, so SMTP and IMAP use that host;
+  - SPF `+a` currently authorises the Vercel apex IP; the fix is to edit that one record.
+- **Not yet verified:** plan limits and charges, mailbox creation, authenticated sending, DKIM signing, delivery.
+- **Waiting on Tebogo:** sign in to cPanel in the browser pane (opened at `https://cp24-jhb.za-dns.com:2083`) and type every password.
+
 ### Domain live and kept attached; maintenance deployment prepared (Task 31; nothing deployed, no keys changed)
 
 - **Domain:** `taxiflow.co.za` and `www` stay attached to `taxiflowpro` (Tebogo's decision).

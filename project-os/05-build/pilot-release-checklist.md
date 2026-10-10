@@ -14,7 +14,7 @@ Every row needs Tebogo's authorization for the window. A "stop" leaves the maint
 | # | Blocker | Evidence | Needed |
 |---|---|---|---|
 | X1 | **Vercel Hobby is non-commercial only.** A taxi-owner pilot is commercial use. The only Vercel team on the account is `apprigate` (Hobby, no trial; CLI read 2026-10-10). **No existing entitlement covers it.** | Vercel Fair Use Guidelines (verified 2026-09-14, `rehearsal-decision-pack.md` section 1) | Tebogo upgrades the `apprigate` team to Pro (**$20/month**). **Not purchased.** |
-| X2 | **Setup emails cannot reach pilot Owners.** Without custom SMTP, Supabase's default sender only delivers to the org's team members and is rate-limited. | supabase.com/docs/guides/auth/auth-smtp (checked 2026-10-10) | Use the **existing `apprigate.com` mail hosting** (section 3). It already has SPF, DKIM, DMARC and valid TLS, so **no DNS change** is needed. |
+| X2 | **Setup emails cannot reach pilot Owners.** Without custom SMTP, Supabase's default sender only delivers to the org's team members and is rate-limited. | supabase.com/docs/guides/auth/auth-smtp (checked 2026-10-10) | **Official sender: `notifications@taxiflow.co.za`** on the existing cPanel mail hosting for `taxiflow.co.za` (section 3). Support: `support@taxiflow.co.za`. One mail DNS fix: remove `+a` from the existing SPF record. |
 | X4 | **`taxiflow.co.za` and `www` are live and attached to `taxiflowpro` (kept attached by Tebogo's decision), but they serve the current production, which is the LEGACY build `008ce8e`.** HTTPS is valid; `www` redirects 308 to the apex. | Checks 2026-10-10 22:55 SAST (section 5) | Ends at **row 5** (maintenance promoted). Starting the window earlier ends it sooner. |
 | X3 | **Supabase Free has no automatic backups.** Only Pro and above get daily backups. Free projects are also paused after a low-activity week (restorable for 90 days). | supabase.com/docs/guides/platform/backups and `/free-project-pausing` (checked 2026-10-10) | **Operator daily encrypted backup** with `scripts/backup/backup.mjs` (section 4). It is built and tested locally (35/35) but **not yet run against production**. Daily pilot use should prevent pausing. |
 
@@ -52,25 +52,83 @@ Every row needs Tebogo's authorization for the window. A "stop" leaves the maint
 
 Recovery detail: `release-plan.md` section 7.
 
-## 3. Sender setup (existing apprigate.com mail; no DNS change)
+## 3. Email: official TaxiFlow addresses on taxiflow.co.za (existing cPanel mail hosting)
 
-**What is already in place** (read-only checks, 2026-10-10):
-- The mail host is `mail.apprigate.com` (Exim on shared hosting).
-- SPF includes the host. DKIM selector `default` is published. DMARC is `p=none`.
-- Ports 465 (TLS) and 587 (STARTTLS) present a valid Let's Encrypt certificate for `apprigate.com`.
+Replaces the earlier `apprigate.com` sender plan (2026-10-10, Tebogo's instruction: official TaxiFlow communication uses `taxiflow.co.za`).
 
-**Steps** (Tebogo; part of the release authorization):
-1. In the existing hosting mail panel, create one dedicated mailbox, for example `taxiflow@apprigate.com`, with a long unique password.
-2. In the Supabase dashboard, go to Authentication → Emails → SMTP Settings and enter:
-   - host `mail.apprigate.com`, port `465`;
-   - username: the full mailbox address;
-   - sender address: the same mailbox; sender name "TaxiFlow Pro".
-3. **Type the password only into that dashboard field.** Never put it in chat, Git, an env file or a ticket.
-4. In Authentication → URL Configuration: set the Site URL to `https://taxiflow.co.za` and allow-list only `https://taxiflow.co.za/**`.
-5. Send a test: "Forgot password?" to a mailbox Tebogo controls. Check that it arrives, isn't spam, and that the link works.
-6. Keep the default rate limit of 30 auth emails per hour; it is enough for 3 Owners.
+### Verified from outside (2026-10-10 23:30 SAST; no login, no authenticated send)
 
-**Rotation:** if the mailbox password is ever exposed, change it in the mail panel and re-enter it in Supabase.
+**Zone** (`ns3/ns5.za-dns.com`, cPanel):
+- MX `0 mail.taxiflow.co.za`, and `mail` A 164.160.91.17;
+- one SPF record: `v=spf1 +a +mx +ip4:164.160.91.17 include:spf.zamailgate.com ~all`;
+- DKIM `default._domainkey` (RSA 2048);
+- DMARC `v=DMARC1; p=none;`;
+- `autodiscover`, `autoconfig` and `webmail` → 164.160.91.17;
+- SRV `_autodiscover._tcp` → `cpanelemaildiscovery.cpanel.net:443`.
+
+**Mail server:**
+- Exim 4.100.1 on `cp24-jhb.za-dns.com` (reverse DNS matches);
+- `AUTH PLAIN LOGIN`, 50 MB message limit;
+- `spf.zamailgate.com` covers 164.160.91.0/24.
+
+**TLS:**
+- The certificate covers `cp24-jhb.za-dns.com` (Let's Encrypt, until 2026-11-21, renews automatically). **It does not cover `mail.taxiflow.co.za`** (hostname mismatch).
+- So every client, including Supabase, uses host **`cp24-jhb.za-dns.com`**.
+
+**Problem found:** SPF `+a` authorises the apex A record, which is now **Vercel 216.198.79.1**.
+
+**Not verified by these checks:** mailbox quota and plan limits, whether accounts can be created free, authenticated sending, DKIM signing, and delivery. These need the panel and the test sends below.
+
+### Addresses
+
+| Address | Purpose | Access |
+|---|---|---|
+| `support@taxiflow.co.za` | monitored support mailbox; receives replies | webmail and phone/desktop (IMAP 993, SMTP 465) |
+| `notifications@taxiflow.co.za` | authenticated sender for Supabase setup and password emails (sender name "TaxiFlow") | used only by Supabase SMTP. A **forwarder notifications → support** delivers replies to support (Supabase has no Reply-To setting). |
+
+### Settings (verified host; passwords are entered only by Tebogo)
+
+| Use | Host | Port | Security | Username |
+|---|---|---|---|---|
+| Outgoing (Supabase, devices) | `cp24-jhb.za-dns.com` | 465 | SSL/TLS | the full address |
+| Outgoing (alternative) | `cp24-jhb.za-dns.com` | 587 | STARTTLS | the full address |
+| Incoming IMAP | `cp24-jhb.za-dns.com` | 993 | SSL/TLS | the full address |
+| Webmail | `https://cp24-jhb.za-dns.com:2096` | — | HTTPS | the full address |
+
+### Steps (Tebogo signs in and types every password; the agent reads and prepares)
+1. **cPanel** (`https://cp24-jhb.za-dns.com:2083`): check under Email Accounts that two more accounts fit within the plan (no charge shown) and note the storage quota. **If any charge or upgrade is shown, stop.**
+2. **Create `support@taxiflow.co.za`** (quota: the plan default). Choose **"Send login link to an alternate email"** if offered, otherwise type a strong password from the password manager.
+3. **Create `notifications@taxiflow.co.za`** (small quota, for example 250 MB). Use a long random password, stored in the password manager only.
+4. **Forwarder:** `notifications@taxiflow.co.za` → `support@taxiflow.co.za`.
+5. **SPF fix:** edit the **existing** SPF TXT record in place (never add a second one):
+   - before: `v=spf1 +a +mx +ip4:164.160.91.17 include:spf.zamailgate.com ~all`
+   - after: `v=spf1 +mx +ip4:164.160.91.17 include:spf.zamailgate.com ~all`
+   - Then check **Email Deliverability** in cPanel: DKIM and SPF "valid".
+6. **Support access:**
+   - **Webmail:** `https://cp24-jhb.za-dns.com:2096`.
+   - **Devices:** IMAP and SMTP as in the table above.
+   - **2FA:** turn on two-factor authentication if the webmail account offers it.
+7. **Supabase** (project `vfxftviwteypasredjgm`) → Authentication → Emails → SMTP Settings:
+   - enable custom SMTP;
+   - sender email `notifications@taxiflow.co.za`, sender name `TaxiFlow`;
+   - host `cp24-jhb.za-dns.com`, port `465`, username `notifications@taxiflow.co.za`;
+   - password typed by Tebogo;
+   - keep the default rate limit (30 per hour).
+8. **URL configuration:** this changes **at release row 12 only** (after the tenant build is on `taxiflow.co.za`), so setup links land on the compatible app:
+   - Site URL `https://taxiflow.co.za`;
+   - redirect allow-list `https://taxiflow.co.za/**` only.
+   - Until then, the existing URL settings are left unchanged.
+
+### Tests
+
+| # | Test | Who and when | Pass |
+|---|---|---|---|
+| E1 | support → external mailbox (Tebogo's Gmail) | after step 6 | delivered to the inbox |
+| E2 | Gmail "Show original" on the E1 message | after E1 | **SPF pass, DKIM pass `d=taxiflow.co.za`, DMARC pass** (alignment) |
+| E3 | external → support; reply from support | after step 6 | both directions delivered |
+| E4 | external → notifications | after step 4 | arrives in support (forwarder) |
+| E5 | Supabase "Send password recovery" to a controlled account Tebogo owns (dashboard → Authentication → Users). **Do not click the link** before row 12. | after step 7 | from "TaxiFlow <notifications@taxiflow.co.za>"; SPF, DKIM and DMARC pass; delivered to the inbox |
+| E6 | Real setup email (operator onboarding) and password reset, end to end on `https://taxiflow.co.za` | **awaits the secure deployment (row 12)** | link opens `https://taxiflow.co.za/`, and the password is set |
 
 ## 4. Daily encrypted backup (operator)
 
@@ -207,7 +265,7 @@ The tool refuses any host or user that does not belong to the `--target` project
 The values are Vercel's rank-1 recommendation for this project, read 2026-10-10. Re-read them at row 5a from Vercel → Domains, and use whatever Vercel shows then.
 - **Remove** any other A, AAAA or CNAME records on @ or `www` (for example registrar parking pages). They would break HTTPS issuance or send users elsewhere.
 - **Keep unchanged** any MX, SPF/TXT, DKIM, DMARC or mail-host records.
-- **Do not add** any MX or email records. Setup and password emails are sent from `apprigate.com` (section 3), so `taxiflow.co.za` needs none.
+- **Do not add** any MX or email records. The mail records already exist; the only mail DNS change is the SPF `+a` removal in section 3.
 - **CAA:** none exist. If any are ever added, they must allow `letsencrypt.org`, which Vercel uses.
 - After 24 hours of stable operation, the TTL can go up to 3600.
 

@@ -1,5 +1,20 @@
 # Next Action
 
+## Immediate Next Step (updated 2026-10-10 23:35 SAST, Task 32)
+
+**Email on `taxiflow.co.za`** (checklist section 3). Tebogo:
+1. Sign in to cPanel in the browser pane.
+2. The agent then reads the plan limits and Email Deliverability and prepares each form.
+3. Tebogo types the passwords and clicks Create or Save for:
+   - `support@`;
+   - `notifications@`;
+   - the notifications → support forwarder;
+   - the SPF edit (remove `+a`);
+   - Supabase SMTP.
+4. Then tests E1–E5.
+- E6 (real setup email on `taxiflow.co.za`) waits for release row 12.
+- The Site URL and redirects change only at row 12.
+
 ## Immediate Next Step (updated 2026-10-10 22:55 SAST, Task 31)
 
 The domain is live and serves the legacy build until release row 5. Maintenance is prepared and tested; nothing is deployed and no keys are changed. The release actions and inputs are in `05-build/pilot-release-checklist.md` rows 1–13 and sections 3–6.

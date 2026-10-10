@@ -1,5 +1,9 @@
 # Next Action
 
+## Immediate Next Step (updated 2026-10-10 22:55 SAST, Task 31)
+
+The domain is live and serves the legacy build until release row 5. Maintenance is prepared and tested; nothing is deployed and no keys are changed. The release actions and inputs are in `05-build/pilot-release-checklist.md` rows 1–13 and sections 3–6.
+
 ## URGENT (2026-10-10 ~20:30 UTC, Task 29): stop taxiflow.co.za serving the legacy app
 
 **Tebogo, now:** in Vercel → project `taxiflowpro` → Settings → Domains → `taxiflow.co.za` → **Remove**.

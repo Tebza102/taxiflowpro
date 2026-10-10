@@ -892,3 +892,30 @@ Prepared. Installation is a human step.
 **Result:** FAIL. The legacy app is still exposed on the domain.
 
 **Required:** remove `taxiflow.co.za` under Vercel → project `taxiflowpro` → Settings → Domains (not the team Domains page), then re-verify. Keep the zone records and the www redirect for reconnection at release row 5a.
+
+### 2026-10-10 22:55 SAST — Domain verified live; maintenance deployment prepared and tested (Task 31)
+
+**Changed by:** Claude Code (agent). Local files and read-only checks only. No deploy, key, DNS or Vercel change; the domains stay attached as instructed.
+
+**Verified:**
+- `https://taxiflow.co.za` returns 200 with a valid Let's Encrypt certificate (CN `taxiflow.co.za`, until 2027-01-08). It serves production `taxiflowpro-vq1gbf579` = **legacy `008ce8e`** (bundle `index-DguJu-LE.js`).
+- `https://www.taxiflow.co.za` returns 308 to `https://taxiflow.co.za/` (valid certificate for `www`).
+- `http://taxiflow.co.za` returns 308 to https.
+
+**Files:**
+- `deploy/maintenance/` (`index.html`, `sw.js`, `api-maintenance.json`, `vercel.json`, `brand/` icons);
+- `scripts/release/maintenance-tests.mjs`, `scripts/release/lib/staticRoutes.mjs`, `tests/maintenance-page.test.mjs`;
+- release checklist: X4, rows 4, 5 and 5a, section 5 update, new section 6;
+- current-status, next-action.
+
+**Tests run:**
+- maintenance-tests 15/15;
+- unit tests 333/333;
+- build OK (the maintenance folder is not part of the app's `dist`).
+
+**Findings:**
+- Vercel Git auto-deploy for `main` with "Auto-assign custom production domains" on (must be turned off at row 4a).
+- Deployment Protection covers all except custom domains.
+- The project has no build overrides; the maintenance `vercel.json` skips the build.
+
+**Remaining:** the legacy app stays exposed on the domain until row 5 (the window).

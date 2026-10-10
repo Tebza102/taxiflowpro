@@ -15,7 +15,7 @@ Every row needs Tebogo's authorization for the window. A "stop" leaves the maint
 |---|---|---|---|
 | X1 | **Vercel Hobby is non-commercial only.** A taxi-owner pilot is commercial use. The only Vercel team on the account is `apprigate` (Hobby, no trial; CLI read 2026-10-10). **No existing entitlement covers it.** | Vercel Fair Use Guidelines (verified 2026-09-14, `rehearsal-decision-pack.md` section 1) | Tebogo upgrades the `apprigate` team to Pro (**$20/month**). **Not purchased.** |
 | X2 | **Setup emails cannot reach pilot Owners.** Without custom SMTP, Supabase's default sender only delivers to the org's team members and is rate-limited. | supabase.com/docs/guides/auth/auth-smtp (checked 2026-10-10) | Use the **existing `apprigate.com` mail hosting** (section 3). It already has SPF, DKIM, DMARC and valid TLS, so **no DNS change** is needed. |
-| X4 | **`taxiflow.co.za` is on `serverHold` at the .co.za registry**, so it does not resolve anywhere. The listed nameservers (`ns1/ns2.accelerit.ltd`) do not serve a zone for it (they answer REFUSED). | Registry WHOIS and DNS, read 2026-10-10 (section 5) | Tebogo asks the registrar (Absolute Hosting) to lift the hold and confirms the DNS zone exists. **No records are added yet** (see row 5a). No payment or purchase was made; if the registrar asks for one, that is Tebogo's decision. |
+| X4 | **`taxiflow.co.za` and `www` are live and attached to `taxiflowpro` (kept attached by Tebogo's decision), but they serve the current production, which is the LEGACY build `008ce8e`.** HTTPS is valid; `www` redirects 308 to the apex. | Checks 2026-10-10 22:55 SAST (section 5) | Ends at **row 5** (maintenance promoted). Starting the window earlier ends it sooner. |
 | X3 | **Supabase Free has no automatic backups.** Only Pro and above get daily backups. Free projects are also paused after a low-activity week (restorable for 90 days). | supabase.com/docs/guides/platform/backups and `/free-project-pausing` (checked 2026-10-10) | **Operator daily encrypted backup** with `scripts/backup/backup.mjs` (section 4). It is built and tested locally (35/35) but **not yet run against production**. Daily pilot use should prevent pausing. |
 
 ## 1. Release rows
@@ -25,9 +25,9 @@ Every row needs Tebogo's authorization for the window. A "stop" leaves the maint
 | 1 | Local | Reviewed SHA: `npm run build`; unit tests; `node scripts/localdb/setup.mjs hosted` then `node scripts/localdb/hosted-rehearsal-tests.mjs` | build OK; all pass | any fail |
 | 2 | **Backup** | Read-only pre-flight (`hosted-inventory.md` queries); then the section 4 **export** and **verify** commands against production (the first hosted run) | inventory unchanged; `PASS backup verified`, then `PASS decrypts` | a difference, or anything but PASS: stop |
 | 3 | Keys (prep) | Create the publishable `web` and secret `vercel-production` keys; set the Production variables (`release-plan.md` section 6); no secret in Preview or Development | saved; no build yet | — |
-| 4 | **Maintenance** | Build the static maintenance deployment (no keys); disable the Git auto-deploy of `main`; merge the reviewed SHA to `main` | a ready URL; no build triggered | an unexpected build |
-| 5 | Window opens | Promote the maintenance page | users see maintenance | promote fails |
-| 5a | **Domain DNS** | **Only now**, with the maintenance page on production: add the section 5 records at the registrar DNS | `taxiflow.co.za` shows the maintenance page over valid HTTPS; `www` returns 308 to the apex; `http://` goes to `https://` | records or certificate not ready by row 11: continue the release, but **hold onboarding** until this row passes |
+| 4 | **Maintenance (prepare)** | (a) Vercel → `taxiflowpro` → Settings → Environments/Git: turn **off** "Auto-assign custom production domains" (currently on), so no build reaches `taxiflow.co.za` without `vercel promote`. (b) Deploy `deploy/maintenance` as a production deployment **without domains** (section 6). (c) Merge the reviewed SHA to `main`. | a Ready maintenance deployment URL showing the maintenance page; the `main` build does **not** take the domains | a build takes the domains, or maintenance does not render |
+| 5 | Window opens | `vercel promote <maintenance-url> --scope apprigate` | `https://taxiflow.co.za` and `taxiflowpro.vercel.app` show maintenance; `/api/*` returns 503 | promote fails: stop (legacy stays) |
+| 5a | **Domain check** | DNS is already live, so only verify, with the section 5 checks | apex: maintenance over valid HTTPS; `www` 308 to the apex; `http` 308 to `https` | not maintenance: stop and re-promote maintenance |
 | 6 | **Credentials** | Deactivate the legacy anon and service_role keys | legacy-key requests return **401** | a legacy key still works |
 | 7 | **Migration** | Apply release files 01, 02, 03 and 04 in that tested order, each in its own transaction. File 04 only **creates** the operator function. | each commits; 01's assertions pass | an error: the file rolls back; stop |
 | 7a | Owner check | Run `scripts/hosted/assign-initial-owner.mjs` **only if** row 8 shows no active Owner. The function and planner refuse a business that already has one. | the live inventory maps 1 active Owner, so normally **not run** | — |
@@ -151,6 +151,18 @@ The tool refuses any host or user that does not belong to the `--target` project
 
 ## 5. Domain: taxiflow.co.za (canonical) and www redirect
 
+### Update 2026-10-10 22:55 SAST (supersedes the state below)
+- **Delegation:** registry status `ok`; nameservers `ns3/ns5.za-dns.com`.
+- **Zone (za-dns):**
+  - A @ `216.198.79.1`;
+  - CNAME `www` → `a1963e84e6a53d28.vercel-dns-017.com` (these match Vercel's values read today);
+  - email records preserved: MX `mail.taxiflow.co.za`, SPF, DKIM, DMARC, and mail/webmail/autodiscover → 164.160.91.17.
+- **Vercel:** both names attached to `taxiflowpro`; `www` redirects 308 to the apex.
+- **Certificates:** Let's Encrypt for `taxiflow.co.za` and `www.taxiflow.co.za`, valid until 2027-01-08.
+- **Served build:** both names serve production `taxiflowpro-vq1gbf579`, which is **legacy `008ce8e`**, until row 5.
+- No re-attachment is needed at activation; row 5a only verifies.
+- `taxiflow.apprigate.com` is invalid (points to the shared host) and is left as it is.
+
 ### Current state (read-only checks, 2026-10-10)
 
 **Registry** (WHOIS `whois.registry.net.za`):
@@ -221,3 +233,41 @@ The values are Vercel's rank-1 recommendation for this project, read 2026-10-10.
   - the tenant app stays reachable to the operator at its deployment URL;
   - hold onboarding.
 - **Never** promote, alias or re-attach a legacy deployment (`008ce8e`) to `taxiflow.co.za`. App failures follow section 2 (maintenance page, then fix forward).
+
+## 6. Maintenance deployment (existing project `taxiflowpro`; prepared, not deployed)
+
+**Files:** `deploy/maintenance/`
+- `index.html`: static, no scripts, noindex;
+- `sw.js`;
+- `api-maintenance.json`;
+- `brand/` icons;
+- `vercel.json`: no install, no build, output `.`, routes.
+
+There is no `api/` folder, so there are **no functions and no keys**.
+
+**Why it is built this way** (tested):
+- The legacy service worker serves its **cached legacy app** whenever a navigation is not OK. So the maintenance page answers **200 with no-store**, never 503.
+- `/sw.js` is a replacement worker. It deletes every cache, reloads open pages, and unregisters itself, so installed legacy apps cannot reopen offline.
+- `/api/*` answers 503 JSON. Legacy asset URLs only get the maintenance page.
+
+**Evidence:**
+- `node scripts/release/maintenance-tests.mjs` 15/15, in Chromium with the real legacy worker from `008ce8e`:
+  - an installed legacy client switches to maintenance about 3 seconds after its first maintenance page load;
+  - then 0 workers and 0 caches remain;
+  - offline, no legacy app is left;
+  - it also confirms that a 503 page *would* have shown the cached legacy app.
+- `tests/maintenance-page.test.mjs` 5/5.
+
+**Commands** (row 4b and row 5; not run). Run from the repository root at the reviewed SHA:
+```
+mkdir -p deploy/maintenance/.vercel && cp .vercel/project.json deploy/maintenance/.vercel/project.json
+vercel deploy --cwd deploy/maintenance --prod --skip-domain --scope apprigate
+# check the printed URL while signed in to Vercel (Deployment Protection covers non-custom URLs):
+#   the page shows "We are upgrading TaxiFlow Pro"; <url>/api/business/workspace returns 503 JSON
+vercel promote <maintenance-url> --scope apprigate        # row 5: the window opens
+```
+`deploy/maintenance/.vercel/` is git-ignored.
+
+**After row 11:**
+- The tenant build replaces maintenance on the domains. Its own `/sw.js` registers fresh.
+- Keep the maintenance deployment, as the re-promote target for section 2.

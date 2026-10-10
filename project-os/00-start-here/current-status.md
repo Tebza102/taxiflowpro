@@ -33,6 +33,17 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Domain live and kept attached; maintenance deployment prepared (Task 31; nothing deployed, no keys changed)
+
+- **Domain:** `taxiflow.co.za` and `www` stay attached to `taxiflowpro` (Tebogo's decision).
+  - HTTPS is valid (Let's Encrypt, until 2027-01-08); `www` and `http` both redirect 308 to `https://taxiflow.co.za/`.
+  - **Both serve production `taxiflowpro-vq1gbf579` = legacy `008ce8e`** until release row 5.
+- **Maintenance build:** `deploy/maintenance/` (static: no build, no functions, no keys).
+  - Navigations get 200 no-store, because the legacy service worker shows its cached legacy app on any non-OK navigation.
+  - A replacement `/sw.js` deletes caches and unregisters itself; `/api/*` returns 503 JSON.
+  - **Proof:** `scripts/release/maintenance-tests.mjs` 15/15 (Chromium, with the real `008ce8e` worker) and `tests/maintenance-page.test.mjs` 5/5.
+- **Release mechanics found:** Git auto-deploy is on for `main` with auto-assign of custom domains, so it must be turned off before any merge (row 4a). Deployment Protection covers non-custom URLs.
+
 ### taxiflow.co.za delegation: LEGACY EXPOSURE IN PROGRESS (Task 29; 2026-10-10 ~20:30 UTC)
 
 - **Registry:** `serverHold` lifted; status `ok`; nameservers `ns3/ns5.za-dns.com` (updated 20:10 UTC by Tebogo).

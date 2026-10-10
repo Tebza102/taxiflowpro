@@ -1,102 +1,191 @@
-# Hosted Rehearsal Decision Pack (2026-10-10)
+# Hosted Rehearsal Decision Pack (revised 2026-10-10)
 
-Everything here was gathered **read-only**: the Supabase connector's account, project and price lookups; the Supabase and Vercel docs; and the Vercel CLI team read. **Nothing was created, purchased, paused or changed.**
+Gathered **read-only**:
+- the Supabase connector's account, project and price lookups;
+- the Vercel CLI's reads of the team and projects;
+- Supabase docs (via the connector) and Vercel's own documentation pages (fetched 2026-10-10).
 
-## 1. Rehearsal options and costs
+**Nothing was created, purchased, paused, deployed or changed.**
 
-**Current state**
-- **Supabase organisation "Apprigate"** (Free plan) has 5 projects. **Active: TaxiFlow production `vfxftviwteypasredjgm` and "Birdie Squad Golf Club" `ydrrhlpvblwgwboyuwkj`.** Paused: three older projects.
-- **Supabase Free rule** (docs, "About billing" and "Billing FAQ"): each Owner or Admin gets **2 active free projects across all organisations**; paused projects don't count. Both slots are in use.
-- **Plans can't be mixed inside one organisation.** Upgrading "Apprigate" changes the plan, billing and features of every project in it, including Birdie Squad.
-- **Vercel:** account `apprigate` on the **Hobby** plan; project `taxiflowpro`.
+## 1. Rehearsal options and estimated costs
 
-| Option | Isolation | Touches Birdie Squad or TaxiFlow production? | Cost (USD, before any tax) |
+**Facts**
+- **Supabase organisation "Apprigate":** Free plan. Active: **TaxiFlow production** (`vfxftviwteypasredjgm`) and **Birdie Squad Golf Club** (`ydrrhlpvblwgwboyuwkj`); three older projects are paused.
+  - **Free rule** (Supabase "About billing", "Billing FAQ"): each Owner or Admin gets **2 active free projects across all organisations**; paused projects don't count. Both are in use.
+  - **Plans can't be mixed inside one organisation.** Upgrading "Apprigate" changes the plan and billing of every project in it, including Birdie Squad.
+- **Vercel team `apprigate`:** **Hobby** plan, **23 projects**, including `taxiflowpro`, `birdiesgc` and `birdiesgc-pilot`. Upgrading this team would change Birdie Squad's hosting plan.
+
+### 1a. Vercel commercial-use eligibility (authoritative source)
+
+**Source:** Vercel *Fair Use Guidelines*, "Commercial usage" (vercel.com/docs/limits/fair-use-guidelines, last updated 2026-09-14). It says Hobby is restricted to "non-commercial personal use only", and "all commercial usage of the platform requires either a Pro or Enterprise plan".
+- Commercial use covers any deployment used for the financial gain of anyone involved in **any part of the production**, "including a paid employee or consultant writing the code". Its examples include "receiving payment to create, update, or host the site".
+- The *Hobby plan* page (last updated 2026-09-14) repeats the same restriction.
+
+**Conclusion:** TaxiFlow is built by Apprigate for paying taxi businesses, so it is commercial use.
+- **Production needs Vercel Pro (or Enterprise).**
+- The rehearsal deployment is part of producing that commercial project, so it should also run on a Pro-eligible team, not on Hobby.
+- (Other client projects on the same Hobby team may be affected by the same rule. That's outside this task, but noted.)
+
+**Vercel Pro facts** (vercel.com/docs/plans/pro-plan, last updated 2026-09-15):
+- **$20/month platform fee**, which includes one deploying seat and **$20 of monthly usage credit**; extra seats are $20 each, and usage beyond the credit is billed on demand.
+- **Spend notifications** are on by default at $200 per cycle. Hard actions must be configured.
+- **Pro trial** (vercel.com/docs/plans/pro-plan/trials, last updated 2026-09-14):
+  - 14 days, free;
+  - **one per user account**, created as a **new team**;
+  - **no charge unless a payment method is added**;
+  - the trial pauses when it hits its usage limits (16 CPU-hrs, 1,440 GB-hrs, 1M invocations).
+
+### 1b. Options
+
+| Option | Isolation | Touches Birdie Squad or TaxiFlow production? | Estimated cost (USD, before tax) |
 |---|---|---|---|
-| A. **New separate Supabase organisation on Pro with one Micro rehearsal project** | full (own org, keys, Auth, email) | **No** | **$25 for the month.** Pro is $25/month, charged upfront; one Micro project is about $10/month of compute, covered by the included $10 compute credit. After the rehearsal, delete the project and downgrade the org: unused plan time becomes credit in that org, **not a refund**. |
-| B. Upgrade "Apprigate" to Pro and add a rehearsal project | full project, shared org | **Yes**: changes Birdie Squad's plan and billing | $25 + 3 × ~$10 compute − $10 credit ≈ **$45/month** |
-| C. Branch of TaxiFlow production | branch (no production data copied) | **Yes**: branching needs a paid org, so Apprigate must be upgraded | $25 plan + $0.01344/hour per branch (connector price; compute credits don't apply) |
-| D. Free rehearsal project | full | **Yes**: needs Birdie Squad or TaxiFlow paused | $0, **ruled out** |
-| E. Local exact copy (already done) | local only | No | $0, but it can't prove the gateway keys, Auth email, Vercel routing or a real-data restore |
+| **A. New Supabase org on Pro + 1 Micro project; new Vercel team on the Pro *trial*** | full | **No** | **≈ $25** (Supabase Pro month; one Micro covered by the $10 compute credit; Vercel trial $0) |
+| A′. As A, but the Vercel trial is unavailable or already used: new Vercel team on paid Pro | full | No | **≈ $45** ($25 Supabase + $20 Vercel) |
+| B. Upgrade the "Apprigate" Supabase org (+ project) | shared org | **Yes** (Birdie Squad's plan and billing) | ≈ $45/month |
+| C. Branch of TaxiFlow production | branch | **Yes** (needs a paid "Apprigate" org) | $25 + $0.01344/hour (connector price; compute credits don't apply) |
+| D. Free project | full | **Yes** (needs a pause) | ruled out |
+| E. Local exact copy (done) | local | No | $0; can't prove the gateway keys, email, Vercel or a real-data restore |
 
-**Recommendation: Option A.**
-- A new separate organisation (for example "Apprigate Rehearsal") on Pro, with one Micro project in **eu-west-1** (same region as production) and the Spend Cap **on**.
-- It is the cheapest option that is isolated and leaves Birdie Squad and TaxiFlow production untouched.
-- **Expected cost: $25** plus any tax for one month. Delete the project and downgrade straight after sign-off.
-- Run the frontend in a **separate Vercel project** (for example `taxiflow-rehearsal`, $0 on Hobby), so the `taxiflowpro` Preview variables are never pointed at the rehearsal.
+**Recommendation: A.** These are **estimates, not quotes.**
+- Supabase charges the Pro plan fee **upfront** for the month. After cancelling, unused time becomes **credit in that organisation, not a refund**.
+- Taxes are added where they apply (Supabase and Vercel both bill in USD, before VAT or GST).
+- The estimate assumes the rehearsal finishes within the Vercel trial's 14 days. The Supabase project should be deleted, and its organisation downgraded, straight after sign-off.
 
-**For Tebogo to confirm (not verified here):** Vercel describes Hobby as being for personal, non-commercial use. Check the current Vercel terms and pricing before production carries a paying pilot; Vercel Pro may be needed. That decision is separate from the rehearsal.
+### 1c. Charges not covered by the Supabase Spend Cap
+Source: Supabase "Control your costs". The Spend Cap covers usage items such as egress, disk size, MAU, storage and Realtime. It does **not** cover these opt-in or predictable items:
+
+**Compute** (any project or compute size), **Branching compute**, **Read-replica compute**, **Custom domain**, **extra disk IOPS or throughput**, **IPv4 address**, **Log-drain hours and events**, **MFA phone**, **Point-in-Time Recovery**.
+
+**Rehearsal guard:** use only one Micro project and none of the add-ons above.
+- Connect for backup and restore through the Supabase **pooler**, not by buying the IPv4 add-on.
+- Any of these items appearing on the usage page is a **stop condition** (section 6).
+
+On Vercel, spend management only notifies by default. The Vercel trial pauses at its limits instead of charging.
+
+**Separate production note (not part of the rehearsal):** TaxiFlow production currently runs in a *Free* Supabase organisation. Supabase says paid organisations' projects are never paused; Free projects can be. Production's Supabase plan is a decision for Approval B.
 
 ## 2. Email and domain inputs (none assumed)
 
-Tebogo to supply. Nothing below is approved yet.
-
-| # | Input | Used for | Notes |
-|---|---|---|---|
-| 1 | **Production app URL** (exact `https://` origin) | Supabase Auth Site URL, redirect allow-list, setup-email links, production `TAXIFLOW_SETUP_REDIRECT` | The Supabase project is *named* "taxiflow.apprigate.com"; that is not taken as approval |
-| 2 | Whether that URL is a custom domain on Vercel, and **who controls its DNS** | DNS record for the domain | DNS changes are not done now |
-| 3 | **Rehearsal app URL** | rehearsal Site URL and redirect allow-list | The Vercel URL of the separate rehearsal project |
-| 4 | **SMTP provider** and the account owner | Supabase Auth custom SMTP | Cost per plan, to be confirmed by Tebogo |
-| 5 | SMTP **host**, **port** (465/587), **username** | Supabase Auth SMTP settings | |
-| 6 | SMTP **password or API key** | Supabase Auth SMTP settings | **Entered by Tebogo in the dashboard only**; never sent to the agent or put in Git |
-| 7 | **Sender address** (From) and **sender name** | setup and recovery emails | For example a no-reply address on a domain Tebogo controls |
-| 8 | **Reply-to address** (optional) | the same emails | |
-| 9 | **Sender domain DNS records** from the provider: SPF (TXT), DKIM (CNAME/TXT), DMARC (`_dmarc` TXT), optional bounce/return-path | deliverability | Added at the DNS host by Tebogo |
-| 10 | **Email wording** for the "Reset password" template (it is used as the account-setup email) | Auth template | Plain-language setup wording |
-| 11 | **Auth email rate limit** setting | avoid throttled setup emails | Supabase applies a default limit with custom SMTP |
-| 12 | **Three test mailboxes** Tebogo controls (Owner, Admin, Driver) | rehearsal email checks | Must not be real pilot users |
-| 13 | **Rehearsal email sender** | rehearsal | The same provider, or its sandbox |
-
-## 3. Expense-only and negative days (refined)
-
-**Where the cash came from**
-
-| Funding | Meaning | Effect on the day |
+| # | Input | Used for |
 |---|---|---|
-| **Paid from takings** (business cash the driver is carrying) | the driver paid out of the day's collected fares | reduces the cash to hand in, but **only up to that day's takings** |
-| **Personally funded** (the driver's own money) | the driver used their own cash or card | the business owes the driver; it **never** reduces another day's hand-in and is **never** in a bank deposit |
-| **Business-funded cash from the safe or float** (management) | an Admin or Manager paid from the business safe | a standalone management cash expense; reduces the deposit as today |
-| **Non-cash business payment** (card, EFT, account) | the business paid directly | no effect on cash |
+| 1 | **Production app URL** (exact `https://` origin). The project's *name* "taxiflow.apprigate.com" is not taken as approval | Auth Site URL, redirect allow-list, setup links |
+| 2 | Whether it is a custom domain on Vercel, and **who controls its DNS** | DNS record (not done now) |
+| 3 | **Rehearsal app URL** (on the rehearsal Vercel team) | rehearsal Site URL and redirects |
+| 4 | **SMTP provider** and account owner (and its cost) | Supabase Auth custom SMTP |
+| 5 | SMTP **host**, **port** (465/587), **username** | SMTP settings |
+| 6 | SMTP **password or API key** | entered by Tebogo in the dashboard only; never sent to the agent or put in Git |
+| 7 | **Sender address** and **sender name** | setup and recovery emails |
+| 8 | **Reply-to** (optional) | the same emails |
+| 9 | Sender-domain **SPF, DKIM and DMARC** records (plus optional bounce domain) from the provider | deliverability; added by Tebogo at the DNS host |
+| 10 | **Setup-email wording** (the "Reset password" template is used as the account-setup email) | Auth template |
+| 11 | **Auth email rate limit** | avoid throttled setup emails |
+| 12 | **Three test mailboxes** Tebogo controls | rehearsal email checks |
+| 13 | **Rehearsal sender**: the same provider, or its sandbox | rehearsal |
 
-**Today's data has one flag**, `cashExpense` ("Paid from safe"), which the day maths treats as "paid from takings". There is no field for personally funded. In the cases below, cash expenses beyond the takings are treated as **uncovered**: personally funded, so not banked.
+## 3. Expense-only and negative days (revised)
 
-**Examples**
+### 3a. Funding source
+| Source | Effect on the day |
+|---|---|
+| Paid from the day's **takings** (business cash the driver carries) | reduces the cash to hand in, up to that day's takings |
+| **Personally funded** by the driver | the business may owe the driver; settled outside TaxiFlow for now |
+| **Business cash from the safe or float** (management) | standalone management cash expense (reduces the deposit, as today) |
+| **Non-cash** business payment (card, EFT, account) | no cash effect |
 
-| Day | Income | Expenses | Cash to hand in | Uncovered (owed to driver) | Banked |
-|---|---|---|---|---|---|
-| A. Normal | R 500 | R 120 fuel, cash | **R 380** | R 0 | R 380 |
-| B. Expense-only, cash | R 0 | R 200 fuel, cash (driver's money) | **R 0** | **R 200** | R 0 |
-| C. Expenses above takings | R 100 | R 300 fuel, cash | **R 0** | **R 200** (R 300 − R 100) | R 0 |
-| D. Expense-only, non-cash | R 0 | R 900 tyre, business card | **R 0** | R 0 | R 0 |
+**Today's data has only one flag**, `cashExpense` ("Paid from safe"). The day maths treats it as "paid from cash on hand". **When cash expenses exceed takings, the excess has no recorded funding source.** TaxiFlow therefore shows it as **"funding source unconfirmed"** and must not assume a driver reimbursement. It is never banked and never deducted from another day.
 
-**Smallest safe pilot implementation** (recommended; **no payables created automatically**)
-1. **Queue:** day checkings with any entry (`entryCount > 0`) appear in Banking, not only days with income. Expense-only and negative days can be counted (R 0), verified and banked, which closes and locks their records.
-2. **Display:** each day shows "Cash to hand in = max(income − cash expenses, 0)". Where cash expenses exceed income, it adds a clear flag: "Cash expenses above takings: R X (not banked; settle with the driver outside TaxiFlow)".
-3. **Variance:** measured against the cash to hand in, not the negative raw figure, so there's no false "over-collection".
-4. **Deposit:** unchanged. It sums counted hand-ins (≥ 0); uncovered amounts never enter or reduce it. The deposit's reported cash-expense total counts only expenses covered by takings.
-5. **Report:** the Daily Finance Report shows the uncovered amount as a separate informational line.
-6. **No payable record, no settlement action and no new "personally funded" field yet.** The operator tells Owners to settle these amounts outside TaxiFlow during the pilot. A proper reimbursement payable is a later decision.
+### 3b. Numbers kept separate (no netting)
+- **Expected cash** = income − cash expenses (signed; can be negative).
+- **Cash to hand in** = max(expected cash, 0).
+- **Uncovered cash expenses** = max(−expected cash, 0), labelled **"funding source unconfirmed"**.
+- **Variance** = counted cash − expected cash, **signed and preserved as today**. A positive variance on a day with uncovered expenses is explained by the uncovered amount shown beside it; it is not re-based.
+- **Shortage** = max(expected cash − counted cash, 0), as today.
 
-**Tests needed:** examples A–D on the server and in the browser; deposit totals unchanged; the uncovered amount is never in a deposit; the closed-day lock applies after verification.
+### 3c. Examples
+| Day | Income | Expenses | Expected cash | Cash to hand in | Counted | Variance (counted − expected) | Uncovered (funding source unconfirmed) |
+|---|---|---|---|---|---|---|---|
+| A. Normal | R 500 | R 120 cash | R 380 | **R 380** | R 380 | R 0 | R 0 |
+| A2. Short | R 500 | R 120 cash | R 380 | R 380 | R 350 | **−R 30** | R 0 |
+| B. Expense-only, cash | R 0 | R 200 cash | −R 200 | **R 0** | R 0 | **+R 200** | **R 200** |
+| C. Expenses above takings | R 100 | R 300 cash | −R 200 | **R 0** | R 0 | **+R 200** | **R 200** |
+| D. Expense-only, non-cash | R 0 | R 900 card | R 0 | **R 0** | R 0 | R 0 | R 0 |
 
-## 4. Cutover ordering (re-reviewed)
+### 3d. How zero-cash days close: no fictitious deposit, no reimbursement banking
+- A day with **cash to hand in = R 0** (B, C, D) goes through the same review: the Admin records a **counted R 0**, then the Manager **verifies**.
+- At **verified** the day is **closed**. The existing closed-day guard locks its records (no edits, deletes or new work).
+- **Zero-cash days are not banked.** They are left out of deposit batches, and their final state is "Closed: no cash to bank" (stored status `verified`). The UI must show that label, not "awaiting banking".
+- **No R 0 deposit is ever created.** The deposit batch includes only days and records with cash to bank. If a batch would total R 0, there is nothing to bank and no deposit record is made.
+- **Uncovered amounts are never part of a deposit**: not added, not subtracted, and not counted as banked cash.
+- The deposit's reported cash-expense total counts only expenses covered by takings.
 
-**Gap in the previous order:** between applying the migrations and deactivating the legacy keys, the **old production deployment still held a working service_role key**. Its legacy `auth-users`/`bootstrap-workspace` functions could have written the snapshot during maintenance.
+### 3e. Smallest safe pilot implementation (recommended; no payables)
+1. **Banking queue:** include day checkings with any entry (`entryCount > 0`).
+2. **Server:** compute and store `cashToHandIn` and `uncoveredCashExpenses` on submit, hand-in and verify.
+   - `deposit.lock` excludes zero-cash verified days.
+   - The deposit maths are otherwise unchanged; variance stays signed.
+3. **UI:** show "Cash to hand in", "Counted", "Variance (signed)", and when relevant, "Cash expenses above takings: R X, funding source unconfirmed". Zero-cash verified days are labelled "Closed: no cash to bank".
+4. **Report:** a separate informational line for uncovered amounts.
+5. **Not now:** payables, a reimbursement settlement action, or a new funding-source field.
+6. **Tests:** examples A–D on the server and in the browser; deposits exclude zero-cash days and never include uncovered amounts; no R 0 deposit; the closed-day lock after verify; signed variance preserved.
 
-**Corrected rule:** at the **start** of the window:
-1. production serves a static maintenance page;
-2. the legacy `anon` and `service_role` keys are deactivated, and the 401s are verified.
+## 4. Cutover ordering and new keys
+- **Production window start:**
+  1. the static maintenance page is promoted;
+  2. the legacy `anon` and `service_role` keys are deactivated and the 401s verified;
+  3. backup and migrations follow (database connection, not API keys);
+  4. the tenant build runs `vercel deploy --prod --skip-domain` (Vercel CLI docs), is smoke-tested on its own URL, then `vercel promote`.
+- Old privileged deployments are therefore blocked for the **whole** window.
+- **New-key proof:** the rehearsal project's legacy keys are deactivated before the app is deployed, so every rehearsal check runs on publishable/secret keys only. Code review: no key is sent as a Bearer token, and there are no raw REST or Auth calls.
 
-**Before** any backup or migration, every old deployment and old browser bundle is therefore blocked for the whole window.
-- The backup and migrations use the **database connection** (database password), not API keys, so they are unaffected.
-- The tenant build is deployed with the **new** keys using `vercel deploy --prod --skip-domain` (a production build with production variables, no domain change), smoke-tested on its own URL, then `vercel promote`d. These are documented Vercel CLI steps.
+## 5. Two bounded approvals (replace the per-step approvals)
 
-**Proving the new keys work:** the rehearsal project uses **only** new keys from the start. Its legacy keys are deactivated before the app is deployed, so every rehearsal check runs with publishable/secret keys.
-- Code review (2026-10-10): the app sends only user session tokens as Bearer tokens; keys go through `@supabase/supabase-js` 2.100.0; there are no raw REST or Auth calls.
+### Approval A: hosted rehearsal
+**Scope (all of it, nothing else):**
+- create the Supabase organisation "Apprigate Rehearsal" on Pro, with one Micro project in eu-west-1 and the Spend Cap on;
+- create a new Vercel team on the Pro **trial** (no payment method) and one project `taxiflow-rehearsal` in it;
+- in those two only: create and delete keys, configure Auth and SMTP (test sender), set variables, deploy the reviewed commit, and run the operator scripts with synthetic businesses and test mailboxes;
+- read-only queries and the encrypted backup of TaxiFlow production;
+- restore that backup into the rehearsal project; apply release files 01–04 there;
+- afterwards: delete the rehearsal keys and project, downgrade the rehearsal organisation, and let the Vercel trial lapse or downgrade it.
 
-## 5. Remaining verifications (open until performed)
-- **Rendered PDF page visual inspection.** Only the logo geometry and colours have been checked, from the PDF source.
-- **Installed-app icons on real phones:** Android (maskable) and iOS home screen.
-- **Hosted setup-email delivery:** send, receive, link works, password set.
-- **Expense-only rule:** decision, implementation and tests.
+**Spend limit:** estimated ≈ **$25 plus applicable tax**; hard ceiling **$30 + tax** on the Supabase side; **$0 on Vercel**. If the Vercel trial is unavailable, stop and ask (option A′ adds $20).
 
-The checklist is `rehearsal-cutover-checklist.md`.
+**Out of scope:**
+- any write to TaxiFlow production, Birdie Squad, the "Apprigate" Supabase org or the `apprigate` Vercel team;
+- DNS changes; purchases beyond the limit; real pilot data loads.
+
+### Approval B: production cutover (only after rehearsal sign-off)
+**Scope:**
+- the Supabase production plan decision (section 1c note), and Vercel Pro for production at **$20/month** plus usage beyond the credit. The team is chosen at Approval B: convert the rehearsal trial team (add a payment method) or upgrade separately; `taxiflowpro` moves only as approved;
+- the merge of the reviewed commit to `main` (with auto-deploy for `main` disabled for the window);
+- production keys `web` and `vercel-production`;
+- the maintenance window;
+- deactivating the legacy keys;
+- the backup;
+- release files 01–04;
+- `deploy --prod --skip-domain`, smoke test and promote;
+- deleting or protecting old deployments and removing legacy key values;
+- the operator session (a temporary `operator` key, deleted afterwards);
+- onboarding the approved pilot businesses.
+
+**Spend:** as approved at Approval B (stated in the approval).
+
+**Out of scope:** reviving the legacy build, restoring the pre-migration database, re-activating legacy keys for an old build, and changes to Birdie Squad.
+
+## 6. Stop conditions (both approvals)
+
+The agent stops, leaves resources as they are (production: maintenance page up, legacy keys stay deactivated) and reports. It does not continue until Tebogo answers.
+1. **Unexpected cost:**
+   - any price, invoice preview or usage charge above the approved estimate or ceiling;
+   - any item outside the spend cap (section 1c) appearing;
+   - a request for a payment method on the Vercel trial;
+   - the plan fee shown differing from the estimate.
+2. **Target mismatch:** the project ref, organisation, Vercel team or project, region or commit SHA differs from the approved target; or a read-only inventory differs from `hosted-inventory.md`.
+3. **Failed check:** any expected result in `rehearsal-cutover-checklist.md` not met, including the assertion failures in release file 01, legacy keys still working, a data or manifest mismatch, acceptance failures, email not delivered, or icon or PDF defects.
+4. **Out of scope:** any action not listed in the approval's scope, or any need to touch Birdie Squad, DNS or an un-approved resource.
+
+## 7. Open verifications (record until performed)
+- Rendered PDF page visual inspection (checklist A16).
+- Installed-app icons on real Android and iOS phones (A15).
+- Hosted setup-email delivery, link and password set (A13).
+- Expense-only rule: decision, implementation and tests (A14).

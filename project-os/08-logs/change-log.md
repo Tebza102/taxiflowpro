@@ -666,3 +666,21 @@ Prepared. Installation is a human step.
 **Tests run:** none needed (documents only); the tree was clean at the start (`9de3997`).
 
 **Next action:** `next-action.md` → 1q.
+
+### 2026-10-10 19:20 — Decision pack revised: verified Vercel terms, estimates, expense-only wording, two approvals (Task 23)
+
+**Changed by:** Claude Code (agent). Read-only only: Vercel docs fetched (Fair Use Guidelines, Hobby, Pro plan, Pro trial; last updated 2026-09-14/15); Vercel CLI project listing (names only); Supabase docs. No purchase, resource creation, hosted change or deploy.
+
+**Summary:**
+- **Vercel commercial use:** Hobby is "non-commercial personal use only", and commercial use (including a paid developer) needs Pro or Enterprise. Production therefore needs Vercel Pro ($20/month, which includes $20 of credit). The `apprigate` Hobby team has 23 projects, including Birdie Squad's, so the rehearsal uses a **new Pro-trial team** (14 days, $0 without a payment method, one per account).
+- **Rehearsal price:** stated as an estimate (≈ $25 + tax; ceiling $30 + tax); the Supabase charges outside the spend cap are listed.
+- **Expense-only days:**
+  - "funding source unconfirmed" replaces the assumed reimbursement;
+  - signed variance is preserved;
+  - cash to hand in and uncovered cash expenses are separated;
+  - zero-cash days close at verified, are not banked, and no R 0 deposit is created.
+- **Approvals:** two bounded approvals (A rehearsal, B production after sign-off). Stop conditions: unexpected cost, target mismatch, failed checks, out-of-scope actions. The checklist's per-step approval marks are removed.
+
+**Tests run:** none needed (documents only).
+
+**Next action:** `next-action.md` → 1r.

@@ -1,5 +1,7 @@
 # Expense-only Driver Days: Behaviour Today and Recommended Rule
 
+> **Revised 2026-10-10 (supersedes R2/R3 wording):** an excess of cash expenses over takings is shown as **"funding source unconfirmed"** (no assumed reimbursement); the signed variance is preserved; zero-cash days close at verified and are not banked (no R 0 deposit). See `rehearsal-decision-pack.md` section 3.
+>
 > **Refined 2026-10-10:** funding sources, worked examples and the smallest pilot implementation (no automatic payables) are in `rehearsal-decision-pack.md` section 3. That refinement replaces R3's reimbursement payable for the pilot.
 
 Investigated 2026-10-10 from the code; no change made. **A decision is needed before the hosted rehearsal.**

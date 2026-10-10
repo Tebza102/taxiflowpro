@@ -33,6 +33,13 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Decision pack revised (Task 23; read-only; nothing created or purchased)
+
+- **Vercel commercial use verified** from Vercel's Fair Use Guidelines (2026-09-14): Hobby is non-commercial only, so TaxiFlow needs Pro. The rehearsal uses a new Vercel Pro **trial** team ($0, no payment method).
+- **Rehearsal estimate:** about $25 plus tax (Supabase Pro org with Micro), ceiling $30 plus tax. Charges not covered by the spend cap are listed and treated as stop conditions.
+- **Expense-only days:** the excess is "funding source unconfirmed"; signed variance is kept; zero-cash days close at verified without a deposit.
+- **Approvals:** two bounded approvals (A rehearsal, B production) with stop conditions replace the per-step approvals.
+
 ### Hosted rehearsal decision pack (Task 22; read-only; nothing created or purchased)
 
 - `project-os/05-build/rehearsal-decision-pack.md`:

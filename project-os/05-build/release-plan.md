@@ -223,11 +223,17 @@ Vercel **Preview** environments get **no** production secret key.
 - **Installed-app icons on real devices** (Android maskable, iOS home screen): not yet verified.
 - **Hosted email delivery** of the setup email: not yet verified.
 
-## 11. Decisions needed from Tebogo
-1. A rehearsal project slot (pause a project or upgrade).
-2. The SMTP provider and sender domain (with DNS records), and the production URL for redirects.
-3. The legacy workspace's business name, and whether it is a pilot business. (The inventory shows its directory maps an active Owner, so `assign-initial-owner` should not be needed for it.)
-4. The maintenance window date and Owner communication.
-5. Approval of, each at execution time: release files 01–04, creating the new keys, the merge to `main`, the production deploy, deactivating the legacy keys, and deleting old Vercel deployments.
-6. The expense-only-day rule (`expense-only-days.md`, R1–R4), or the interim pilot guidance instead.
-7. Whether to drop the 8 empty legacy tables later. They are kept and locked for now; a separate reviewed change could drop them.
+## 11. Decisions needed from Tebogo (revised 2026-10-10)
+
+Replaced by **two bounded approvals**, defined in `rehearsal-decision-pack.md` sections 5–6 (scope, spend and stop conditions):
+- **Approval A (rehearsal):** a new Supabase Pro org with a Micro project (estimate ≈ $25 + tax, ceiling $30 + tax) and a new Vercel Pro *trial* team ($0).
+- **Approval B (production):** after rehearsal sign-off.
+
+**Inputs still needed:**
+- the email and domain items (decision pack section 2);
+- the legacy business name and its pilot role;
+- the maintenance window;
+- the expense-only pilot rule (decision pack section 3);
+- whether to drop the empty legacy tables later.
+
+Vercel commercial use was verified from Vercel's own documentation: **Hobby is non-commercial only, and production needs Vercel Pro.**

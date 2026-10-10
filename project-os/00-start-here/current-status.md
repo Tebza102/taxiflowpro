@@ -38,12 +38,12 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - The approved full logo and the TF symbol are stored in `assets/brand/source/`.
 - Generated assets are in place: logo, `favicon.ico` (16/32/48), Apple 180, PWA 192/512 and separate maskable icons, all on white.
 - They are used on sign-in, the business picker, the app header, the manifest, the service worker (cache v8) and the PDF.
-- The UI colour palette is **proposed, awaiting Tebogo's approval**; platform colours are unchanged.
+- The UI palette was **approved by Tebogo and applied** (navy `#0A1925`, slate, yellow and orange accents; status colours unchanged; contrast verified).
 - Evidence:
   - branding smoke checks: demo 4/4, tenant 2/2;
   - demo suite 32/32, tenant browser 9/9, Node 313/313, build passes;
   - the PDF logo was checked at 72×41.7 pt.
-- Installed-app icons were not tested on a real device.
+- **Still outstanding:** visual inspection of a rendered PDF page, and installed-app icons on a real device.
 - Details: `project-os/03-design/brand-rules.md`.
 
 ### Pilot onboarding (Task 18, local only)

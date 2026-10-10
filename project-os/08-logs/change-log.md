@@ -575,3 +575,21 @@ Prepared. Installation is a human step.
 **Not verified:** installation on a real device, and the home-screen icon on Android or iOS.
 
 **Next action:** `next-action.md` → 1n.
+
+### 2026-10-10 15:30 — Approved palette applied (local only; Task 19 follow-up)
+
+**Changed by:** Claude Code (agent), on Tebogo's approval. Continued from `dc212b7`. No push, hosted change or deploy.
+
+**Summary:**
+- Theme tokens, gradients, accents, focus rings and tints moved to the approved palette, as listed in `brand-rules.md`.
+- Browser and PWA theme colour is `#0A1925`; manifest background is white; PDF navy and orange updated.
+- Layouts and status colours are unchanged.
+- The hero stripe was changed to yellow→orange, because navy→yellow blended to olive.
+- The quick-action focus ring was raised to 3.18:1.
+
+**Tests run:**
+- `tests/branding.spec.js` 5/5, including the new palette check (tokens, theme colours, rendered contrast); tenant branding 2/2.
+- Demo suite 33/33; Node 313/313; build pass.
+- Screenshots reviewed for login, finance (Money), Business access and reports, on desktop and mobile.
+
+**Outstanding:** PDF page visual inspection; installed-app icons on a real device; optional darker warning text tone.

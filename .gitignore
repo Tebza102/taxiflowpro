@@ -11,3 +11,9 @@ dist
 uat-reports/
 test-results/
 playwright-report/
+
+# Operator backups never belong in Git (the tool also refuses repo paths)
+*.tfbk
+*.tfbk.partial
+taxiflow-*.manifest.json
+backup-log.txt

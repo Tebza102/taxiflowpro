@@ -33,6 +33,7 @@ import { MobileActionScreen } from "./components/MobileActionScreen";
 import { MobileBottomSheet } from "./components/MobileBottomSheet";
 import { TripLegOptionalFields } from "./components/TripLegOptionalFields";
 import { ReportsPanel } from "./components/ReportsPanel";
+import TenantAccessPanel from "./components/TenantAccessPanel";
 import { repository } from "./lib/dataGateway";
 import {
   TENANT_UNSUPPORTED_MESSAGE,
@@ -5983,7 +5984,15 @@ function App() {
               backendMode={backendMode}
             />
           )}
-          {activeView === "settings" && (
+          {activeView === "settings" && tenantLive && (
+            // Tenant mode: business access replaces the legacy user tools.
+            <TenantAccessPanel
+              activeRole={activeRole}
+              currentUserEmail={authSession?.user?.email ?? ""}
+              onChanged={reloadCanonicalLiveSnapshot}
+            />
+          )}
+          {activeView === "settings" && !tenantLive && (
             <SettingsPanel
               activeRole={activeRole}
               snapshot={currentSnapshot}

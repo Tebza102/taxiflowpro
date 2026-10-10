@@ -14,7 +14,7 @@ const reportApiDevRoutes = () => ({
       const match = /^\/api\/admin\/daily-log\/([^/]+)\/(report-view|report-pdf)$/.exec(url.pathname);
       // Tenant business routes (dev only): same real handlers as Vercel's
       // api/business/<name>.js routing.
-      const businessMatch = /^\/api\/business\/(workspace|memberships|finance-actions)$/.exec(url.pathname);
+      const businessMatch = /^\/api\/business\/(workspace|memberships|members|finance-actions)$/.exec(url.pathname);
 
       if (businessMatch) {
         try {

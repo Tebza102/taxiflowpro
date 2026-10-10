@@ -54,6 +54,12 @@ const validateSession = async (req, supabase) => {
 };
 
 export async function POST(req) {
+  // Tenant mode: access comes only from business memberships, managed through
+  // POST /api/business/members (Owner) and the operator onboarding procedure.
+  if (process.env.TAXIFLOW_TENANT_MODE === "true") {
+    return createResponse({ ok: false, error: "User accounts are managed through business access in this deployment." }, 410);
+  }
+
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     return createResponse({ ok: false, error: "Server configuration incomplete" }, 503);
   }

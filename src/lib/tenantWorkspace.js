@@ -165,3 +165,19 @@ export const clearTenantState = () => {
   knownBusinesses = [];
   context = { userId: null, businessId: null, version: null, role: null };
 };
+
+// Business access (Owner/Admin): GET or POST /api/business/members for the
+// business currently loaded.
+export const membersRequest = async (body) => {
+  if (!context.businessId) return { ok: false, error: "The workspace is not loaded. Refresh first." };
+  try {
+    const { status, json } = await apiFetch("/api/business/members", {
+      method: body ? "POST" : "GET",
+      businessId: context.businessId,
+      body,
+    });
+    return status === 200 ? { ok: true, ...json } : { ok: false, status, ...json };
+  } catch {
+    return { ok: false, error: "Network error. Nothing was confirmed; try again." };
+  }
+};

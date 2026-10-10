@@ -18,6 +18,7 @@ const env = {
   ...process.env,
   VITE_BACKEND_MODE: "live",
   VITE_TENANT_MODE: "true",
+  TAXIFLOW_TENANT_MODE: "true",
   VITE_SUPABASE_URL: status.apiUrl,
   VITE_SUPABASE_ANON_KEY: status.ANON_KEY,
   SUPABASE_URL: status.apiUrl,

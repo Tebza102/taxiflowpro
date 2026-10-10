@@ -37,6 +37,20 @@ const clientFor = async (email) => {
   return client;
 };
 
+const membersPost = async (client, body) => {
+  guard();
+  process.env.SUPABASE_URL = status.apiUrl;
+  process.env.SUPABASE_ANON_KEY = status.ANON_KEY;
+  process.env.SUPABASE_SERVICE_ROLE_KEY = status.SERVICE_ROLE_KEY;
+  const { default: handler } = await import("../../api/business/members.js");
+  const { data } = await client.auth.getSession();
+  const out = { statusCode: 200, headers: {}, setHeader(k, v) { this.headers[k] = v; }, end(b) { this.body = b; } };
+  await handler({ method: "POST", headers: { authorization: `Bearer ${data.session.access_token}`, host: "127.0.0.1:5175" }, query: {}, body }, out);
+  let json = {};
+  try { json = JSON.parse(out.body); } catch { /* */ }
+  return { status: out.statusCode, json };
+};
+
 const denied = (response) => Boolean(response.error) && (response.error.code === "42501" || /permission denied|not allowed|Only an active Owner|cannot|Sign in/i.test(response.error.message));
 const describe = (response) =>
   response.error ? `${response.error.code ?? ""} ${response.error.message}`.trim() : `${Array.isArray(response.data) ? response.data.length : response.data ? 1 : 0} row(s)`;
@@ -45,10 +59,17 @@ const snapshotHashes = () => {
   const rows = JSON.parse(sql("select coalesce(json_object_agg(workspace_key, snapshot order by workspace_key), '{}') from public.workspace_snapshots;"));
   return Object.fromEntries(Object.entries(rows).map(([key, snapshot]) => [key, snapshotManifest(snapshot).sha256]));
 };
+// Same, ignoring the business directory and audit trail (what an access change
+// legitimately touches).
+const snapshotHashesExceptAccess = () => {
+  const rows = JSON.parse(sql("select coalesce(json_object_agg(workspace_key, snapshot - 'appUsers' - 'auditTrail' order by workspace_key), '{}') from public.workspace_snapshots;"));
+  return Object.fromEntries(Object.entries(rows).map(([key, snapshot]) => [key, snapshotManifest(snapshot).sha256]));
+};
 const membershipHash = () => sql("select coalesce(json_agg(json_build_array(business_id, user_id, role, driver_staff_id, active) order by business_id, user_id), '[]') from public.business_memberships;");
 
 const access = async () => {
-  const before = snapshotHashes();
+  let before = snapshotHashes();
+  const beforeExceptAccess = snapshotHashesExceptAccess();
   const anon = await clientFor(null);
   const outsider = await clientFor("outsider@example.com");
   const ownerA = await clientFor("owner@example.com");
@@ -134,14 +155,24 @@ const access = async () => {
   record(Boolean(serviceReassign.error) && /cannot be moved/.test(serviceReassign.error.message), "snapshot tenant reassignment refused (service role)", describe(serviceReassign));
 
   // Positive controls (denials above are not vacuous)
-  guard();
-  const add = await ownerA.rpc("set_business_membership", { p_business_id: BUSINESS_A_ID, p_user_id: newhireId, p_role: "Manager" });
-  record(!add.error && add.data?.role === "Manager", "Owner A can add a Manager to Business A", describe(add));
+  // Memberships change only through the Owner's server route (Task 18); the
+  // browser RPC used here before is withdrawn.
+  const add = await membersPost(ownerA, { action: "member.grant", fields: { email: "newhire.a@example.com", role: "Manager" } });
+  record(add.status === 200 && add.json.role === "Manager", "Owner A can add a Manager to Business A (server route)", `${add.status} ${add.json.error ?? ""}`);
   const newhireBiz = await newhire.from("businesses").select("id");
   record(!newhireBiz.error && newhireBiz.data.length === 1 && newhireBiz.data[0].id === BUSINESS_A_ID, "new member now sees Business A only", describe(newhireBiz));
-  guard();
-  const deactivate = await ownerA.rpc("set_business_membership", { p_business_id: BUSINESS_A_ID, p_user_id: newhireId, p_role: "Manager", p_active: false });
-  record(!deactivate.error && deactivate.data?.active === false, "Owner A can deactivate that membership", describe(deactivate));
+  const deactivate = await membersPost(ownerA, { action: "member.deactivate", fields: { userId: newhireId } });
+  record(deactivate.status === 200 && deactivate.json.active === false, "Owner A can deactivate that membership (server route)", `${deactivate.status} ${deactivate.json.error ?? ""}`);
+  // Those two server writes legitimately updated only Business A's directory and
+  // audit trail; everything else, including every earlier browser attempt, is
+  // unchanged. The final no-change check covers the attempts that follow.
+  const afterAccess = snapshotHashes();
+  record(
+    stableStringify(snapshotHashesExceptAccess()) === stableStringify(beforeExceptAccess) &&
+      Object.keys(afterAccess).every((key) => key === "taxiflow-live" || afterAccess[key] === before[key]),
+    "only Business A's directory changed so far (no browser attempt wrote anything)",
+  );
+  before = afterAccess;
   const newhireAfter = await newhire.from("businesses").select("id");
   record(!newhireAfter.error && newhireAfter.data.length === 0, "deactivated member loses access", describe(newhireAfter));
   const serverRead = await service.from("workspace_snapshots").select("workspace_key, business_id");

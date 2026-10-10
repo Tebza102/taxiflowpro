@@ -151,8 +151,15 @@ record(res.statusCode === 200, "Owner-driver gets Business B's report", `${res.s
 
 // Explicit selection with two memberships -------------------------------------------------
 guard();
-const added = await ownerA.client.rpc("set_business_membership", { p_business_id: BUSINESS_A_ID, p_user_id: managerB.userId, p_role: "Manager" });
-record(!added.error, "setup: Owner A adds Manager B to Business A (second membership)", added.error?.message);
+// Memberships change only through the Owner's server route (Task 18).
+const { default: membersHandler } = await import("../../api/business/members.js");
+const membersPost = async (token, body) => {
+  const out = { statusCode: 200, headers: {}, setHeader(k, v) { this.headers[k] = v; }, end(b) { this.body = b; } };
+  await membersHandler({ method: "POST", headers: { authorization: `Bearer ${token}`, host: "127.0.0.1:5175" }, query: {}, body }, out);
+  return out;
+};
+const added = await membersPost(ownerA.token, { action: "member.grant", fields: { email: "manager.b@example.com", role: "Manager" } });
+record(added.statusCode === 200, "setup: Owner A adds Manager B to Business A (second membership)", `${added.statusCode} ${added.body}`);
 res = await view(managerB.token, "uat-fin-3");
 record(res.statusCode === 400 && /select one/.test(errorOf(res)), "two memberships without a selection are refused (no fallback)", `${res.statusCode} ${errorOf(res)}`);
 res = await view(managerB.token, "uat-fin-3", { business: BUSINESS_A_ID });
@@ -162,7 +169,7 @@ record(res.statusCode === 200 && JSON.parse(res.body).meta.businessId === BUSINE
 res = await view(managerB.token, "uat-fin-3", { business: "taxiflow-live" });
 record(res.statusCode === 400, "legacy workspace key is not a business selection", `${res.statusCode}`);
 guard();
-await ownerA.client.rpc("set_business_membership", { p_business_id: BUSINESS_A_ID, p_user_id: managerB.userId, p_role: "Manager", p_active: false });
+await membersPost(ownerA.token, { action: "member.deactivate", fields: { userId: managerB.userId } });
 res = await view(managerB.token, "uat-fin-3", { business: BUSINESS_A_ID });
 record(res.statusCode === 403, "after deactivation, Business A is refused again", `${res.statusCode}`);
 

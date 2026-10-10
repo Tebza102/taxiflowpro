@@ -64,3 +64,38 @@ Before every mutation the tests re-check the local marker, the exact loopback bi
   - 2 snapshots, 2 businesses, 9 memberships and 11 users exported (gpg), the volume destroyed and the schema rebuilt from migrations;
   - snapshots-before-Auth refused by the FK (incomplete evidence);
   - restored Auth → businesses → memberships → snapshots, with every hash, key, count, `updated_at`, `updated_by`, `business_id`, business, membership and Auth check matching; all 11 sign-ins work; tenant visibility holds; browser denied; server reads.
+
+## Rollback warning
+
+`scripts/localdb/rollback/*_tenant_foundation.down.sql` is **not a production recovery procedure**. It deliberately restores the flagged live-mirror access, where any authenticated user can read and overwrite the whole snapshot. It exists only to prove local compatibility and lossless re-application. A real incident needs a reviewed forward fix or a restore from a verified backup.
+
+## Function privileges (2026-10-10, Task 12)
+
+`public.set_business_membership` and `taxiflow_private.is_active_member` are executable only by `postgres` and `authenticated`. Execute was revoked from `public`, `anon` **and `service_role`**. Verified ACL: `postgres=X/postgres authenticated=X/postgres`, and it still holds after a rollback/re-apply cycle.
+
+## Server authorization boundary (Task 12, `api/_lib/tenantAuth.js`)
+
+1. `Authorization: Bearer <access token>` is required and validated by Supabase Auth (`auth.getUser`). Missing, garbage, tampered or signed-out tokens get 401.
+2. Active memberships are read with the **caller's own token** (RLS plus explicit `user_id`/`active` filters). Roles and memberships never come from query/body input, token user/app metadata or `snapshot.appUsers`.
+3. Business = explicit `?business=<uuid>` or `x-taxiflow-business` header. Without a selection, it is used only when the caller has exactly one active membership.
+   - Two or more memberships without a selection: 400.
+   - No membership, inactive, or a business the caller does not belong to: 403.
+   - Malformed or conflicting selections (including `taxiflow-live`): 400.
+   - There is never a fallback to `taxiflow-live`.
+4. Only then a service-role client reads the snapshot **pinned to that business_id**.
+5. Role, business and driver linkage come from the membership. The business snapshot's `appUsers.moduleAccess` toggles can only **narrow** within the role (`normalizeModuleViewAccess`).
+6. `snapshotLoader.loadServerSnapshot` returns a role-scoped projection (`scopedWorkspace`): Owner → full; Admin/Manager → full or no-finance; Driver → own linked records only. Report preview/PDF keep their role rules: Owner/Admin/Manager with Money on; Driver/Viewer denied. The report routes are GET-only, so no snapshot write path was added.
+
+**Evidence:**
+- `node scripts/localdb/server-auth-tests.mjs`: **26/26**, with real local Auth tokens and the real handlers. It covers authorized access, cross-business denial (query and header), no Business B data in A's load, inactive and non-member denial, missing/garbage/tampered/signed-out tokens, forged roles (query, user/app metadata, `appUsers`), the Driver projection, owner-driver linkage, explicit selection with two memberships, and the legacy key rejected.
+- `tests/daily-finance-report-http.test.mjs` (stand-in Supabase) also proves **no service-role snapshot read happens for unauthenticated, unauthorized or ambiguous requests**.
+
+**Lesson (defect found in Task 12):** the Task 11 reassignment trigger combined the table-name check and `new.user_id` in one expression. PL/pgSQL resolves every NEW field named in an expression, so **every legitimate `workspace_snapshots` update failed**. Task 11's tests only tried denied updates. Fixed with separate per-table branches, plus regression tests for a legitimate same-business snapshot update and a membership update. Always pair a denial test with a legitimate write of the same object.
+
+## Remaining gaps after Task 12
+
+1. **No server write path yet:** a scoped snapshot save endpoint (`mergeScopedChanges` per role, CAS on `updated_at`, pinned to the authorized business) is still needed. Unrestricted whole-snapshot writes must not be enabled.
+2. **Frontend:** `dataGateway` must call server endpoints (with the business selection) instead of the table, and must handle the 400 "select a business" response.
+3. **`userLifecycle.js` / `api/admin/auth-users.js` / `bootstrap-workspace.js`:** still `appUsers`/`taxiflow-live` based; they must move to `business_memberships`.
+4. **Mock mode:** a signed-in caller is authorized through memberships but still sees demo data. The unauthenticated demo stays non-production only.
+5. **Hosted:** migration plan, encrypted live backup, compatibility window, rehearsal on a hosted-like copy. Nothing is applied anywhere hosted.

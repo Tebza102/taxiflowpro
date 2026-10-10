@@ -405,3 +405,24 @@ Prepared. Installation is a human step.
 **Integration gaps:** API routes, `dataGateway` direct access, `userLifecycle` membership management, hosted migration plan. See `tenant-design.md`.
 
 **Next action:** `next-action.md` → 1f.
+
+### 2026-10-10 08:08 — Tenant-aware server authorization (local only; Task 12)
+
+**Changed by:** Claude Code (agent). Local synthetic environment only; no push, hosted, live or deploy.
+
+**Steps (SAST):**
+- 07:46 — Preflight: branch `agent/tenant-db-foundation` @ `248a662`, tree clean.
+- 07:47 — Revoked `service_role` (plus `public`/`anon`) EXECUTE on `set_business_membership` and `is_active_member`. After reset the ACL is `postgres=X/postgres authenticated=X/postgres`; `service_role` false. Marked the rollback "NOT A PRODUCTION RECOVERY PROCEDURE".
+- 07:48 — `api/_lib/tenantAuth.js`: token validation, caller-token membership read, explicit business selection, service role only after authorization. `snapshotLoader` rebuilt on it with role-scoped projection and no `taxiflow-live` fallback; appUsers-based `resolveRequester` removed; report preview meta includes `businessId`.
+- 07:50 — Report tests rewritten (stand-in Supabase serves memberships and gates snapshot reads on the service key): 35/35.
+- 07:51 — Synthetic finance records lacked `type`/`incomeKind`, so no report could be built; added them.
+- 07:53 — `server-auth-tests.mjs` hit a **real Task 11 defect**: the reassignment trigger named `new.user_id` in a combined expression, so every legitimate snapshot update failed. Fixed with per-table branches; added positive regression tests.
+- 07:56 — `server-auth-tests.mjs`: 26/26.
+- 07:56–08:04 — Final local sequence: reset, tenant access 35/35, rollback 8/8, verify 16 PASS/0 WARN, drill PASS. ACL rechecked after re-apply.
+- 08:05 — `node --test tests/*.test.mjs` 289/289; sync guards and build pass; `playwright test tests/reports.spec.js` 9/9 (mock); secret scan clean.
+
+**Lessons:** pair every denial test with a legitimate write of the same object; synthetic fixtures must match the real record contract (report lookup needs `type: income`, `incomeKind: standard`).
+
+**Gaps:** server write endpoint, membership-based user lifecycle/bootstrap, frontend gateway, hosted plan. See `tenant-design.md`.
+
+**Next action:** `next-action.md` → 1g.

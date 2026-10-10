@@ -550,3 +550,28 @@ Prepared. Installation is a human step.
 **Risks remaining:** `tenant-design.md` → Remaining pilot blockers after Task 18.
 
 **Next action:** `next-action.md` → 1m.
+
+### 2026-10-10 14:55 — Approved TaxiFlow branding (local only; Task 19)
+
+**Changed by:** Claude Code (agent). Local only. No push, hosted change or deploy.
+
+**Steps (SAST):**
+- 14:20 — Preflight @ `b2472be` (clean tree).
+- Originals saved to `assets/brand/source/`. Source resolution inspected: the symbol image is too small for 512 px icons, so icons use the identical, higher-resolution mark from the approved full logo (compared numerically).
+- `scripts/brand/generate-brand-assets.mjs` (ffmpeg) generated the logo, favicon.ico (16/32/48), Apple 180, PWA 192/512 and maskable 192/512 on white.
+- References updated: `index.html`, `manifest.webmanifest`, `sw.js` (cache v8), `App.jsx` (sign-in, picker, header), `styles.css` (landscape logo sizing, no drop shadow on the opaque logo), PDF header (72×41.7 pt). Old brand files removed.
+- Palette proposed with hex values and contrast ratios; awaiting approval and not applied.
+- Found by the branding checks and fixed (not branding defects):
+  - the Task 18 business picker overflowed at 375 px;
+  - Business access rows ran the name and email together;
+  - the tenant bar's business chip overflowed on mobile.
+
+**Tests run:**
+- `tests/branding.spec.js` 4/4 (logo proportions desktop/mobile, manifest and Apple icon sizes, white corners, favicon frames, logo in the A4 PDF).
+- `tests/localdb-browser/branding-tenant.spec.js` 2/2 (picker, Money, Business access; desktop and mobile).
+- Demo suite 32/32; tenant browser 9/9; report PDF/endpoint tests 23/23; Node 313/313; build pass.
+- PDF geometry was verified from the content stream; the browser pane could not render a zoomed page.
+
+**Not verified:** installation on a real device, and the home-screen icon on Android or iOS.
+
+**Next action:** `next-action.md` → 1n.

@@ -33,6 +33,19 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Approved branding applied (Task 19, local only)
+
+- The approved full logo and the TF symbol are stored in `assets/brand/source/`.
+- Generated assets are in place: logo, `favicon.ico` (16/32/48), Apple 180, PWA 192/512 and separate maskable icons, all on white.
+- They are used on sign-in, the business picker, the app header, the manifest, the service worker (cache v8) and the PDF.
+- The UI colour palette is **proposed, awaiting Tebogo's approval**; platform colours are unchanged.
+- Evidence:
+  - branding smoke checks: demo 4/4, tenant 2/2;
+  - demo suite 32/32, tenant browser 9/9, Node 313/313, build passes;
+  - the PDF logo was checked at 72×41.7 pt.
+- Installed-app icons were not tested on a real device.
+- Details: `project-os/03-design/brand-rules.md`.
+
 ### Pilot onboarding (Task 18, local only)
 
 Business memberships are now the only source of access, with one server path for changes.

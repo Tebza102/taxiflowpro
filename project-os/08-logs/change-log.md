@@ -593,3 +593,21 @@ Prepared. Installation is a human step.
 - Screenshots reviewed for login, finance (Money), Business access and reports, on desktop and mobile.
 
 **Outstanding:** PDF page visual inspection; installed-app icons on a real device; optional darker warning text tone.
+
+### 2026-10-10 16:25 — Pilot data loader, hosted release plan and warning contrast (local only; Task 20)
+
+**Changed by:** Claude Code (agent). Continued from `2bc9aa9`. No push, hosted change, DNS/email change or deploy.
+
+**Summary:**
+- **Warning tone:** `--warning-text #9B5D00` and `--warning-strong #8A5300` are used for warning text, warning chips and warning badges. Measured: note 5.30:1, chip 5.30–6.33:1. The bright `--warning` is kept for bars and strips.
+- **Loader:** `scripts/pilot/business-data-plan.mjs` (planner and atomic writer), `scripts/localdb/load-business-data.mjs` (local CLI), `scripts/localdb/lib/appRuntime.mjs` (the app's normalizers through Vite SSR), `scripts/pilot/business-data.example.json`.
+- **Proof:** `scripts/localdb/business-data-load-tests.mjs`.
+- **Defect found and fixed:** same-name drivers with distinct staffIds in one input were wrongly refused (the ambiguity check now looks only at existing drivers).
+- **Docs:** `project-os/05-build/pilot-business-data.md` (owner checklist, defaults, rules, evidence); `project-os/05-build/release-plan.md` (hosted plan, documents only).
+
+**Tests run:**
+- Loader 46/46 (fresh reset).
+- Onboarding 64/64 (fresh reset). It fails if run right after the loader tests on the same database, because both create the pilot slugs; this is expected state overlap.
+- `tests/branding.spec.js` 6/6 (including warning contrast); demo suite 34/34; Node 313/313; build pass.
+
+**Next action:** `next-action.md` → 1o.

@@ -33,6 +33,18 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Pilot data-load and hosted release preparation (Task 20, local only)
+
+- **Operator loader:** `scripts/localdb/load-business-data.mjs` (local only).
+  - Dry run by default; writes only with `--apply`, only to an existing business, in one version-checked write with one operator audit entry.
+  - An unchanged repeat writes nothing.
+  - It never touches money records, the directory, Auth users or memberships.
+  - Planning rules: `scripts/pilot/business-data-plan.mjs`.
+  - Proof: 46/46 locally on three synthetic businesses.
+- **Owner checklist and input format:** `project-os/05-build/pilot-business-data.md`. No real owner data has been collected.
+- **Hosted release plan (documents only, nothing executed):** `project-os/05-build/release-plan.md`. It covers the actual migration inventory, a hosted foundation variant, backup and recovery, mapping, cutover and old-client lockout, configuration, email and the rehearsal.
+- **Warning text:** now uses a darker warning tone (`#9B5D00`, 5.30:1); bright `#F39C12` stays for bars.
+
 ### Approved branding applied (Task 19, local only)
 
 - The approved full logo and the TF symbol are stored in `assets/brand/source/`.

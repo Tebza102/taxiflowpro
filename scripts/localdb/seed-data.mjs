@@ -92,7 +92,10 @@ export const buildBusinessBSnapshot = () => {
   }));
   snapshot.vehicles = snapshot.vehicles.map((vehicle) => ({ ...vehicle, id: `${vehicle.id}-b`, registration: `${vehicle.registration}-B` }));
   const toB = (staffId) => (staffId === "uat-drv-01" ? "uat-drv-b-01" : staffId);
-  snapshot.drivers = snapshot.drivers.map((driver) => ({ ...driver, staffId: toB(driver.staffId), email: "driver.b@example.com", name: "UAT Driver B" }));
+  snapshot.drivers = [
+    ...snapshot.drivers.map((driver) => ({ ...driver, staffId: toB(driver.staffId), email: "driver.b@example.com", name: "UAT Driver B" })),
+    { staffId: "uat-drv-b-owner", name: "UAT Owner B (drives)", email: "owner.b@example.com", route: "UAT Route A", role: "Driver" },
+  ];
   snapshot.financeTransactions = snapshot.financeTransactions.map((record) => ({ ...record, id: `${record.id}-b`, ...(record.driverStaffId ? { driverStaffId: toB(record.driverStaffId) } : {}) }));
   snapshot.dailyCashUps = snapshot.dailyCashUps.map((entry) => ({ ...entry, id: `${entry.id}-b`, driverStaffId: toB(entry.driverStaffId), driverName: "UAT Driver B" }));
   // The Owner of B also drives (membership driver linkage uat-drv-b-owner).

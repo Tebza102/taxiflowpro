@@ -5,6 +5,7 @@ import {
   summarizeDriverDayCash,
 } from "../../src/lib/cashUpContract.js";
 import { normalizeTripFinanceTransactions } from "../../src/lib/tripHistory.js";
+import { CAPTURE_ACTIONS } from "./financeCapture.js";
 import { createHttpError } from "./tenantAuth.js";
 
 // Scoped server-side finance actions. Pure: given the stored business snapshot,
@@ -27,6 +28,10 @@ export const FINANCE_ACTIONS = Object.freeze({
   "cashup.record_handin": { roles: ["Owner", "Admin"], fields: ["cashUpId", "actualCashReceived"] },
   "cashup.verify": { roles: ["Owner", "Manager"], fields: ["cashUpId", "actualCashReceived"] },
   "deposit.lock": { roles: ["Owner", "Manager"], fields: ["cashUpIds", "transactionIds"], requiresFinanceEdit: true },
+  // Capture (create only). Role/mode rules live in financeCapture.resolveMode:
+  // Driver -> own driver work; Owner with linkage -> driver or management;
+  // Owner/Admin/Manager -> management with finance edit (Owner always).
+  ...Object.fromEntries(Object.entries(CAPTURE_ACTIONS).map(([name, spec]) => [name, { roles: ["Owner", "Admin", "Manager", "Driver"], fields: spec.fields, capture: spec }])),
 });
 
 const ENVELOPE_FIELDS = ["action", "requestId", "expectedVersion", "fields"];
@@ -64,6 +69,15 @@ export const parseFinanceActionRequest = (body) => {
   if (unknown.length) throw createHttpError(400, `Unsupported fields for ${action}: ${unknown.join(", ")}.`);
 
   const parsed = {};
+  if (spec.capture) {
+    return {
+      action,
+      requestId: requestId.toLowerCase(),
+      expectedVersion,
+      fields: spec.capture.parse(fields),
+      requestHash: createHash("sha256").update(stable({ action, fields })).digest("hex"),
+    };
+  }
   if (spec.fields.includes("workDate")) {
     if (!DATE.test(text(fields.workDate))) throw createHttpError(400, "workDate must be YYYY-MM-DD.");
     parsed.workDate = text(fields.workDate);
@@ -186,6 +200,21 @@ export const applyFinanceAction = (storedSnapshot, request, requester, now = new
   }
 
   if (request.action === "deposit.lock") return lockDeposit(stored, request, requester, now);
+  if (spec.capture) {
+    const { record, audit, extra } = spec.capture.build(stored, request.fields, requester, now, request.requestId);
+    if ((stored.financeTransactions ?? []).some((item) => text(item.id) === record.id)) {
+      throw createHttpError(409, "This capture was already saved.");
+    }
+    return {
+      snapshot: {
+        ...stored,
+        financeTransactions: [record, ...(stored.financeTransactions ?? [])],
+        auditTrail: [auditEvent(requester, now, request.requestId, { scope: "finance", ...audit }), ...(stored.auditTrail ?? [])],
+      },
+      targetId: record.id,
+      response: { action: request.action, recordId: record.id, status: record.status, type: record.type, incomeKind: record.incomeKind ?? null, driverStaffId: record.driverStaffId, ...extra },
+    };
+  }
 
   // cashup.record_handin / cashup.verify
   const target = cashUps.find((entry) => text(entry.id) === request.fields.cashUpId);

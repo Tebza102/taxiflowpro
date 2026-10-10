@@ -24,7 +24,7 @@ import {
   removeComposeVolume,
 } from "./lib/exec.mjs";
 import { CLI_DISABLED_CONFIG, CLI_DISABLED_SENTINEL } from "./lib/localTarget.mjs";
-import { buildSeedSql } from "./seed-data.mjs";
+import { buildSeedSql, buildTenantSeedSql } from "./seed-data.mjs";
 
 const SOURCE = path.join(REPO_ROOT, "scripts", "localdb");
 export const MIGRATIONS_DIR = path.join(SOURCE, "migrations");
@@ -79,6 +79,35 @@ export const start = () => {
 // Fresh volume -> wait for GoTrue to create auth.users -> apply migrations in
 // filename order -> optional synthetic seed. Only the local Compose volume is
 // ever removed (ownership label checked).
+// Migrations up to and including this file form the pre-tenant baseline (the
+// shape live has today). A seeded rebuild loads the legacy seed at that point,
+// so later migrations (tenant foundation) are always applied on top of existing
+// data, exactly like a real upgrade.
+export const LEGACY_BASELINE_LAST = "20261009232610_live_mirror_permissive_policies_known_insecure.sql";
+export const ROLLBACK_DIR = path.join(SOURCE, "rollback");
+
+const guardedSql = (sql) => {
+  assertLoopbackOnlyOrStop();
+  assertLocalDatabase();
+  return psql(sql);
+};
+
+export const applyMigrationFile = (file) => {
+  guardedSql(`begin;
+${readFileSync(path.join(MIGRATIONS_DIR, file), "utf8")}
+commit;
+`);
+  console.log(`[localdb] applied ${file}`);
+};
+
+export const applyRollbackFile = (file) => {
+  guardedSql(`begin;
+${readFileSync(path.join(ROLLBACK_DIR, file), "utf8")}
+commit;
+`);
+  console.log(`[localdb] rolled back with ${file}`);
+};
+
 export const rebuild = ({ seed }) => {
   prepare();
   compose(["down"]);
@@ -86,14 +115,25 @@ export const rebuild = ({ seed }) => {
   start();
   waitFor("auth.users (GoTrue migrations)", () => psql("select to_regclass('auth.users') is not null;", { allowFailure: true }).stdout.trim() === "t");
   const files = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith(".sql")).sort();
-  for (const file of files) {
-    psql(readFileSync(path.join(MIGRATIONS_DIR, file), "utf8").replace(/^/, "begin;\n") + "\ncommit;\n");
+  const legacy = files.filter((name) => name <= LEGACY_BASELINE_LAST);
+  const later = files.filter((name) => name > LEGACY_BASELINE_LAST);
+  // The marker migration must run before any guarded statement can pass.
+  for (const file of legacy) {
+    psql(`begin;
+${readFileSync(path.join(MIGRATIONS_DIR, file), "utf8")}
+commit;
+`);
     console.log(`[localdb] applied ${file}`);
   }
   assertLocalDatabase();
   if (seed) {
-    psql(buildSeedSql());
-    console.log("[localdb] synthetic seed loaded");
+    guardedSql(buildSeedSql());
+    console.log("[localdb] legacy synthetic seed loaded (single workspace, pre-tenant)");
+  }
+  for (const file of later) applyMigrationFile(file);
+  if (seed) {
+    guardedSql(buildTenantSeedSql());
+    console.log("[localdb] tenant synthetic seed loaded (business B, extra identities)");
   }
 };
 

@@ -1,19 +1,22 @@
 #!/usr/bin/env node
-// Synthetic export/restore drill for the isolated LOCAL TaxiFlow database.
+// Synthetic export/restore drill for the isolated LOCAL TaxiFlow database
+// (tenant schema: businesses, business_memberships, one snapshot per business).
 //
-// 1. Export (encrypted with gpg): the workspace row plus auth.users and
-//    auth.identities. Refuses if any account is not @example.com (synthetic only).
+// 1. Export (encrypted with gpg): every workspace row (with business_id),
+//    businesses, business_memberships, auth.users and auth.identities. Refuses
+//    if any account is not @example.com (synthetic only).
 // 2. Destroy: brand-new database volume; schema rebuilt from the repo migrations;
-//    no seed (auth.users and workspace_snapshots empty).
-// 3. Evidence step: restoring the snapshot BEFORE Auth must fail on the
-//    updated_by -> auth.users foreign key. That failure shows a snapshot-only
-//    backup is an incomplete recovery; it is never counted as a pass.
-// 4. Restore Auth users + identities, then the snapshot with its original
-//    updated_by.
-// 5. Compare: snapshot SHA-256 (canonical), keys, per-key counts, updated_at,
-//    updated_by; Auth user/identity counts and hashes; then sign in through the
-//    local API as every synthetic user and read the row as an app user.
-// Schema, Auth and snapshot recovery are reported separately.
+//    no seed.
+// 3. Evidence step: restoring snapshots BEFORE Auth/businesses must fail on a
+//    foreign key. That failure shows a snapshot-only backup is an incomplete
+//    recovery; it is never counted as a pass.
+// 4. Restore in dependency order: Auth users + identities, businesses,
+//    memberships, then snapshots with their original updated_by.
+// 5. Compare: per-snapshot SHA-256 (canonical), keys, per-key counts,
+//    updated_at, updated_by, business_id; businesses and memberships; Auth user
+//    and identity counts and hashes. Then sign in through the local API as every
+//    synthetic user and check tenant-scoped access.
+// Schema, Auth, tenant mapping and snapshot recovery are reported separately.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -21,8 +24,8 @@ import { randomBytes } from "node:crypto";
 import { createClient } from "@supabase/supabase-js";
 
 import { WORKDIR, assertLocalDatabase, assertLoopbackOnlyOrStop, psql } from "./lib/exec.mjs";
-import { authManifest, snapshotManifest } from "./lib/localTarget.mjs";
-import { LOCAL_TEST_PASSWORD, LOCAL_WORKSPACE_KEY, SEED_USERS } from "./seed-data.mjs";
+import { authManifest, snapshotManifest, stableStringify } from "./lib/localTarget.mjs";
+import { BUSINESS_A_ID, BUSINESS_B_ID, LOCAL_TEST_PASSWORD, SEED_USERS, TENANT_USERS } from "./seed-data.mjs";
 import { rebuild } from "./setup.mjs";
 
 const stamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -47,28 +50,49 @@ const dollarQuote = (text, tag) => {
   return `$${tag}$${text}$${tag}$`;
 };
 
+const guardedSql = (sql, options) => {
+  assertLoopbackOnlyOrStop();
+  assertLocalDatabase();
+  return psql(sql, options);
+};
+
 const exportBundle = () => {
   assertLocalDatabase();
   const out = psql(`select json_build_object(
-    'workspace', (select json_build_object('workspace_key', workspace_key, 'snapshot', snapshot, 'updated_at', updated_at, 'updated_by', updated_by) from public.workspace_snapshots where workspace_key = '${LOCAL_WORKSPACE_KEY}'),
+    'workspaces', (select coalesce(json_agg(json_build_object('workspace_key', workspace_key, 'snapshot', snapshot, 'updated_at', updated_at, 'updated_by', updated_by, 'business_id', business_id) order by workspace_key), '[]'::json) from public.workspace_snapshots),
+    'businesses', (select coalesce(json_agg(to_jsonb(b) order by b.id), '[]'::json) from public.businesses b),
+    'memberships', (select coalesce(json_agg(to_jsonb(m) order by m.business_id, m.user_id), '[]'::json) from public.business_memberships m),
     'users', (select coalesce(json_agg(to_jsonb(u) order by u.id), '[]'::json) from auth.users u),
     'identities', (select coalesce(json_agg(to_jsonb(i) order by i.id), '[]'::json) from auth.identities i)
   )::text;`).stdout.trim();
   return JSON.parse(out);
 };
 
-const nonGeneratedColumns = (table) =>
-  psql(`select string_agg(quote_ident(column_name), ',' order by ordinal_position) from information_schema.columns where table_schema = 'auth' and table_name = '${table}' and is_generated = 'NEVER';`).stdout.trim();
+const nonGeneratedColumns = (schema, table) =>
+  psql(`select string_agg(quote_ident(column_name), ',' order by ordinal_position) from information_schema.columns where table_schema = '${schema}' and table_name = '${table}' and is_generated = 'NEVER';`).stdout.trim();
 
-const restoreAuth = (bundle) => {
-  for (const [table, rows] of [["users", bundle.users], ["identities", bundle.identities]]) {
-    const columns = nonGeneratedColumns(table);
-    psql(`insert into auth.${table} (${columns}) select ${columns} from jsonb_populate_recordset(null::auth.${table}, ${dollarQuote(JSON.stringify(rows), "j")}::jsonb);`);
-  }
+// Rows are inserted from the export via jsonb_populate_recordset (generated
+// columns excluded). conflict = "do nothing" only for businesses, because the
+// tenant migration itself recreates the mapped legacy business.
+const restoreRows = (schema, table, rows, conflict = "") => {
+  const columns = nonGeneratedColumns(schema, table);
+  guardedSql(`insert into ${schema}.${table} (${columns}) select ${columns} from jsonb_populate_recordset(null::${schema}.${table}, ${dollarQuote(JSON.stringify(rows), "j")}::jsonb) ${conflict};`);
 };
 
-const restoreSnapshotSql = (workspace) =>
-  `insert into public.workspace_snapshots (workspace_key, snapshot, updated_at, updated_by) values (${dollarQuote(workspace.workspace_key, "k")}, ${dollarQuote(JSON.stringify(workspace.snapshot), "j")}::jsonb, ${dollarQuote(workspace.updated_at, "t")}::timestamptz, ${workspace.updated_by ? `${dollarQuote(workspace.updated_by, "u")}::uuid` : "null"});`;
+const restoreSnapshotsSql = (workspaces) =>
+  workspaces
+    .map(
+      (w) =>
+        `insert into public.workspace_snapshots (workspace_key, snapshot, updated_at, updated_by, business_id) values (${dollarQuote(w.workspace_key, "k")}, ${dollarQuote(JSON.stringify(w.snapshot), "j")}::jsonb, ${dollarQuote(w.updated_at, "t")}::timestamptz, ${w.updated_by ? `${dollarQuote(w.updated_by, "u")}::uuid` : "null"}, ${dollarQuote(w.business_id, "b")}::uuid);`,
+    )
+    .join("\n");
+
+const manifests = (bundle) => ({
+  snapshots: Object.fromEntries(bundle.workspaces.map((w) => [w.workspace_key, { ...snapshotManifest(w.snapshot), updated_at: new Date(w.updated_at).getTime(), updated_by: w.updated_by, business_id: w.business_id }])),
+  businesses: stableStringify(bundle.businesses.map((b) => [b.id, b.slug, b.name])),
+  memberships: stableStringify(bundle.memberships.map((m) => [m.business_id, m.user_id, m.role, m.driver_staff_id, m.active])),
+  auth: authManifest(bundle),
+});
 
 const report = { drillDir: DRILL_DIR, startedAt: new Date().toISOString() };
 const ok = (value) => (value ? "MATCH" : "DIFF");
@@ -79,81 +103,96 @@ try {
 
   // 1. Export ------------------------------------------------------------------
   const original = exportBundle();
-  if (!original.workspace) throw new Error("No workspace row to export; run setup.mjs reset first.");
-  const nonSynthetic = original.users.filter((user) => !String(user.email).endsWith("@example.com"));
-  if (nonSynthetic.length) throw new Error("Export contains non-synthetic accounts; refusing to run the drill.");
-  report.before = { snapshot: snapshotManifest(original.workspace.snapshot), auth: authManifest(original) };
+  if (original.workspaces.length < 2) throw new Error("Expected one snapshot per synthetic business; run setup.mjs reset first.");
+  if (original.users.some((user) => !String(user.email).endsWith("@example.com"))) {
+    throw new Error("Export contains non-synthetic accounts; refusing to run the drill.");
+  }
+  const before = manifests(original);
+  report.before = { snapshots: Object.keys(before.snapshots), businesses: original.businesses.length, memberships: original.memberships.length, auth: before.auth };
   gpg(["--symmetric", "--cipher-algo", "AES256", "--output", ENCRYPTED_FILE], JSON.stringify(original));
-  writeFileSync(path.join(DRILL_DIR, "manifest.json"), JSON.stringify(report.before, null, 2));
-  console.log(`1 export: snapshot ${report.before.snapshot.sha256.slice(0, 16)}… keys=${report.before.snapshot.keys.length}; auth users=${report.before.auth.users} identities=${report.before.auth.identities}; encrypted`);
+  writeFileSync(path.join(DRILL_DIR, "manifest.json"), JSON.stringify(before, null, 2));
+  console.log(`1 export: ${original.workspaces.length} snapshots, ${original.businesses.length} businesses, ${original.memberships.length} memberships, ${original.users.length} users; encrypted`);
 
   // 2. Destroy: fresh volume, schema from migrations only -------------------------
   rebuild({ seed: false });
   report.afterRebuild = {
     authUsers: Number(psql("select count(*) from auth.users;").stdout.trim()),
     workspaceRows: Number(psql("select count(*) from public.workspace_snapshots;").stdout.trim()),
+    memberships: Number(psql("select count(*) from public.business_memberships;").stdout.trim()),
     publicTables: psql("select string_agg(tablename, ',' order by tablename) from pg_tables where schemaname = 'public';").stdout.trim(),
   };
-  console.log(`2 rebuilt from migrations: tables=${report.afterRebuild.publicTables}; auth users=${report.afterRebuild.authUsers}; rows=${report.afterRebuild.workspaceRows}`);
+  console.log(`2 rebuilt from migrations: tables=${report.afterRebuild.publicTables}; auth users=${report.afterRebuild.authUsers}; snapshots=${report.afterRebuild.workspaceRows}; memberships=${report.afterRebuild.memberships}`);
 
   const bundle = JSON.parse(gpg(["--decrypt", ENCRYPTED_FILE]));
 
-  // 3. Evidence: snapshot before Auth --------------------------------------------
-  assertLocalDatabase();
-  const early = psql(restoreSnapshotSql(bundle.workspace), { allowFailure: true });
-  report.snapshotBeforeAuth = early.status === 0 ? "UNEXPECTED: succeeded" : `refused (incomplete recovery): ${(early.stderr || "").trim().split(/\r?\n/)[0]}`;
-  if (early.status === 0) psql(`delete from public.workspace_snapshots where workspace_key = '${LOCAL_WORKSPACE_KEY}';`);
-  console.log(`3 snapshot before Auth: ${report.snapshotBeforeAuth}`);
+  // 3. Evidence: snapshots before Auth/businesses ---------------------------------
+  const early = guardedSql(restoreSnapshotsSql(bundle.workspaces), { allowFailure: true });
+  report.snapshotsBeforeAuth = early.status === 0 ? "UNEXPECTED: succeeded" : `refused (incomplete recovery): ${(early.stderr || "").trim().split(/\r?\n/)[0]}`;
+  if (early.status === 0) guardedSql("delete from public.workspace_snapshots;");
+  console.log(`3 snapshots before Auth/businesses: ${report.snapshotsBeforeAuth}`);
 
-  // 4. Restore Auth, then snapshot -----------------------------------------------
-  assertLocalDatabase();
-  restoreAuth(bundle);
-  psql(restoreSnapshotSql(bundle.workspace));
+  // 4. Restore in dependency order -----------------------------------------------
+  restoreRows("auth", "users", bundle.users);
+  restoreRows("auth", "identities", bundle.identities);
+  restoreRows("public", "businesses", bundle.businesses, "on conflict (id) do nothing");
+  restoreRows("public", "business_memberships", bundle.memberships);
+  guardedSql(restoreSnapshotsSql(bundle.workspaces));
 
   // 5. Compare -------------------------------------------------------------------
   const restored = exportBundle();
-  const snapshotAfter = snapshotManifest(restored.workspace.snapshot);
-  const authAfter = authManifest(restored);
-  report.after = { snapshot: snapshotAfter, auth: authAfter };
-  report.snapshotChecks = {
-    sha256: ok(snapshotAfter.sha256 === report.before.snapshot.sha256),
-    keys: ok(JSON.stringify(snapshotAfter.keys) === JSON.stringify(report.before.snapshot.keys)),
-    counts: ok(JSON.stringify(snapshotAfter.counts) === JSON.stringify(report.before.snapshot.counts)),
-    updated_at: ok(new Date(restored.workspace.updated_at).getTime() === new Date(original.workspace.updated_at).getTime()),
-    updated_by: ok(restored.workspace.updated_by === original.workspace.updated_by),
-  };
+  const after = manifests(restored);
+  report.snapshotChecks = Object.fromEntries(
+    Object.entries(before.snapshots).map(([key, m]) => {
+      const r = after.snapshots[key] ?? {};
+      return [key, {
+        sha256: ok(r.sha256 === m.sha256),
+        keys: ok(stableStringify(r.keys) === stableStringify(m.keys)),
+        counts: ok(stableStringify(r.counts) === stableStringify(m.counts)),
+        updated_at: ok(r.updated_at === m.updated_at),
+        updated_by: ok(r.updated_by === m.updated_by),
+        business_id: ok(r.business_id === m.business_id),
+      }];
+    }),
+  );
+  report.tenantChecks = { businesses: ok(after.businesses === before.businesses), memberships: ok(after.memberships === before.memberships) };
   report.authChecks = {
-    users: ok(authAfter.users === report.before.auth.users && authAfter.usersSha256 === report.before.auth.usersSha256),
-    identities: ok(authAfter.identities === report.before.auth.identities && authAfter.identitiesSha256 === report.before.auth.identitiesSha256),
+    users: ok(after.auth.users === before.auth.users && after.auth.usersSha256 === before.auth.usersSha256),
+    identities: ok(after.auth.identities === before.auth.identities && after.auth.identitiesSha256 === before.auth.identitiesSha256),
   };
 
-  const { apiUrl, ANON_KEY } = assertLocalDatabase();
+  const { apiUrl, ANON_KEY, SERVICE_ROLE_KEY } = assertLocalDatabase();
   report.access = {};
-  for (const user of SEED_USERS) {
+  const signedIn = {};
+  for (const user of [...SEED_USERS, ...TENANT_USERS]) {
     const client = createClient(apiUrl, ANON_KEY, { auth: { persistSession: false } });
     const { error } = await client.auth.signInWithPassword({ email: user.email, password: LOCAL_TEST_PASSWORD });
     report.access[user.email] = error ? `sign-in FAILED: ${error.message}` : "sign-in ok";
-    if (!error && user.role === "Owner") {
-      const read = await client.from("workspace_snapshots").select("workspace_key, updated_at");
-      report.access.ownerAppRead = read.data?.length === 1 ? "1 row" : `FAILED: ${read.error?.message ?? "no row"}`;
-    }
+    signedIn[user.email] = client;
   }
-  const anon = createClient(apiUrl, ANON_KEY, { auth: { persistSession: false } });
-  const anonRead = await anon.from("workspace_snapshots").select("workspace_key");
-  report.access.anonRead = anonRead.error ? `denied (${anonRead.error.code})` : `NOT DENIED (${anonRead.data?.length} rows)`;
+  const ownerABiz = await signedIn["owner@example.com"].from("businesses").select("id");
+  report.access.ownerASeesOnlyA = !ownerABiz.error && ownerABiz.data.length === 1 && ownerABiz.data[0].id === BUSINESS_A_ID;
+  const ownerBBiz = await signedIn["owner.b@example.com"].from("businesses").select("id");
+  report.access.ownerBSeesOnlyB = !ownerBBiz.error && ownerBBiz.data.length === 1 && ownerBBiz.data[0].id === BUSINESS_B_ID;
+  const direct = await signedIn["driver@example.com"].from("workspace_snapshots").select("workspace_key");
+  report.access.driverDirectSnapshotRead = direct.error ? `denied (${direct.error.code})` : `NOT DENIED (${direct.data?.length})`;
+  const server = createClient(apiUrl, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+  const serverRead = await server.from("workspace_snapshots").select("workspace_key");
+  report.access.serverReadsSnapshots = serverRead.error ? `FAILED: ${serverRead.error.message}` : `${serverRead.data.length} rows`;
   assertLoopbackOnlyOrStop();
 
-  const signInsOk = SEED_USERS.every((user) => report.access[user.email] === "sign-in ok");
+  const allMatch = (obj) => Object.values(obj).every((v) => (typeof v === "object" ? allMatch(v) : v === "MATCH"));
+  const signInsOk = [...SEED_USERS, ...TENANT_USERS].every((user) => report.access[user.email] === "sign-in ok");
   report.result = {
-    schema: report.afterRebuild.publicTables === "workspace_snapshots" ? "RECOVERED from repo migrations (not from the backup)" : "FAIL",
-    auth: Object.values(report.authChecks).every((v) => v === "MATCH") && signInsOk ? "RECOVERED: users + identities from the export; all synthetic sign-ins work" : "FAIL",
-    snapshot: Object.values(report.snapshotChecks).every((v) => v === "MATCH") && report.access.ownerAppRead === "1 row" ? "RECOVERED: hash, keys, counts, updated_at, updated_by match; app read ok" : "FAIL",
-    snapshotOnlyBackup: report.snapshotBeforeAuth.startsWith("refused") ? "INCOMPLETE: refused without Auth (expected evidence)" : "UNEXPECTED",
+    schema: report.afterRebuild.publicTables === "business_memberships,businesses,workspace_snapshots" ? "RECOVERED from repo migrations (not from the backup)" : "FAIL",
+    auth: allMatch(report.authChecks) && signInsOk ? "RECOVERED: users + identities from the export; all synthetic sign-ins work" : "FAIL",
+    tenants: allMatch(report.tenantChecks) && report.access.ownerASeesOnlyA && report.access.ownerBSeesOnlyB ? "RECOVERED: businesses + memberships match; tenant-scoped visibility holds" : "FAIL",
+    snapshots: allMatch(report.snapshotChecks) && report.access.serverReadsSnapshots === `${original.workspaces.length} rows` && report.access.driverDirectSnapshotRead.startsWith("denied") ? "RECOVERED: per-business hash, keys, counts, updated_at, updated_by, business_id match; browser still denied, server reads" : "FAIL",
+    snapshotOnlyBackup: report.snapshotsBeforeAuth.startsWith("refused") ? "INCOMPLETE: refused without Auth/businesses (expected evidence)" : "UNEXPECTED",
     notCovered: "Auth sessions/refresh tokens/MFA/audit tables, storage, and any hosted-project configuration",
   };
   console.log("4 snapshot checks:", JSON.stringify(report.snapshotChecks));
-  console.log("4 auth checks:", JSON.stringify(report.authChecks));
-  console.log("5 access:", JSON.stringify(report.access));
+  console.log("4 tenant checks:", JSON.stringify(report.tenantChecks), "auth checks:", JSON.stringify(report.authChecks));
+  console.log("5 access:", JSON.stringify({ ...report.access, signIns: signInsOk ? "all ok" : "FAILED" }, (k, v) => (k.includes("@") ? undefined : v)));
   console.log("RESULT:", JSON.stringify(report.result, null, 1));
 } finally {
   rmSync(path.join(DRILL_DIR, PASSPHRASE_FILE), { force: true });

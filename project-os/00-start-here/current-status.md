@@ -33,6 +33,25 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### taxiflow.co.za delegation: LEGACY EXPOSURE IN PROGRESS (Task 29; 2026-10-10 ~20:30 UTC)
+
+- **Registry:** `serverHold` lifted; status `ok`; nameservers `ns3/ns5.za-dns.com` (updated 20:10 UTC by Tebogo).
+- **The za-dns zone already contains app records:**
+  - A @ `216.198.79.1`;
+  - CNAME `www` → `a1963e84e6a53d28.vercel-dns-017.com`.
+- **Email records are present and preserved** (not touched):
+  - MX `0 mail.taxiflow.co.za`;
+  - SPF `v=spf1 +a +mx +ip4:164.160.91.17 include:spf.zamailgate.com ~all`;
+  - DKIM `default._domainkey`;
+  - DMARC `p=none`;
+  - `mail`, `webmail`, `cpanel`, `ftp`, `autodiscover` and `autoconfig` → 164.160.91.17.
+- **Vercel production is still the legacy build `008ce8e`.** Via the Vercel edge, `http://taxiflow.co.za` serves it (asset `index-DguJu-LE.js`, identical to `taxiflowpro.vercel.app`).
+- **Delegation propagation:** 1.1.1.1 already resolves the apex; 8.8.8.8 not yet. **So the legacy app is publicly reachable on this domain**, and Vercel will issue a certificate automatically.
+- **Change made (authorized):** Vercel project `taxiflowpro`: `www.taxiflow.co.za` redirects **308** to `taxiflow.co.za`.
+- **Not done (needs Tebogo):**
+  - binding the apex to a hold branch was refused by Vercel (the branch must exist; creating it needs a push);
+  - **detaching the apex from the project was blocked by the agent permission policy.**
+
 ### Domain taxiflow.co.za added to the release scope (Task 28; read-only inspection; nothing changed)
 
 - **Registry:** registered via Absolute Hosting (expires 2027-03-26) but on **`serverHold`**. It resolves nowhere (NXDOMAIN at the co.za registry, 1.1.1.1 and 8.8.8.8).

@@ -1,5 +1,17 @@
 # Next Action
 
+## URGENT (2026-10-10 ~20:30 UTC, Task 29): stop taxiflow.co.za serving the legacy app
+
+**Tebogo, now:** in Vercel → project `taxiflowpro` → Settings → Domains → `taxiflow.co.za` → **Remove**.
+- The domain stays verified in the team, and the DNS records can stay as they are.
+- Vercel then answers 404 for this host, and `www` (308) leads to that 404.
+- Alternatively, allow the agent to run the detach.
+
+**At activation** (release row 5a, once the maintenance page or the tenant build is in production):
+1. Re-attach `taxiflow.co.za` to `taxiflowpro` as a production domain.
+2. Re-read Vercel's required values and compare them with the zone.
+3. Verify HTTPS and the redirects.
+
 ## Immediate Next Step (updated 2026-10-10, Task 28)
 
 `taxiflow.co.za` is in the release scope. The proposed changes are in `05-build/pilot-release-checklist.md` section 5 and are **not applied**.

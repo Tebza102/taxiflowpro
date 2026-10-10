@@ -852,3 +852,28 @@ Prepared. Installation is a human step.
 **Tests run:** none needed (documents only; no code change).
 
 **Next action:** `next-action.md` (Task 28).
+
+### 2026-10-10 20:30 — taxiflow.co.za delegation: www redirect set; legacy exposure found (Task 29)
+
+**Changed by:** Claude Code (agent), with Tebogo's authorization for Vercel records and the www redirect. No purchase, nameserver change, deploy or zone edit.
+
+**Actual changes:**
+- Vercel project `taxiflowpro`: `www.taxiflow.co.za` → redirect to `taxiflow.co.za`, **308**.
+- Before: no redirect, production branch. After: redirect 308, production branch.
+
+**Attempted, not applied:**
+- Apex `gitBranch=domain-hold-no-deploy`: Vercel 400 (the branch does not exist in Git).
+- Detach the apex from the project: blocked by the agent permission policy.
+
+**Findings:**
+- WHOIS status `ok`, nameservers `ns3/ns5.za-dns.com`.
+- The zone already has A @ `216.198.79.1` and CNAME `www` (Vercel), plus a complete email set (preserved, not touched).
+- Production is the legacy `008ce8e`, and the apex serves it via the Vercel edge.
+- 1.1.1.1 resolves the apex from about 20:30 UTC.
+
+**Blocker:** the apex must be detached from the project (or the zone's A and CNAME removed) until release row 5a.
+
+**Tests run:**
+- DNS queries direct to ns3/ns5, the co.za servers, 1.1.1.1 and 8.8.8.8;
+- HTTP probe via the Vercel edge (`--resolve`);
+- Vercel API reads before and after the change.

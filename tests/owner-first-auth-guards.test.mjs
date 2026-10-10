@@ -47,25 +47,27 @@ test("user lifecycle module protects Owner identities and supports deleting non-
   assert.match(source, /supabase\.auth\.admin\.deleteUser/);
 });
 
-test("production reset requires explicit destructive confirmation and bootstraps one Owner", async () => {
-  const source = await read("scripts/reset-production-users.mjs");
-
-  assert.match(source, /RESET_TAXIFLOW_PRODUCTION_USERS/);
-  assert.match(source, /role: "Owner"/);
-  assert.match(source, /appUsers: \[ownerRecord\]/);
-  assert.match(source, /accessPassword: null/);
-});
-
-test("production reset clears workspace auth-user foreign keys before deleting old users", async () => {
-  const source = await read("scripts/reset-production-users.mjs");
-
-  assert.match(source, /select\("workspace_key, updated_by"\)/);
-  assert.match(source, /update\(\{ updated_by: null \}\)/);
-
-  const clearIndex = source.indexOf('update({ updated_by: null })');
-  const deleteIndex = source.indexOf('supabase.auth.admin.deleteUser(user.id)');
-
-  assert.ok(clearIndex >= 0, "expected workspace updated_by cleanup");
-  assert.ok(deleteIndex >= 0, "expected old Auth user deletion");
-  assert.ok(clearIndex < deleteIndex, "workspace foreign-key cleanup must happen before Auth deletion");
+test("legacy production-user scripts are retired: they stop before any setting or network access", async () => {
+  const { spawnSync } = await import("node:child_process");
+  for (const script of ["scripts/reset-production-users.mjs", "scripts/reconcile-production-users.mjs"]) {
+    const source = await read(script);
+    assert.doesNotMatch(source, /^\s*import\s/m, `${script} imports nothing`);
+    assert.doesNotMatch(source, /process\.env|fetch\(|createClient/, `${script} reads no settings and opens no connection`);
+    // Even with every old setting and the old confirmation present, it exits at once.
+    const result = spawnSync(process.execPath, [new URL(`../${script}`, import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1"), "--confirm"], {
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        SUPABASE_URL: "https://vfxftviwteypasredjgm.supabase.co",
+        SUPABASE_SERVICE_ROLE_KEY: "not-a-real-key",
+        TAXIFLOW_CONFIRM_OWNER_RESET: "RESET_TAXIFLOW_PRODUCTION_USERS",
+        TAXIFLOW_BOOTSTRAP_OWNER_EMAIL: "owner@example.com",
+        TAXIFLOW_BOOTSTRAP_OWNER_PASSWORD: "not-a-real-password",
+      },
+    });
+    assert.equal(result.status, 2, `${script} exits with status 2`);
+    assert.match(result.stderr, /RETIRED: .* is disabled and does nothing/);
+    assert.equal(result.stdout, "");
+  }
 });

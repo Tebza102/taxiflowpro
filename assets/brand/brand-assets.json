@@ -1,0 +1,98 @@
+{
+  "source": {
+    "file": "assets/brand/source/taxiflow-logo-full-approved.webp",
+    "width": 1448,
+    "height": 1086
+  },
+  "outputs": [
+    {
+      "file": "public/brand/taxiflow-logo.png",
+      "width": 1268,
+      "height": 735,
+      "use": "login, app header, reports and PDF (full logo, native resolution)"
+    },
+    {
+      "file": "public/brand/favicon-16.png",
+      "width": 16,
+      "height": 16,
+      "symbolWidth": 16,
+      "symbolHeight": 7,
+      "use": "favicon.ico frame"
+    },
+    {
+      "file": "public/brand/favicon-32.png",
+      "width": 32,
+      "height": 32,
+      "symbolWidth": 32,
+      "symbolHeight": 15,
+      "use": "favicon.ico frame"
+    },
+    {
+      "file": "public/brand/favicon-48.png",
+      "width": 48,
+      "height": 48,
+      "symbolWidth": 48,
+      "symbolHeight": 22,
+      "use": "favicon.ico frame"
+    },
+    {
+      "file": "public/brand/apple-touch-icon.png",
+      "width": 180,
+      "height": 180,
+      "symbolWidth": 152,
+      "symbolHeight": 69,
+      "use": "Apple touch icon (iOS rounds the corners)"
+    },
+    {
+      "file": "public/brand/icon-192.png",
+      "width": 192,
+      "height": 192,
+      "symbolWidth": 168,
+      "symbolHeight": 76,
+      "use": "PWA icon, purpose any"
+    },
+    {
+      "file": "public/brand/icon-512.png",
+      "width": 512,
+      "height": 512,
+      "symbolWidth": 448,
+      "symbolHeight": 203,
+      "use": "PWA icon, purpose any"
+    },
+    {
+      "file": "public/brand/icon-maskable-192.png",
+      "width": 192,
+      "height": 192,
+      "symbolWidth": 133,
+      "symbolHeight": 60,
+      "use": "PWA icon, purpose maskable",
+      "safeZoneDiameter": 153.60000000000002,
+      "diagonal": 146
+    },
+    {
+      "file": "public/brand/icon-maskable-512.png",
+      "width": 512,
+      "height": 512,
+      "symbolWidth": 358,
+      "symbolHeight": 162,
+      "use": "PWA icon, purpose maskable",
+      "safeZoneDiameter": 409.6,
+      "diagonal": 393
+    },
+    {
+      "file": "public/favicon.ico",
+      "width": 48,
+      "height": 48,
+      "frames": [
+        16,
+        32,
+        48
+      ]
+    }
+  ],
+  "symbol": {
+    "width": 873,
+    "height": 396,
+    "aspect": 2.205
+  }
+}

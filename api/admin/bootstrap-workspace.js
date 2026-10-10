@@ -1,11 +1,7 @@
-import { createServiceClient } from "../_lib/userLifecycle.js";
-import { bootstrapWorkspace } from "../_lib/workspaceBootstrap.js";
-import { resolveServerWorkspaceKey } from "../_lib/workspaceKey.js";
-
-const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const WORKSPACE_KEY = resolveServerWorkspaceKey();
-
+// Retired legacy route. Businesses and their first Owner are created only by the
+// operator onboarding procedures; access comes only from business memberships.
+// This route no longer depends on any environment setting, so no configuration
+// can bring back the legacy taxiflow-live bootstrap.
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -18,60 +14,8 @@ const createResponse = (body, status = 200) =>
     headers: { "Content-Type": "application/json", ...corsHeaders },
   });
 
-export async function POST(req) {
-  // Tenant mode: access comes only from business memberships, managed through
-  // POST /api/business/members (Owner) and the operator onboarding procedure.
-  if (process.env.TAXIFLOW_TENANT_MODE === "true") {
-    return createResponse({ ok: false, error: "Workspace bootstrap are managed through business access in this deployment." }, 410);
-  }
-
-  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-    return createResponse({ ok: false, error: "Server configuration incomplete" }, 503);
-  }
-
-  const authHeader = req.headers.get("authorization");
-  if (!authHeader?.toLowerCase().startsWith("bearer ")) {
-    return createResponse({ ok: false, error: "Missing or invalid authorization header" }, 401);
-  }
-
-  const token = authHeader.slice(7).trim();
-  if (!token) {
-    return createResponse({ ok: false, error: "Empty bearer token" }, 401);
-  }
-
-  const supabase = createServiceClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser(token);
-
-  if (userError || !user?.email) {
-    return createResponse({ ok: false, error: "Invalid or expired session token" }, 401);
-  }
-
-  let body;
-  try {
-    body = await req.json();
-  } catch {
-    return createResponse({ ok: false, error: "Invalid request body" }, 400);
-  }
-
-  let result;
-  try {
-    result = await bootstrapWorkspace({
-      supabase,
-      workspaceKey: WORKSPACE_KEY,
-      requesterEmail: user.email,
-      clientSnapshot: body?.snapshot ?? null,
-    });
-  } catch (error) {
-    return createResponse(
-      { ok: false, error: error?.message ?? "Unexpected server error during workspace bootstrap" },
-      500,
-    );
-  }
-
-  return createResponse(result, result.status ?? (result.ok ? 200 : 400));
+export async function POST() {
+  return createResponse({ ok: false, error: "Workspace bootstrap is managed through business access in this deployment." }, 410);
 }
 
 export async function OPTIONS() {

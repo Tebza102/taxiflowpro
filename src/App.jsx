@@ -304,7 +304,7 @@ function App() {
   // Prevents the generic persistence effect from firing a redundant, uncoordinated
   // second write for the same mutation.
   const skipNextGenericPersistRef = useRef(false);
-  // Tenant mode (VITE_TENANT_MODE): the last snapshot the server returned. A local
+  // Tenant mode (always on for hosted builds): the last snapshot the server returned. A local
   // change with no tenant server action is reverted to it, never saved.
   const tenantServerSnapshotRef = useRef(null);
   const [tenantMeta, setTenantMeta] = useState(null);

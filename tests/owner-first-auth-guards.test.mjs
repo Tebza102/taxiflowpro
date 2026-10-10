@@ -30,13 +30,13 @@ test("live snapshot persistence strips local seed users and plaintext credential
   assert.match(source, /sanitizeLiveSnapshot\(snapshot\)/);
 });
 
-test("Supabase account API routes delete/update actions to the user lifecycle module", async () => {
-  const source = await read("api/admin/auth-users.js");
-
-  assert.match(source, /"delete"/);
-  assert.match(source, /from "\.\.\/_lib\/userLifecycle\.js"/);
-  assert.match(source, /deleteUser\(shared\)/);
-  assert.match(source, /updateUser\(/);
+test("legacy account and bootstrap routes are retired unconditionally (no env switch)", async () => {
+  for (const route of ["api/admin/auth-users.js", "api/admin/bootstrap-workspace.js"]) {
+    const source = await read(route);
+    assert.match(source, /410\)/);
+    assert.doesNotMatch(source, /process\.env/);
+    assert.doesNotMatch(source, /SERVICE_ROLE|userLifecycle|workspaceBootstrap|createClient/);
+  }
 });
 
 test("user lifecycle module protects Owner identities and supports deleting non-owners", async () => {

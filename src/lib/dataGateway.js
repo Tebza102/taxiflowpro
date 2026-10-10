@@ -10,7 +10,7 @@ import { configuredBackendMode, hasSupabaseConfig, supabase } from "./supabaseCl
 import { logStartupError, logStartupEvent } from "./runtimeDiagnostics";
 import { normalizeTripFinanceTransactions } from "./tripHistory";
 import { LIVE_WORKSPACE_KEY } from "./workspaceContract";
-import { clearTenantState, isTenantMode, loadWorkspace } from "./tenantWorkspace";
+import { LEGACY_LIVE_ACCESS_REFUSED, clearTenantState, isTenantMode, loadWorkspace } from "./tenantWorkspace";
 
 const DATA_MODE_STORAGE_KEY = "taxiflow-data-mode-v2";
 const DEMO_SNAPSHOT_STORAGE_KEY = "taxiflow-demo-snapshot-v1";
@@ -899,6 +899,10 @@ const canUseRemoteLiveData = () => hasSupabaseConfig && Boolean(supabase);
 let activeLiveSnapshotVersion = readStoredLiveSnapshotVersion();
 
 const getLiveSnapshotMeta = async () => {
+  // Hosted builds never touch workspace_snapshots directly (fail closed).
+  if (isTenantMode) {
+    return { updatedAt: null, error: new Error(LEGACY_LIVE_ACCESS_REFUSED) };
+  }
   if (!canUseRemoteLiveData()) {
     return { updatedAt: null, error: null };
   }
@@ -948,6 +952,9 @@ const getSupabaseSession = async () => {
 };
 
 const loadSupabaseLiveSnapshot = async () => {
+  if (isTenantMode) {
+    return attachStructuredResult(createLiveSnapshot(), { ok: false, warning: LEGACY_LIVE_ACCESS_REFUSED, error: new Error(LEGACY_LIVE_ACCESS_REFUSED) });
+  }
   const session = await getSupabaseSession();
   const cachedSnapshot = readStoredSnapshot(LIVE_SNAPSHOT_STORAGE_KEY);
   const backupSnapshot = readStoredSnapshot(LIVE_SNAPSHOT_BACKUP_STORAGE_KEY);
@@ -1084,6 +1091,10 @@ const loadSupabaseLiveSnapshot = async () => {
 };
 
 const persistSupabaseLiveSnapshot = async (snapshot, actorId = null) => {
+  // No whole-snapshot write and no pending queue in hosted builds (fail closed).
+  if (isTenantMode) {
+    return createStructuredResult(null, { ok: false, warning: LEGACY_LIVE_ACCESS_REFUSED });
+  }
   if (!canUseRemoteLiveData() || !snapshot) {
     return createStructuredResult(snapshot, { ok: true, warning: null });
   }

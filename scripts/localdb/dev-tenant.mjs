@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Runs the Vite dev server in tenant mode against the LOCAL synthetic stack only
-// (VITE_BACKEND_MODE=live, VITE_TENANT_MODE=true). Keys are read from the local
+// (VITE_BACKEND_MODE=live; hosted builds are always tenant). Keys are read from the local
 // stack's env file and passed through the child environment; nothing is printed.
 // Usage: node scripts/localdb/dev-tenant.mjs [port]   (default 5175, 127.0.0.1)
 import { spawn } from "node:child_process";
@@ -17,8 +17,6 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../
 const env = {
   ...process.env,
   VITE_BACKEND_MODE: "live",
-  VITE_TENANT_MODE: "true",
-  TAXIFLOW_TENANT_MODE: "true",
   VITE_SUPABASE_URL: status.apiUrl,
   VITE_SUPABASE_ANON_KEY: status.ANON_KEY,
   SUPABASE_URL: status.apiUrl,

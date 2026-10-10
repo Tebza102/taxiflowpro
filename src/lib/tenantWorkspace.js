@@ -1,7 +1,8 @@
 import { safeLocalStorageGet, safeLocalStorageRemove, safeLocalStorageSet } from "./browserRuntime";
-import { supabase } from "./supabaseClient";
+import { LEGACY_LIVE_ACCESS_REFUSED, resolveTenantMode } from "./securityMode.js";
+import { configuredBackendMode, hasSupabaseConfig, supabase } from "./supabaseClient";
 
-// Tenant-aware browser data path (VITE_TENANT_MODE=true). Reads come from
+// Tenant-aware browser data path (always on for hosted builds; see securityMode.js). Reads come from
 // GET /api/business/workspace (role-scoped, membership-authorized); writes are
 // explicit POST /api/business/finance-actions. There is no direct
 // workspace_snapshots access, no whole-snapshot save, no snapshot cache in
@@ -11,7 +12,8 @@ import { supabase } from "./supabaseClient";
 // the loaded version and pending request ids live in memory and are dropped
 // whenever the signed-in user or the selected business changes.
 
-export const isTenantMode = import.meta.env?.VITE_TENANT_MODE === "true";
+export const isTenantMode = resolveTenantMode({ hasSupabaseConfig, configuredBackendMode });
+export { LEGACY_LIVE_ACCESS_REFUSED };
 
 export const TENANT_UNSUPPORTED_MESSAGE =
   "This change is not available in the business workspace yet. Nothing was saved.";

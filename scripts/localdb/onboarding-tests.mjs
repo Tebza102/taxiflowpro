@@ -249,7 +249,6 @@ const managerStillA = await workspace(managerA, BUSINESS_A_ID);
 record(res.status === 200 && managerStillA.status === 200 && membership(BUSINESS_A_ID, managerAId) === managerAMembershipBefore, "removing access in Pilot One leaves Business A access intact", `${managerStillA.status}`);
 
 // --- 9. Legacy user and bootstrap routes are disabled in tenant mode ---------------------
-process.env.TAXIFLOW_TENANT_MODE = "true";
 const { POST: legacyUsers } = await import("../../api/admin/auth-users.js");
 const { POST: legacyBootstrap } = await import("../../api/admin/bootstrap-workspace.js");
 const legacyRequest = (body) => new Request("http://127.0.0.1:5175/api/admin/x", { method: "POST", headers: { authorization: `Bearer ${owner1.token}`, "content-type": "application/json" }, body: JSON.stringify(body) });

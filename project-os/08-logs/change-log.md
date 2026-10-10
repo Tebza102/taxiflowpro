@@ -877,3 +877,18 @@ Prepared. Installation is a human step.
 - DNS queries direct to ns3/ns5, the co.za servers, 1.1.1.1 and 8.8.8.8;
 - HTTP probe via the Vercel edge (`--resolve`);
 - Vercel API reads before and after the change.
+
+### 2026-10-10 20:28 UTC — Verification after reported removal: taxiflow.co.za STILL serves the legacy app (Task 30)
+
+**Changed by:** Claude Code (agent). Read-only checks only; no change made. Empty-branch workarounds stopped, as instructed.
+
+**Findings:**
+- **Vercel API:** project `taxiflowpro` (`prj_vYaxObYXR8imyMKRr951yLJ0XAh7`) still lists `taxiflow.co.za` as a production domain. It was created 2026-09-28 06:51 UTC, last updated 2026-09-28 14:25 UTC, so it has not been removed.
+- `www.taxiflow.co.za` still redirects 308 to the apex.
+- `http://taxiflow.co.za/` and `http://www.taxiflow.co.za/` return 308 to https.
+- `https://www.taxiflow.co.za/` returns 308 to `https://taxiflow.co.za/`.
+- `https://taxiflow.co.za/` presents a certificate for the wrong name (SEC_E_WRONG_PRINCIPAL). Ignoring the certificate, it serves **the legacy build** (`index-DguJu-LE.js`).
+
+**Result:** FAIL. The legacy app is still exposed on the domain.
+
+**Required:** remove `taxiflow.co.za` under Vercel → project `taxiflowpro` → Settings → Domains (not the team Domains page), then re-verify. Keep the zone records and the www redirect for reconnection at release row 5a.

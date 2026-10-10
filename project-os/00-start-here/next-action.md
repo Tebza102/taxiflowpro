@@ -1,5 +1,21 @@
 # Next Action
 
+## Immediate Next Step (updated 2026-10-10, Task 27)
+
+The local operational safeguards are done: the backup tool is tested (35/35) and the legacy production-user scripts are retired. **Nothing has been run against production.**
+
+**Tebogo:**
+1. **X1:** authorize the Vercel Pro upgrade ($20/month).
+2. **X2:** create the dedicated `apprigate.com` mailbox and type its password into Supabase SMTP yourself (checklist section 3).
+3. **Backup:**
+   - choose a backup passphrase (16+ characters, kept in a password manager);
+   - create `C:\Users\appri\taxiflow-recovery\backup.env` with the Session pooler settings (checklist section 4);
+   - authorize the first production export (checklist row 2).
+4. Authorize the release window (rows 1–13).
+5. Name the first pilot Owner.
+
+**Agent, after authorization:** run the checklist. The first production export is row 2, after the read-only pre-flight.
+
 ## Immediate Next Step (updated 2026-10-10, Task 26)
 
 P1 is applied locally (hosted builds are always tenant). Release file 04 is kept. Release decisions are in `05-build/pilot-release-checklist.md` sections 0, 3 and 4.

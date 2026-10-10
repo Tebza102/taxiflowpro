@@ -782,3 +782,46 @@ Prepared. Installation is a human step.
 - new keys with the server functions are proven only at the skip-domain deployment.
 
 **Next action:** `next-action.md` (Task 26).
+
+### 2026-10-10 21:30 — Encrypted operator backup tool and retired legacy user scripts (Task 27)
+
+**Changed by:** Claude Code (agent). Local only. No production backup, hosted change, purchase, push or deploy.
+
+**Base:** `24a58f77f735b3d324c1231fea07bf89231aaa54`.
+
+**Commits:**
+- `9f90e8a96331eb9d154930e968c8ce6ebf2e71c6`: backup tool and tests;
+- `e6634053e9b4c6ba287fe8bbbe304eacff8c0dbf`: legacy scripts retired;
+- plus this Project OS commit.
+
+**Files changed:**
+- `scripts/backup/backup.mjs`, `scripts/backup/lib/backupCore.mjs`, `backupCrypto.mjs`, `backupTarget.mjs` (new)
+- `scripts/localdb/backup-tests.mjs` (new), `tests/backup-tool.test.mjs` (new), `.gitignore`
+- `scripts/reset-production-users.mjs`, `scripts/reconcile-production-users.mjs` (retired), `tests/owner-first-auth-guards.test.mjs`
+- `project-os/05-build/pilot-release-checklist.md` (section 4 rewritten; rows X3, 2 and 13), `release-plan.md` (section 3 note), current-status, next-action
+
+**Summary:**
+- **Consistent export:** covers Auth, businesses, memberships, snapshots and the request log.
+- **Fail-closed validation:** completeness (end marker) and referential checks.
+- **Encryption and PASS:** in-memory AES-256-GCM; PASS only after the written file is read back, decrypted and matched; FAIL leaves no file.
+- **Morning check, verify, and restores:** a full restore into an empty project only, and a one-business restore of snapshot plus request log (memberships and Auth deliberately untouched).
+- **Hosted target guards:** env file outside the repo, host and user bound to the project ref, TLS, typed confirmation.
+- **Deviation:** AES-256-GCM via Node instead of gpg. Git's gpg on Windows cannot read a passphrase from a pipe (tested: "Bad file descriptor"), so it would have needed a passphrase file on disk.
+- **Legacy scripts:** both production-user scripts now exit 2 with a retirement message before any import or connection.
+
+**Tests run:**
+- backup-tests 35/35 (fresh reset);
+- unit tests 328/328 (8 new backup, 1 replaced retirement test);
+- sync guards pass;
+- build OK.
+- No `src/` or `api/` changes since `c50d984`, so the demo 34/34 and tenant browser 9/9 results from that commit still apply.
+
+**Result:** Pass (local).
+
+**Risks remaining:**
+- the hosted backup connection (Session pooler, Docker, TLS) is unproven until its first authorized run;
+- the recovery point is up to 24 hours;
+- the passphrase must be kept safe (losing it makes backups unrecoverable);
+- X1 and X2 still need authorization.
+
+**Next action:** `next-action.md` (Task 27).

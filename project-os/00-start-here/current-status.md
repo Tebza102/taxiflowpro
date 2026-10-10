@@ -33,6 +33,28 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Operational safeguards (Task 27; local only; nothing hosted)
+
+Started from verified HEAD `24a58f77f735b3d324c1231fea07bf89231aaa54` (clean worktree).
+
+- **Backup tool built:** `scripts/backup/backup.mjs`, commit `9f90e8a96331eb9d154930e968c8ce6ebf2e71c6`.
+  - Export is one read-only REPEATABLE READ transaction covering Auth users and identities, businesses, memberships, snapshots and the request log.
+  - Encryption is in memory (AES-256-GCM, scrypt key).
+  - PASS is recorded only after the written file is decrypted and matched; any failure logs FAIL and leaves no file.
+  - `check` is the morning alert.
+  - `restore` does a full restore into an empty project only, or one business's snapshot together with its request log.
+  - **Not run against production.**
+- **Proof:** `node scripts/localdb/backup-tests.mjs` 35/35 on a fresh local reset. It covers:
+  - export, verify and check;
+  - a database failure during export (FAIL, no file, check alerts);
+  - tampered, truncated and wrong-passphrase files rejected;
+  - full restore refused into a non-empty database;
+  - full restore into a rebuilt empty database: all tables match, all 11 accounts sign in with their original passwords, isolation holds, and a retried request is replayed, not re-applied;
+  - one-business restore leaves the other business, memberships and Auth untouched;
+  - no backup files in Git.
+- **Legacy production-user scripts retired:** commit `e6634053e9b4c6ba287fe8bbbe304eacff8c0dbf`. `reset-production-users.mjs` and `reconcile-production-users.mjs` print a retirement message and exit 2 with no imports, settings or connections. A test runs them with the old settings present.
+- **Release checklist section 4** now has the tested commands, evidence, recovery steps and limitations.
+
 ### P1 applied: hosted builds are always tenant (Task 26; local only; nothing hosted)
 
 - **Rule** (`src/lib/securityMode.js`): a build is a tenant build if it has real Supabase settings **or** is configured live. Only a build with no Supabase settings is the separate demo build (local demo data, no network data path).

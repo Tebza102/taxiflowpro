@@ -49,6 +49,8 @@ Run read-only SQL as the project owner and save the output to the encrypted evid
 
 ## 3. Encrypted backup with a consistent snapshot and request log
 
+> **2026-10-10:** this is implemented as `scripts/backup/backup.mjs` (AES-256-GCM in memory instead of gpg; see `pilot-release-checklist.md` section 4). The design notes below are kept for reference.
+
 - **One consistent read:** a single `REPEATABLE READ` (or `pg_dump --serializable-deferrable`) export of:
   - `workspace_snapshots` (all rows);
   - `businesses`, `business_memberships`, `finance_action_requests` (after cutover; before cutover, the snapshot only);

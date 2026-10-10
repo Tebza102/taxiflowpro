@@ -1,5 +1,17 @@
-const CACHE_NAME = "taxiflow-pro-v7";
-const APP_SHELL = ["/", "/manifest.webmanifest", "/pwa-192.png", "/pwa-512.png"];
+// v8: TaxiFlow branding (Task 19). The new cache name makes activation drop the
+// v7 cache, so installed apps fetch the new logo and icons.
+const CACHE_NAME = "taxiflow-pro-v8";
+const APP_SHELL = [
+  "/",
+  "/manifest.webmanifest",
+  "/favicon.ico",
+  "/brand/taxiflow-logo.png",
+  "/brand/icon-192.png",
+  "/brand/icon-512.png",
+  "/brand/icon-maskable-192.png",
+  "/brand/icon-maskable-512.png",
+  "/brand/apple-touch-icon.png",
+];
 const STATIC_ASSET_PATTERN =
   /\.(?:js|css|png|jpg|jpeg|svg|webp|gif|ico|woff2?|ttf|otf|json|webmanifest)$/i;
 const BLOCKED_PATH_PREFIXES = ["/api/", "/functions/", "/analytics/", "/platform/"];

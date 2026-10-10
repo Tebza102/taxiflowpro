@@ -117,11 +117,12 @@ button {
   width: 100%;
 }
 
-.auth-logo {
-  width: auto;
-  height: 11rem;
-  max-width: min(18rem, 72vw);
-  filter: drop-shadow(0 12px 24px rgba(11, 37, 69, 0.12));
+/* The approved full logo is landscape on an opaque white ground: size it by
+   width, keep its proportions, and no drop shadow (it would outline the box). */
+.brand-logo.auth-logo {
+  width: min(17rem, 72vw);
+  height: auto;
+  filter: none;
 }
 
 .auth-copy {
@@ -201,10 +202,13 @@ button {
   filter: drop-shadow(0 14px 28px rgba(11, 37, 69, 0.16));
 }
 
-.toolbar-logo {
+.brand-logo.toolbar-logo {
   width: auto;
-  height: 6rem;
-  filter: drop-shadow(0 10px 20px rgba(11, 37, 69, 0.14));
+  height: 4.5rem;
+  max-width: 40vw;
+  border-radius: 0.75rem;
+  background: #ffffff;
+  filter: none;
 }
 
 .brand-mark {
@@ -2784,4 +2788,23 @@ button {
   .reports-panel .action-button.primary {
     width: 100%;
   }
+}
+
+/* Tenant business selectors (picker card and business bar): long business
+   names must not widen the card beyond a phone screen. */
+.auth-card .finance-field,
+.finance-feedback .finance-field {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Long business names and emails wrap instead of overflowing on phones. */
+.tenant-bar .status-chip {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.tenant-access-detail {
+  overflow-wrap: anywhere;
 }

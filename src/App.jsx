@@ -5737,8 +5737,8 @@ function App() {
             <div className="brand-lockup compact">
               <img
                 className="brand-logo compact toolbar-logo"
-                src="/taxiflow-logo.png"
-                alt="TaxiFlow logo"
+                src="/brand/taxiflow-logo.png"
+                alt="TaxiFlow Pro"
               />
               <div>
                 <h1>{currentSnapshot.profile.fleetName}</h1>
@@ -5843,12 +5843,12 @@ function App() {
 
           {tenantLive && tenantMeta && (
             <div
-              className="finance-feedback"
+              className="finance-feedback tenant-bar"
               data-tone={tenantMeta.tenantNeedsSelection ? "warning" : "info"}
               data-testid="tenant-bar"
             >
               {tenantMeta.tenantNeedsSelection || (tenantMeta.businesses?.length ?? 0) > 1 ? (
-                <label className="field">
+                <label className="finance-field">
                   <span>Business</span>
                   <select
                     aria-label="Business"
@@ -5870,7 +5870,7 @@ function App() {
               )}
               {tenantOwnerDriver && (
                 <>
-                  <label className="field">
+                  <label className="finance-field">
                     <span>Capture as</span>
                     <select
                       aria-label="Capture as"
@@ -13612,7 +13612,7 @@ function SignInShell({
     <div className="auth-shell">
       <div className="auth-card">
         <div className="brand-lockup auth-brand">
-          <img className="brand-logo auth-logo" src="/taxiflow-logo.png" alt="TaxiFlow logo" />
+          <img className="brand-logo auth-logo" src="/brand/taxiflow-logo.png" alt="TaxiFlow Pro" />
         </div>
         <div className="auth-copy">
           <p className="eyebrow">Secure access</p>
@@ -13725,7 +13725,7 @@ function PasswordRecoveryShell({
     <div className="auth-shell">
       <div className="auth-card">
         <div className="brand-lockup auth-brand">
-          <img className="brand-logo auth-logo" src="/taxiflow-logo.png" alt="TaxiFlow logo" />
+          <img className="brand-logo auth-logo" src="/brand/taxiflow-logo.png" alt="TaxiFlow Pro" />
         </div>
         <div className="auth-copy">
           <p className="eyebrow">Password recovery</p>
@@ -13780,12 +13780,15 @@ function TenantBusinessPicker({ email, businesses, onSelect, onSignOut }) {
   return (
     <div className="auth-shell">
       <div className="auth-card" data-testid="tenant-picker">
+        <div className="brand-lockup auth-brand">
+          <img className="brand-logo auth-logo" src="/brand/taxiflow-logo.png" alt="TaxiFlow Pro" />
+        </div>
         <div className="auth-copy">
           <p className="eyebrow">Choose a business</p>
           <h1>Select a business</h1>
           <p>{email} belongs to more than one business. Choose the one to open.</p>
         </div>
-        <label className="field">
+        <label className="finance-field">
           <span>Business</span>
           <select aria-label="Business" value="" onChange={(event) => onSelect(event.target.value)}>
             <option value="">Select a business</option>

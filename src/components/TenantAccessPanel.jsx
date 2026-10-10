@@ -61,12 +61,12 @@ export default function TenantAccessPanel({ activeRole, currentUserEmail, onChan
         {(data?.members ?? []).map((member) => (
           <article key={member.userId} className="person-row" data-testid="access-row">
             <div>
-              <strong>{member.name}</strong>
-              <span>
+              <h3>{member.name}</h3>
+              <p className="tenant-access-detail">
                 {member.email} / {member.role}
                 {member.driverStaffId ? ` / driver profile ${member.driverStaffId}` : ""}
                 {member.active ? "" : " / access removed"}
-              </span>
+              </p>
             </div>
             {isOwner && member.role !== "Owner" && (
               <button
@@ -165,8 +165,8 @@ export default function TenantAccessPanel({ activeRole, currentUserEmail, onChan
           {(data?.driverProfiles ?? []).map((profile) => (
             <article key={profile.staffId} className="person-row" data-testid="driver-profile-row">
               <div>
-                <strong>{profile.name}</strong>
-                <span>{profile.signInLinked ? "Has a sign-in" : "No sign-in"}</span>
+                <h3>{profile.name}</h3>
+                <p>{profile.signInLinked ? "Has a sign-in" : "No sign-in"}</p>
               </div>
             </article>
           ))}

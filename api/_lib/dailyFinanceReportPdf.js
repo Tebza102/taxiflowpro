@@ -26,6 +26,7 @@ const LOGO_PATH = path.join(
   "..",
   "..",
   "public",
+  "brand",
   "taxiflow-logo.png",
 );
 
@@ -150,8 +151,9 @@ const drawFirstHeader = (ctx) => {
 
   if (existsSync(LOGO_PATH)) {
     try {
-      doc.image(LOGO_PATH, PAGE.margin, top, { fit: [40, 40] });
-      textX = PAGE.margin + 50;
+      // Full approved logo (landscape); fit keeps its proportions.
+      doc.image(LOGO_PATH, PAGE.margin, top, { fit: [72, 42] });
+      textX = PAGE.margin + 82;
     } catch {
       // Keep the text wordmark if the logo can't be decoded.
     }

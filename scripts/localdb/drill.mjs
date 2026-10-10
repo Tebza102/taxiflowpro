@@ -62,6 +62,7 @@ const exportBundle = () => {
     'workspaces', (select coalesce(json_agg(json_build_object('workspace_key', workspace_key, 'snapshot', snapshot, 'updated_at', updated_at, 'updated_by', updated_by, 'business_id', business_id) order by workspace_key), '[]'::json) from public.workspace_snapshots),
     'businesses', (select coalesce(json_agg(to_jsonb(b) order by b.id), '[]'::json) from public.businesses b),
     'memberships', (select coalesce(json_agg(to_jsonb(m) order by m.business_id, m.user_id), '[]'::json) from public.business_memberships m),
+    'requests', (select coalesce(json_agg(to_jsonb(q) order by q.business_id, q.request_id), '[]'::json) from public.finance_action_requests q),
     'users', (select coalesce(json_agg(to_jsonb(u) order by u.id), '[]'::json) from auth.users u),
     'identities', (select coalesce(json_agg(to_jsonb(i) order by i.id), '[]'::json) from auth.identities i)
   )::text;`).stdout.trim();
@@ -91,6 +92,9 @@ const manifests = (bundle) => ({
   snapshots: Object.fromEntries(bundle.workspaces.map((w) => [w.workspace_key, { ...snapshotManifest(w.snapshot), updated_at: new Date(w.updated_at).getTime(), updated_by: w.updated_by, business_id: w.business_id }])),
   businesses: stableStringify(bundle.businesses.map((b) => [b.id, b.slug, b.name])),
   memberships: stableStringify(bundle.memberships.map((m) => [m.business_id, m.user_id, m.role, m.driver_staff_id, m.active])),
+  // The finance request log is part of the backup so duplicate-request
+  // protection survives a restore.
+  requests: stableStringify((bundle.requests ?? []).map((q) => [q.business_id, q.request_id, q.user_id, q.action, q.target_id, q.request_hash])),
   auth: authManifest(bundle),
 });
 
@@ -111,7 +115,7 @@ try {
   report.before = { snapshots: Object.keys(before.snapshots), businesses: original.businesses.length, memberships: original.memberships.length, auth: before.auth };
   gpg(["--symmetric", "--cipher-algo", "AES256", "--output", ENCRYPTED_FILE], JSON.stringify(original));
   writeFileSync(path.join(DRILL_DIR, "manifest.json"), JSON.stringify(before, null, 2));
-  console.log(`1 export: ${original.workspaces.length} snapshots, ${original.businesses.length} businesses, ${original.memberships.length} memberships, ${original.users.length} users; encrypted`);
+  console.log(`1 export: ${original.workspaces.length} snapshots, ${original.businesses.length} businesses, ${original.memberships.length} memberships, ${(original.requests ?? []).length} request-log rows, ${original.users.length} users; encrypted`);
 
   // 2. Destroy: fresh volume, schema from migrations only -------------------------
   rebuild({ seed: false });
@@ -137,6 +141,7 @@ try {
   restoreRows("public", "businesses", bundle.businesses, "on conflict (id) do nothing");
   restoreRows("public", "business_memberships", bundle.memberships);
   guardedSql(restoreSnapshotsSql(bundle.workspaces));
+  if ((bundle.requests ?? []).length) restoreRows("public", "finance_action_requests", bundle.requests);
 
   // 5. Compare -------------------------------------------------------------------
   const restored = exportBundle();
@@ -154,7 +159,8 @@ try {
       }];
     }),
   );
-  report.tenantChecks = { businesses: ok(after.businesses === before.businesses), memberships: ok(after.memberships === before.memberships) };
+  report.tenantChecks = { businesses: ok(after.businesses === before.businesses), memberships: ok(after.memberships === before.memberships), requestLog: ok(after.requests === before.requests) };
+  report.requestLogRows = (original.requests ?? []).length;
   report.authChecks = {
     users: ok(after.auth.users === before.auth.users && after.auth.usersSha256 === before.auth.usersSha256),
     identities: ok(after.auth.identities === before.auth.identities && after.auth.identitiesSha256 === before.auth.identitiesSha256),
@@ -185,7 +191,7 @@ try {
   report.result = {
     schema: report.afterRebuild.publicTables === "business_memberships,businesses,finance_action_requests,workspace_snapshots" ? "RECOVERED from repo migrations (not from the backup)" : "FAIL",
     auth: allMatch(report.authChecks) && signInsOk ? "RECOVERED: users + identities from the export; all synthetic sign-ins work" : "FAIL",
-    tenants: allMatch(report.tenantChecks) && report.access.ownerASeesOnlyA && report.access.ownerBSeesOnlyB ? "RECOVERED: businesses + memberships match; tenant-scoped visibility holds" : "FAIL",
+    tenants: allMatch(report.tenantChecks) && report.access.ownerASeesOnlyA && report.access.ownerBSeesOnlyB ? `RECOVERED: businesses + memberships + finance request log (${report.requestLogRows} rows) match; tenant-scoped visibility holds` : "FAIL",
     snapshots: allMatch(report.snapshotChecks) && report.access.serverReadsSnapshots === `${original.workspaces.length} rows` && report.access.driverDirectSnapshotRead.startsWith("denied") ? "RECOVERED: per-business hash, keys, counts, updated_at, updated_by, business_id match; browser still denied, server reads" : "FAIL",
     snapshotOnlyBackup: report.snapshotsBeforeAuth.startsWith("refused") ? "INCOMPLETE: refused without Auth/businesses (expected evidence)" : "UNEXPECTED",
     notCovered: "Auth sessions/refresh tokens/MFA/audit tables, storage, and any hosted-project configuration",

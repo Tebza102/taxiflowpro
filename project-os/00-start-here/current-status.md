@@ -33,6 +33,20 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### P1 applied: hosted builds are always tenant (Task 26; local only; nothing hosted)
+
+- **Rule** (`src/lib/securityMode.js`): a build is a tenant build if it has real Supabase settings **or** is configured live. Only a build with no Supabase settings is the separate demo build (local demo data, no network data path).
+  - `VITE_TENANT_MODE` and `TAXIFLOW_TENANT_MODE` are removed; no flag can select the legacy path.
+  - This closes two holes in the old rule: a mock-configured build with real Supabase settings, and a live mode stored in the browser, could each reach the legacy path.
+- **Client fail-closed:** the three legacy functions that touch `workspace_snapshots` directly (`getLiveSnapshotMeta`, `loadSupabaseLiveSnapshot`, `persistSupabaseLiveSnapshot`) refuse in tenant builds before any network call. A test checks that every direct table access sits inside them.
+- **Server:** `/api/admin/auth-users` and `/api/admin/bootstrap-workspace` always return 410, with no environment dependence and no service-role code.
+- **Release file 04 kept;** order 01→02→03→04 unchanged. `assign-initial-owner` runs only if the pre-flight shows no active Owner. The function and planner refuse otherwise, which is tested.
+- **Release decisions recorded** in `05-build/pilot-release-checklist.md`:
+  - X1: no existing Vercel entitlement covers the pilot;
+  - X2: send through the existing `apprigate.com` mail, with no DNS change;
+  - X3: operator daily encrypted backup, whose script is not built yet.
+- **Legacy operator scripts flagged:** `scripts/reset-production-users.mjs` and `scripts/reconcile-production-users.mjs` still target the legacy `taxiflow-live` `appUsers` with a service key. They are not configuration or app paths and are never run in the release, but should be retired before go-live (separate task).
+
 ### Simple three-owner pilot (Task 25; local only; nothing hosted)
 
 **No separate hosted rehearsal and no extra spend.** The rehearsal decision pack and checklist are superseded by `05-build/pilot-release-checklist.md`, which covers the existing platform.

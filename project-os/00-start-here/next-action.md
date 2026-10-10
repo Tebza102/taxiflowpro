@@ -1,5 +1,21 @@
 # Next Action
 
+## Immediate Next Step (updated 2026-10-10, Task 26)
+
+P1 is applied locally (hosted builds are always tenant). Release file 04 is kept. Release decisions are in `05-build/pilot-release-checklist.md` sections 0, 3 and 4.
+
+**Tebogo:**
+1. **X1:** authorize the Vercel Pro upgrade of the `apprigate` team ($20/month). No existing entitlement covers commercial use.
+2. **X2:** authorize one dedicated mailbox on the existing `apprigate.com` mail hosting, and type its password into the Supabase SMTP settings yourself (section 3).
+3. **X3:** accept the operator daily backup (section 4), and authorize the agent to build and locally test the guarded backup script (no hosted run).
+4. Authorize the release window (checklist rows 1–13).
+5. Name the first pilot Owner.
+
+**Agent, next (only with authorization):**
+- build and locally test the backup script;
+- retire the legacy production-user scripts;
+- then the release window.
+
 ## Immediate Next Step (updated 2026-10-10, Task 25)
 
 **There is no separate hosted rehearsal and no extra spend.** The release follows `project-os/05-build/pilot-release-checklist.md` on the existing platform. Onboarding follows `project-os/11-client-delivery/first-owner-onboarding.md`.

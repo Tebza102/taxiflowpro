@@ -746,3 +746,39 @@ Prepared. Installation is a human step.
 - installed-app icons on real devices are still unverified.
 
 **Next action:** `next-action.md` (Task 25).
+
+### 2026-10-10 20:50 — P1: hosted builds always use tenant security; release decisions (Task 26)
+
+**Changed by:** Claude Code (agent). Local only. Read-only checks: Vercel team listing (CLI), DNS and SMTP TLS for apprigate.com, Supabase docs. No hosted change, purchase, push, deploy or DNS change.
+
+**Files changed:**
+- `src/lib/securityMode.js` (new), `src/lib/tenantWorkspace.js`, `src/lib/dataGateway.js`, `src/App.jsx` (comment)
+- `api/admin/auth-users.js`, `api/admin/bootstrap-workspace.js` (unconditional 410)
+- `scripts/localdb/dev-tenant.mjs`, `scripts/localdb/onboarding-tests.mjs` (flags removed)
+- `tests/tenant-security-mode.test.mjs` (new), `tests/owner-first-auth-guards.test.mjs`
+- `project-os/05-build/pilot-release-checklist.md`, `release-plan.md`, current-status, next-action
+
+**Summary:**
+- **Tenant rule:** tenant whenever Supabase settings exist or the build is configured live. The demo build is separate.
+- **Legacy direct snapshot functions** fail closed in tenant builds.
+- **Legacy admin routes** are always 410.
+- **Release file 04 and the migration order are kept;** Owner assignment runs only when no active Owner exists.
+- **Release decisions recorded:** X1 (Vercel Pro needed), X2 (existing apprigate.com mail), X3 (daily operator backup procedure; script not built).
+
+**Tests run:**
+- unit tests 321/321 (4 new);
+- sync guards pass;
+- build OK;
+- onboarding 64/64, including both legacy routes returning 410 with no flag set;
+- operator procedures 14/14, including the refusal when an active Owner exists;
+- tenant browser suite 9/9, run with no tenant flag;
+- **full demo Playwright suite 34/34**, run once after the final changes.
+
+**Result:** Pass (local).
+
+**Risks remaining:**
+- X1 and X2 need authorization; the X3 backup script is not built;
+- the legacy production-user scripts are still present;
+- new keys with the server functions are proven only at the skip-domain deployment.
+
+**Next action:** `next-action.md` (Task 26).

@@ -136,10 +136,10 @@ Vercel **Preview** environments get **no** production secret key.
 | Setting | Where | Value |
 |---|---|---|
 | `VITE_BACKEND_MODE` | build | `live` |
-| `VITE_TENANT_MODE` | build | `true` |
+| ~~`VITE_TENANT_MODE`~~ | — | **removed (P1, 2026-10-10):** every build with Supabase settings is a tenant build; no flag can select the legacy path |
 | `VITE_SUPABASE_URL` | build | the project URL |
 | `VITE_SUPABASE_ANON_KEY` | build (browser) | the **publishable** key `web` (the variable name is unchanged in code) |
-| `TAXIFLOW_TENANT_MODE` | server functions | `true` (legacy user and bootstrap routes return 410) |
+| ~~`TAXIFLOW_TENANT_MODE`~~ | — | **removed (P1):** the legacy user and bootstrap routes always return 410 |
 | `SUPABASE_URL` | server functions | the project URL |
 | `SUPABASE_ANON_KEY` | server functions | the publishable key `web` |
 | `SUPABASE_SERVICE_ROLE_KEY` | server functions, **Production only** | the secret key `vercel-production` (the variable name is unchanged in code) |

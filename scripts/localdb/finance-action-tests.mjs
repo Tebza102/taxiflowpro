@@ -155,8 +155,23 @@ record(r.status === 200 && r.json.status === "verified" && afterVerify.dailyCash
 // --- Driver submit (ownership from membership) ------------------------------------------------
 r = await post(driverA.token, action("cashup.submit", { workDate: "2026-10-02", driverStaffId: "uat-drv-b-01" }, BUSINESS_A_ID));
 record(r.status === 400, "a driver cannot pass a staff id (ownership comes from the membership)", `${r.status}`);
+// --- Owner-driver (one identity, Owner role kept, driver linkage from the membership) ---
+r = await post(ownerA.token, action("cashup.submit", { workDate: "2026-10-02" }, BUSINESS_A_ID));
+record(r.status === 403, "an Owner without a driver linkage cannot submit a day checking", `${r.status} ${r.json.error ?? ""}`);
+const stateBOwner = rowState(BUSINESS_B_ID);
 r = await post(ownerB.token, action("cashup.submit", { workDate: "2026-10-02" }, BUSINESS_B_ID));
-record(r.status === 403, "owner-driver (Owner role) cannot use the Driver-only submit (no new permission)", `${r.status}`);
+record(r.status === 409 && unchanged(BUSINESS_B_ID, stateBOwner), "owner-driver cannot submit another driver's day (no own records that day; nothing changed)", `${r.status} ${r.json.error ?? ""}`);
+r = await post(ownerB.token, action("cashup.submit", { workDate: "2026-10-03", driverStaffId: "uat-drv-b-01" }, BUSINESS_B_ID));
+record(r.status === 400, "owner-driver cannot pass a staff id", `${r.status}`);
+const driverBRecordsBefore = stableStringify(snapshotOf(BUSINESS_B_ID).financeTransactions.filter((t) => t.driverStaffId === "uat-drv-b-01"));
+r = await post(ownerB.token, action("cashup.submit", { workDate: "2026-10-03" }, BUSINESS_B_ID));
+const ownerDriverCashUp = snapshotOf(BUSINESS_B_ID).dailyCashUps.find((c) => c.id === r.json.cashUpId);
+record(
+  r.status === 200 && ownerDriverCashUp?.driverStaffId === "uat-drv-b-owner" && ownerDriverCashUp.checkedByRole === "Owner" && ownerDriverCashUp.checkedBy === ownerB.userId && r.json.expectedCashIn === 120,
+  "Owner B (owner-driver) submits its own day checking through one login",
+  `${r.status} ${r.json.cashUpId}`,
+);
+record(stableStringify(snapshotOf(BUSINESS_B_ID).financeTransactions.filter((t) => t.driverStaffId === "uat-drv-b-01")) === driverBRecordsBefore, "the other driver's records in Business B are untouched");
 r = await post(driverA.token, action("cashup.submit", { workDate: "2026-10-02" }, BUSINESS_A_ID));
 const submitted = snapshotOf(BUSINESS_A_ID).dailyCashUps.find((c) => c.id === r.json.cashUpId);
 record(r.status === 200 && submitted?.driverStaffId === "uat-drv-01" && submitted.status === "pending" && r.json.expectedCashIn === 250, "Driver A submits its own day checking", `${r.status} ${r.json.cashUpId}`);
@@ -173,11 +188,67 @@ const changedFinance = finalA.financeTransactions.filter((t, i) => stableStringi
 record(stableStringify(changedFinance.sort()) === stableStringify(["uat-fin-1", "uat-fin-2", "uat-fin-5"]), "only the linked finance records changed", changedFinance.join(", "));
 record(membershipsHash() === membersBefore && businessesHash() === businessesBefore, "memberships and businesses unchanged");
 record(sql(`select business_id from public.workspace_snapshots where workspace_key = 'taxiflow-live';`) === BUSINESS_A_ID, "business identity of the snapshot unchanged");
-record(logCount(BUSINESS_A_ID) === 3 && logCount(BUSINESS_B_ID) === 1, "request log holds exactly the applied actions", `A=${logCount(BUSINESS_A_ID)} B=${logCount(BUSINESS_B_ID)}`);
+record(logCount(BUSINESS_A_ID) === 3 && logCount(BUSINESS_B_ID) === 2, "request log holds exactly the applied actions", `A=${logCount(BUSINESS_A_ID)} B=${logCount(BUSINESS_B_ID)}`);
 const browserLog = await ownerA.client.from("finance_action_requests").select("request_id");
 record(Boolean(browserLog.error), "browser cannot read the request log", browserLog.error?.code);
 const browserCommit = await ownerA.client.rpc("commit_finance_action", { p_business_id: BUSINESS_A_ID, p_expected_updated_at: version(BUSINESS_A_ID), p_snapshot: {}, p_updated_by: ownerA.userId, p_request_id: randomUUID(), p_action: "x", p_target_id: "x", p_request_hash: "x", p_response: {} });
 record(Boolean(browserCommit.error) && unchanged(BUSINESS_A_ID, rowState(BUSINESS_A_ID)) && snapshotOf(BUSINESS_A_ID).appUsers?.length > 0, "browser cannot call the commit function directly", browserCommit.error?.code);
+
+// --- Banking (deposit.lock) ---------------------------------------------------------------------
+const BATCH = { cashUpIds: ["uat-cu-1"], transactionIds: ["uat-fin-1", "uat-fin-2", "uat-fin-3"] };
+let stateBank = rowState(BUSINESS_A_ID);
+const stateBBank = rowState(BUSINESS_B_ID);
+const depositsBefore = snapshotOf(BUSINESS_A_ID).deposits.length;
+r = await post(adminA.token, action("deposit.lock", BATCH, BUSINESS_A_ID));
+record(r.status === 403 && unchanged(BUSINESS_A_ID, stateBank), "Admin cannot bank (existing rule: Owner/Manager)", `${r.status}`);
+r = await post(driverA.token, action("deposit.lock", BATCH, BUSINESS_A_ID));
+record(r.status === 403 && unchanged(BUSINESS_A_ID, stateBank), "Driver cannot bank", `${r.status}`);
+r = await post(managerA.token, action("deposit.lock", { ...BATCH, transactionIds: [...BATCH.transactionIds, "uat-fin-3-b"] }, BUSINESS_A_ID));
+record(r.status === 404 && unchanged(BUSINESS_A_ID, stateBank) && unchanged(BUSINESS_B_ID, stateBBank), "a Business B record id in the batch is refused; neither business changes", `${r.status}`);
+r = await post(managerA.token, action("deposit.lock", { ...BATCH, transactionIds: [...BATCH.transactionIds, "uat-fin-6"] }, BUSINESS_A_ID));
+record(r.status === 409 && unchanged(BUSINESS_A_ID, stateBank), "an unverified (counted) record cannot be banked", `${r.status} ${r.json.error ?? ""}`);
+r = await post(managerA.token, action("deposit.lock", { cashUpIds: ["uat-cu-1"], transactionIds: ["uat-fin-1", "uat-fin-2"] }, BUSINESS_A_ID));
+record(r.status === 409 && unchanged(BUSINESS_A_ID, stateBank), "a batch that does not match the current verified set is refused", `${r.status}`);
+r = await post(managerA.token, { ...action("deposit.lock", BATCH, BUSINESS_A_ID), expectedVersion: versionAfterHandIn });
+record(r.status === 409 && unchanged(BUSINESS_A_ID, stateBank), "a stale version cannot bank", `${r.status}`);
+const bankRequest = action("deposit.lock", BATCH, BUSINESS_A_ID);
+r = await post(managerA.token, bankRequest);
+const bankedA = snapshotOf(BUSINESS_A_ID);
+const deposit = bankedA.deposits[0];
+record(
+  r.status === 200 && r.json.depositAmount === 880 && r.json.recordsLocked === 2 && deposit.depositId === r.json.depositId && deposit.lockedBy === managerA.userId && deposit.source === "server" && bankedA.deposits.length === depositsBefore + 1,
+  "Manager A banks the verified batch (amount 880, deposit generated server-side)",
+  `${r.status} ${r.json.reference}`,
+);
+record(
+  BATCH.transactionIds.every((id) => { const t = bankedA.financeTransactions.find((x) => x.id === id); return t.status === "banked" && t.depositId === deposit.depositId; }) &&
+    bankedA.dailyCashUps.find((c) => c.id === "uat-cu-1").status === "banked" &&
+    bankedA.financeTransactions.find((t) => t.id === "uat-fin-6").status === "counted" &&
+    bankedA.auditTrail[0].entityId === deposit.depositId,
+  "deposit, linked records, cash-up and audit changed together; unverified records untouched",
+);
+record(unchanged(BUSINESS_B_ID, stateBBank), "Business B unchanged by banking in A");
+stateBank = rowState(BUSINESS_A_ID);
+r = await post(managerA.token, bankRequest);
+record(r.status === 200 && r.json.replayed === true && unchanged(BUSINESS_A_ID, stateBank) && snapshotOf(BUSINESS_A_ID).deposits.length === depositsBefore + 1, "a duplicate banking request returns the original deposit; no second deposit", `${r.status} replayed=${r.json.replayed}`);
+for (const [label, token, body] of [
+  ["hand-in", adminA.token, action("cashup.record_handin", { cashUpId: "uat-cu-1", actualCashReceived: 1 }, BUSINESS_A_ID)],
+  ["verify", managerA.token, action("cashup.verify", { cashUpId: "uat-cu-1", actualCashReceived: 1 }, BUSINESS_A_ID)],
+  ["re-submit", driverA.token, action("cashup.submit", { workDate: "2026-10-01" }, BUSINESS_A_ID)],
+  ["re-bank", managerA.token, action("deposit.lock", BATCH, BUSINESS_A_ID)],
+]) {
+  r = await post(token, body);
+  record(r.status === 409 && unchanged(BUSINESS_A_ID, stateBank), `banked records cannot be altered (${label})`, `${r.status} ${r.json.error ?? ""}`);
+}
+
+// --- Request-log loss (e.g. a restore that excluded the log) -------------------------------------
+// Intended behaviour: without its log row a retry is no longer recognised as a
+// replay, but it carries the pre-action expectedVersion, so the version check
+// refuses it and nothing is applied twice.
+guard();
+psql(`delete from public.finance_action_requests where business_id = '${BUSINESS_A_ID}' and request_id = '${bankRequest.requestId}';`);
+r = await post(managerA.token, bankRequest);
+record(r.status === 409 && unchanged(BUSINESS_A_ID, stateBank) && snapshotOf(BUSINESS_A_ID).deposits.length === depositsBefore + 1, "after its log row is lost, a retry is refused by the version check (no duplicate deposit)", `${r.status} ${r.json.error ?? ""}`);
 
 const failed = results.filter((x) => !x.ok).length;
 console.log(`\n${failed ? "FAIL" : "PASS"}: ${results.length - failed}/${results.length}`);

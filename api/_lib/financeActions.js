@@ -12,16 +12,21 @@ import { createHttpError } from "./tenantAuth.js";
 // Only the target day cash-up, its linked finance records and one appended
 // audit event can change; every other key is copied through untouched.
 // Permissions are the existing workflow's (src/lib/appRuntime.js):
-//   cashup.submit         Driver only, own linked staff id (submitDriverCashUp)
+//   cashup.submit         Driver, or an Owner who drives; requires the membership's
+//                         authoritative driver linkage (own records only)
 //   cashup.record_handin  Owner, Admin  (canRecordCashHandoverForRole)
 //   cashup.verify         Owner, Manager (canVerifyCashCheckForRole)
+//   deposit.lock          Owner, Manager with finance edit (canFinishDepositForRole +
+//                         hasModuleUpdateAccess("finance")): verified -> banked
 // Status values stay pending | counted | verified | banked; expected cash in is
 // the shared summarizeDriverDayCash (income less cash expenses).
 
 export const FINANCE_ACTIONS = Object.freeze({
-  "cashup.submit": { roles: ["Driver"], fields: ["workDate"] },
+  // Owner-driver: one identity, Owner role kept, driver linkage from the membership.
+  "cashup.submit": { roles: ["Driver", "Owner"], fields: ["workDate"], requiresDriverLink: true },
   "cashup.record_handin": { roles: ["Owner", "Admin"], fields: ["cashUpId", "actualCashReceived"] },
   "cashup.verify": { roles: ["Owner", "Manager"], fields: ["cashUpId", "actualCashReceived"] },
+  "deposit.lock": { roles: ["Owner", "Manager"], fields: ["cashUpIds", "transactionIds"], requiresFinanceEdit: true },
 });
 
 const ENVELOPE_FIELDS = ["action", "requestId", "expectedVersion", "fields"];
@@ -73,6 +78,17 @@ export const parseFinanceActionRequest = (body) => {
     parsed.actualCashReceived = Math.round(amount * 100) / 100;
   }
 
+  for (const key of ["cashUpIds", "transactionIds"]) {
+    if (!spec.fields.includes(key)) continue;
+    const list = fields[key];
+    if (!Array.isArray(list) || list.length > 500 || list.some((id) => typeof id !== "string" || !text(id) || text(id).length > 200)) {
+      throw createHttpError(400, `${key} must be the list of ids you reviewed.`);
+    }
+    const unique = [...new Set(list.map(text))].sort();
+    if (unique.length !== list.length) throw createHttpError(400, `${key} contains duplicates.`);
+    parsed[key] = unique;
+  }
+
   return {
     action,
     requestId: requestId.toLowerCase(),
@@ -110,6 +126,12 @@ export const applyFinanceAction = (storedSnapshot, request, requester, now = new
   const spec = FINANCE_ACTIONS[request.action];
   if (!spec || !spec.roles.includes(requester.role)) {
     throw createHttpError(403, `Your role cannot perform ${request.action}.`);
+  }
+  if (spec.requiresDriverLink && !text(requester.driverStaffId)) {
+    throw createHttpError(403, "Your membership is not linked to a driver record.");
+  }
+  if (spec.requiresFinanceEdit && requester.role !== "Owner" && requester.moduleAccess?.finance !== true) {
+    throw createHttpError(403, "Money access is turned off for your account.");
   }
   const stored = clone(storedSnapshot ?? {});
   const next = { ...stored };
@@ -163,6 +185,8 @@ export const applyFinanceAction = (storedSnapshot, request, requester, now = new
     return { snapshot: next, targetId: id, response: { action: request.action, cashUpId: id, status: "pending", expectedCashIn: summary.expectedCashIn } };
   }
 
+  if (request.action === "deposit.lock") return lockDeposit(stored, request, requester, now);
+
   // cashup.record_handin / cashup.verify
   const target = cashUps.find((entry) => text(entry.id) === request.fields.cashUpId);
   if (!target) throw createHttpError(404, "That day checking does not exist in this business.");
@@ -208,5 +232,92 @@ export const applyFinanceAction = (storedSnapshot, request, requester, now = new
     snapshot: next,
     targetId: target.id,
     response: { action: request.action, cashUpId: target.id, status: "verified", expectedCashIn: summary.expectedCashIn, actualCashReceived: amount, variance: Math.round((amount - summary.expectedCashIn) * 100) / 100, shortage: Math.max(summary.expectedCashIn - amount, 0) },
+  };
+};
+
+const sum = (items, pick) => items.reduce((total, item) => total + (Number(pick(item)) || 0), 0);
+const incomeCashValue = (record) => Number(record.actualCashReceived ?? record.amountClaimed ?? record.amount ?? 0);
+const sameSet = (left, right) => left.length === right.length && left.every((value, index) => value === right[index]);
+
+// Same reference shape as the browser (appRuntime.buildDepositReference),
+// computed in South African time.
+export const buildDepositReference = (sequence, value) => {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-ZA", { timeZone: "Africa/Johannesburg", weekday: "short", month: "2-digit", day: "2-digit" })
+      .formatToParts(value)
+      .map((part) => [part.type, part.value]),
+  );
+  const day = String(parts.weekday).replace(".", "").toUpperCase();
+  return `TFP-${day}-${parts.month}${parts.day}-${String(sequence).padStart(2, "0")}`;
+};
+
+// Existing lockDeposit rule: the batch is every verified driver day cash-up (with
+// its linked records) plus every standalone verified record. The caller must send
+// exactly the batch it reviewed; ids outside this business are refused (404), and
+// a batch that no longer matches the current verified set is refused (409).
+const lockDeposit = (stored, request, requester, now) => {
+  const cashUps = Array.isArray(stored.dailyCashUps) ? stored.dailyCashUps : [];
+  const transactions = Array.isArray(stored.financeTransactions) ? stored.financeTransactions : [];
+  const knownCashUps = new Set(cashUps.map((entry) => text(entry.id)));
+  const knownTransactions = new Set(transactions.map((record) => text(record.id)));
+  const foreign = [
+    ...request.fields.cashUpIds.filter((id) => !knownCashUps.has(id)),
+    ...request.fields.transactionIds.filter((id) => !knownTransactions.has(id)),
+  ];
+  if (foreign.length) throw createHttpError(404, `These records do not exist in this business: ${foreign.join(", ")}.`);
+
+  const verified = cashUps
+    .map((entry) => ({ entry, summary: daySummary(stored, text(entry.driverStaffId), text(entry.workDate)) }))
+    .filter(({ entry, summary }) => getDriverCashUpWorkflowStatus(entry, summary) === "verified");
+  const cashUpTransactionIds = new Set(verified.flatMap(({ summary }) => [...linkedIds(summary)]));
+  const standalone = transactions.filter((record) => record.status === "verified" && !cashUpTransactionIds.has(record.id));
+  const batchCashUpIds = verified.map(({ entry }) => text(entry.id)).sort();
+  const batchTransactionIds = [...new Set([...cashUpTransactionIds, ...standalone.map((record) => record.id)])].map(text).sort();
+
+  if (batchCashUpIds.length + standalone.length === 0) throw createHttpError(409, "No manager-checked records are ready to finalise.");
+  const notVerified = request.fields.transactionIds.filter((id) => !batchTransactionIds.includes(id));
+  if (notVerified.length) throw createHttpError(409, `These records are not verified and cannot be banked: ${notVerified.join(", ")}.`);
+  if (!sameSet(request.fields.cashUpIds, batchCashUpIds) || !sameSet(request.fields.transactionIds, batchTransactionIds)) {
+    throw createHttpError(409, "The verified batch has changed since you reviewed it. Reload and try again; nothing was banked.");
+  }
+
+  const depositId = `dep-${randomUUID()}`;
+  const reference = buildDepositReference((stored.deposits?.length ?? 0) + 1, new Date(now));
+  const standaloneIncome = standalone.filter((record) => record.type === "income");
+  const standaloneCashExpenses = standalone.filter((record) => record.type === "expense" && record.cashExpense);
+  const deposit = {
+    depositId,
+    reference,
+    timestamp: now,
+    recordsLocked: verified.length + standalone.length,
+    verifiedTakings: sum(verified, ({ summary }) => summary.totalIncome) + sum(standaloneIncome, incomeCashValue),
+    cashExpenses: sum(standaloneCashExpenses, (record) => record.amount) + sum(verified, ({ summary }) => summary.cashExpenses),
+    depositAmount:
+      sum(verified, ({ entry, summary }) => entry.actualCashReceived ?? summary.expectedCashIn) +
+      sum(standaloneIncome, incomeCashValue) -
+      sum(standaloneCashExpenses, (record) => record.amount),
+    transactionIds: batchTransactionIds,
+    cashUpIds: batchCashUpIds,
+    lockedBy: requester.id,
+    lockedByRole: requester.role,
+    source: "server",
+    requestId: request.requestId,
+  };
+  const bankedIds = new Set(batchTransactionIds);
+  const bankedCashUps = new Set(batchCashUpIds);
+  const next = {
+    ...stored,
+    deposits: [deposit, ...(stored.deposits ?? [])],
+    dailyCashUps: cashUps.map((entry) => (bankedCashUps.has(text(entry.id)) ? { ...entry, status: "banked", depositId, bankedAt: now } : entry)),
+    financeTransactions: transactions.map((record) => (bankedIds.has(text(record.id)) ? { ...record, status: "banked", depositId, bankedAt: now } : record)),
+    auditTrail: [
+      auditEvent(requester, now, request.requestId, { action: "lock", entityType: "deposit", entityId: depositId, title: `Deposit finished / ${reference}`, detail: `${deposit.recordsLocked} records / ${deposit.depositAmount}` }),
+      ...(stored.auditTrail ?? []),
+    ],
+  };
+  return {
+    snapshot: next,
+    targetId: depositId,
+    response: { action: request.action, depositId, reference, status: "banked", recordsLocked: deposit.recordsLocked, depositAmount: deposit.depositAmount, verifiedTakings: deposit.verifiedTakings, cashUpIds: batchCashUpIds, transactionIds: batchTransactionIds },
   };
 };

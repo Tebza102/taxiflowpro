@@ -95,6 +95,8 @@ export const buildBusinessBSnapshot = () => {
   snapshot.drivers = snapshot.drivers.map((driver) => ({ ...driver, staffId: toB(driver.staffId), email: "driver.b@example.com", name: "UAT Driver B" }));
   snapshot.financeTransactions = snapshot.financeTransactions.map((record) => ({ ...record, id: `${record.id}-b`, ...(record.driverStaffId ? { driverStaffId: toB(record.driverStaffId) } : {}) }));
   snapshot.dailyCashUps = snapshot.dailyCashUps.map((entry) => ({ ...entry, id: `${entry.id}-b`, driverStaffId: toB(entry.driverStaffId), driverName: "UAT Driver B" }));
+  // The Owner of B also drives (membership driver linkage uat-drv-b-owner).
+  snapshot.financeTransactions.push({ id: "uat-fin-ownerdrive-b", type: "income", incomeKind: "standard", vehicle: "UAT-TEST-02-B", driverStaffId: "uat-drv-b-owner", route: "UAT Route A", tripDate: "2026-10-03", amountClaimed: 120, status: "pending", createdAt: "2026-10-03T08:00:00+02:00" });
   return snapshot;
 };
 

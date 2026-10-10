@@ -162,3 +162,42 @@ Files: `api/business/finance-actions.js`, `api/_lib/financeActions.js`, migratio
 3. The frontend still uses direct table access; no integration yet. `userLifecycle`/bootstrap are still `appUsers`-based.
 4. `finance_action_requests` is not part of the drill export; it is an operational log, and losing it only weakens retry protection for in-flight requests.
 5. Hosted: nothing applied.
+
+## Owner-driver submit and scoped banking (Task 14, local only)
+
+### Updated action matrix
+
+| Server action | Who | Transition | Notes |
+|---|---|---|---|
+| `cashup.submit` | Driver **or Owner**, both with an authoritative membership driver linkage | day → pending (unless banked) | Approved owner-driver rule (Task 14): one login, Owner role kept. An Owner without a linkage gets 403. Staff id always comes from the membership, so only the caller's own records are included. |
+| `cashup.record_handin` | Owner, Admin | pending → counted | unchanged |
+| `cashup.verify` | Owner, Manager | counted → verified | unchanged |
+| `deposit.lock` | Owner, Manager with finance edit (Money on) | verified → banked | Existing `lockDeposit` rule. The batch is every verified day cash-up (with linked records) plus every standalone verified record. The caller sends the exact `cashUpIds`/`transactionIds` it reviewed: ids outside the business get 404, unverified ids or a changed batch get 409. Deposit id, reference (`TFP-DAY-MMDD-NN`, SAST), amounts (existing formulas), `lockedBy`/`lockedByRole` and the audit event are generated server-side. The deposit, linked records, cash-ups and request log are written in **one** `commit_finance_action` transaction. |
+
+Still not server actions: capture (`saveStandardIncome`/`saveSpecialIncome`/`saveExpense`), standalone count/verify, edit/delete.
+
+### Request-log retention and recovery
+
+- `public.finance_action_requests` is **retained indefinitely**: no automatic pruning. It is small (one row per applied action), and pruning must be a reviewed operation that keeps at least the longest client retry window.
+- **It is part of the backup.** `scripts/localdb/drill.mjs` exports and restores it and checks it matches (5 rows MATCH in the 09:16 drill). Duplicate-request protection therefore survives a restore: a retried request id is recognised and its original result returned.
+- **If the log is lost anyway** (an older backup, or a restore that excluded it), the intended behaviour is that a retry carrying its original pre-action `expectedVersion` is still refused. Tested: deleting a banking request's log row and retrying it gives 409 with no duplicate deposit. In that test the "nothing verified left to bank" rule refused it before the version check was reached; either guard alone refuses.
+- **Residual risk:** if a restore rolls the snapshot back to *exactly* the version a client last loaded **and** drops the log, a retry of an action applied after that point would apply again. That is the correct outcome only if the restore genuinely removed the original effect. This is one more reason the log is restored together with the snapshots.
+
+### Evidence (2026-10-10)
+
+- `tests/finance-actions.test.mjs`: 9/9.
+- `node scripts/localdb/finance-action-tests.mjs`: **56/56** (real local tokens, two businesses):
+  - **Owner-driver:** an Owner without a linkage is refused; the owner-driver can't submit another driver's day (409, B unchanged) or pass a staff id (400); Owner B submits its own day (`uat-drv-b-owner`, `checkedByRole` Owner, expected 120); the other driver's records are untouched.
+  - **Banking denied:** Admin, Driver, a Business B id in the batch (neither business changes), an unverified record, a mismatched batch, a stale version.
+  - **Banking succeeds:** Manager banks 880 for 2 items with every linked record, the cash-up and the audit changed together.
+  - **After banking:** the duplicate request is replayed with no second deposit; hand-in, verify, re-submit and re-bank on banked records all give 409 and nothing changes; the log-loss retry is refused.
+- `node scripts/localdb/drill.mjs`: PASS, including the request log.
+- Regression: 09:20–09:27 on fresh resets: tenant access 35/35, rollback 8/8, verify 16 PASS/0 WARN, server auth 26/26.
+- `node --test tests/*.test.mjs` 298/298; build passes.
+
+### Remaining gaps after Task 14
+
+1. Capture, standalone count/verify and edit/delete are not yet server actions.
+2. Actor ids are auth user ids; report/UI display-name mapping is pending.
+3. Frontend integration, membership-based user lifecycle/bootstrap, and the hosted migration plan are all not started.
+4. Deposit references use a per-business sequence from the snapshot (`deposits.length + 1`), same as the browser. They are unique in practice but not enforced by a constraint.

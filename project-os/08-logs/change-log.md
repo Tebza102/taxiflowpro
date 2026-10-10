@@ -444,3 +444,18 @@ Prepared. Installation is a human step.
 **Supported:** `cashup.submit`, `cashup.record_handin`, `cashup.verify`. **Not yet:** capture, standalone count/verify, `lockDeposit`, edit/delete.
 
 **Next action:** `next-action.md` → 1h.
+
+### 2026-10-10 09:27 — Owner-driver submit and scoped banking (local only; Task 14)
+
+**Changed by:** Claude Code (agent). Local synthetic environment only; no push, hosted, live or deploy.
+
+**Steps (SAST):**
+- 09:03 — Preflight: `agent/tenant-db-foundation` @ `c39d0ef`, tree clean. Read the existing `lockDeposit` rules.
+- 09:04 — `cashup.submit` accepts Driver or Owner and requires the membership driver linkage. `deposit.lock` added (exact reviewed batch, existing amount formulas, server-generated deposit, reference and audit, one atomic commit). Owner-driver fixture added in Business B.
+- 09:05 — Unit tests 9/9. A test assumed no standalone verified record existed in the fixtures; the test was corrected, not the code.
+- 09:07–09:16 — `finance-action-tests.mjs` on a fresh reset: 56/56.
+- 09:16–09:19 — Drill now exports and restores `finance_action_requests`: PASS, request log 5 rows MATCH.
+- 09:20 — Node 298/298; sync guards and build pass; secret scan clean.
+- Regression: 09:20–09:27 on fresh resets: tenant access 35/35, rollback 8/8, verify 16 PASS/0 WARN, server auth 26/26.
+
+**Next action:** `next-action.md` → 1i.

@@ -33,6 +33,14 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Owner-driver submit and scoped banking (Task 14, local only)
+
+- `cashup.submit` now accepts an active Owner with a membership driver linkage (one login; an Owner without a linkage is refused).
+- `deposit.lock` (Owner/Manager with finance edit) banks the exact reviewed verified batch atomically with server-generated deposit and audit data.
+- The finance request log is retained and included in backup/restore (drill MATCH); a lost log still cannot cause a duplicate (tested).
+- Evidence: finance actions 56/56, drill PASS, Node 298/298, build passes.
+- Capture, standalone count/verify and edit/delete remain. See `tenant-design.md`.
+
 ### Scoped server finance writes (Task 13, branch `agent/tenant-db-foundation`, local only)
 
 `POST /api/business/finance-actions` supports `cashup.submit` (Driver, own staff id from the membership), `cashup.record_handin` (Owner/Admin, pending→counted) and `cashup.verify` (Owner/Manager, counted→verified).

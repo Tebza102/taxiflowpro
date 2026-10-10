@@ -488,3 +488,35 @@ Prepared. Installation is a human step.
 - Regression: 10:39–11:04 on fresh resets: capture 43/43, finance actions 56/56, drill PASS (request log MATCH), tenant access 35/35, rollback 8/8, verify 16 PASS/0 WARN, server auth 26/26.
 
 **Next action:** `next-action.md` → 1k.
+
+### 2026-10-10 12:50 — Tenant-aware frontend finance workflow (local only; Task 17)
+
+**Changed by:** Claude Code (agent). Local synthetic environment only. No push, hosted change, live UAT or deploy. The task overran its 60-minute boundary. Tebogo asked for a checkpoint; verification was finished without adding scope.
+
+**Steps (SAST):**
+- Preflight @ `9dc79ae`.
+- Server read endpoints:
+  - `api/business/memberships.js` and `workspace.js` (authoritative self role, version, actor names);
+  - `api/_lib/actorNames.js` (members of the authorized business only; `authUserId` tag used by the daily report).
+- Browser: `src/lib/tenantWorkspace.js`, plus gateway and App changes behind `VITE_TENANT_MODE`. See `tenant-design.md` → Task 17.
+- Defects found in the browser proof, each fixed once from evidence:
+  1. The identity gate required a JWT metadata role. It now uses the membership role in tenant mode.
+  2. Reverting local edits clashed with the driver-terminal view sync. The view state is now allowed locally.
+  3. "Refresh live data" unmounted the form and lost the draft. Tenant mode now refreshes in place.
+  4. A multi-business user hit "Account not mapped" before choosing a business. A business picker was added.
+- Test-only corrections:
+  - widened the source windows and moved the markers in `tests/finance-persistence.test.mjs` (the tenant branches shifted the legacy code);
+  - wording and selectors in the new spec;
+  - a wait for the reload before the retry save.
+
+**Tests run:**
+- Browser proof (`playwright.localdb.config.mjs`) on a fresh reset: 6/6.
+- Node 311/311; build pass; demo-mode Playwright 28/28.
+- Local-DB suites on fresh resets: server auth 27, finance actions 57, capture 44, record 37, verify 17 (`PASS` line counts, 0 `FAIL`). Tenant access 36, rollback 9.
+- Secret scan clean.
+
+**Result:** Pass.
+
+**Risks remaining:** see `tenant-design.md` → Remaining after Task 17.
+
+**Next action:** `next-action.md` → 1l.

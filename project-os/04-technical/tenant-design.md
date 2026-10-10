@@ -303,3 +303,67 @@ None of these writes vehicle odometer history: the odometer only drives the disc
 3. Actor display names: server actor ids are auth user ids.
 4. Expense presets (`saveExpensePreset`) and any other non-finance writes (fleet, drivers, routes, settings) have no server actions yet.
 5. Frontend integration (including route-stop defaults and business selection); membership-based user lifecycle/bootstrap; hosted migration plan.
+
+## Tenant-aware frontend finance workflow (Task 17, local only)
+
+Enabled only with `VITE_TENANT_MODE=true` in live mode. Without the flag, the existing app is unchanged; Viewer/demo mode stays on mock data.
+
+### Read path
+- `GET /api/business/memberships` lists the caller's active businesses, using the caller's own token.
+- `GET /api/business/workspace[?business=]` returns:
+  - the role-scoped snapshot, with the caller's own `appUsers` entry overwritten by the authoritative membership role and driver link;
+  - `version` (`updated_at`);
+  - `actorNames`.
+- Actor names: `api/_lib/actorNames.js` resolves auth user ids for members of the authorized business only. It tags directory entries with `authUserId`, and the daily report resolves through it.
+- `src/lib/tenantWorkspace.js` keeps in memory only: the loaded version, the role, and pending request ids keyed by user + business + request. These are dropped when the user or business changes.
+- Only the selected business id is stored, per user (`taxiflow-tenant-business:<userId>`). No snapshot cache.
+- Business selection:
+  - one business opens automatically;
+  - several businesses show a picker first, then a business selector in the tenant bar;
+  - switching clears the displayed data before loading.
+- Errors never fall back to `taxiflow-live` or demo data.
+- Identity (`appRuntimeSecure.resolveAuthIdentity`) uses the server-confirmed membership role in tenant mode, not JWT metadata.
+
+### Write path
+The seven finance handlers in `App.jsx` branch to `POST /api/business/finance-actions` after their existing browser validation:
+- `capture.*` and `record.edit`;
+- `cashup.submit`, `cashup.record_handin` and `cashup.verify`;
+- `income.count` and `income.verify`;
+- `record.delete`;
+- `deposit.lock`, with the exact reviewed batch.
+
+Each request carries the loaded version and a request id. The id is reused only when the same request is retried after a network failure.
+
+Other write rules:
+- Route-stop defaults (`createDailyTripLogEntry`) are sent explicitly. Legs are limited to the server's leg fields.
+- Owner-driver: an Owner with a driver link gets a "Capture as" choice (Management or My own driving) and a "Send my day checking" button.
+- Conflict (409): nothing is reloaded and the form keeps the entry. The banner says to refresh. "Refresh live data" reloads in place, so the entry survives.
+- No whole-snapshot save in tenant mode:
+  - `persistSnapshot` refuses;
+  - the generic, hidden-tab, page-close and sign-out saves are skipped;
+  - `commitLiveSnapshotMutation`, `commitUserAccessSnapshot` and the user-lifecycle API are refused with "not available in the business workspace yet".
+  - Fleet, user, settings and preset writes are therefore unavailable, and other local data edits are reverted. Driver-terminal view state may change locally.
+- Edit and delete buttons are enabled for pending records only. Closed-day and other server refusals are shown with the server's message.
+- Reports send `&business=` for the loaded business.
+
+### Evidence (2026-10-10)
+Browser proof: `tests/localdb-browser/tenant-finance.spec.js` via `playwright.localdb.config.mjs` and `scripts/localdb/dev-tenant.mjs`, against the local stack with real local Auth. On a fresh reset: 6/6.
+- Capture: trip with explicit stops, plus a safe expense.
+- Refresh persistence, with no snapshot in browser storage.
+- Submit.
+- Admin count.
+- Closed-day capture refused, and the counted record's Edit disabled.
+- Manager verify.
+- Owner banks, then refresh.
+- Report for the day, with Admin/Manager names.
+- Stale-save 409 with the draft kept, then a retry after refresh succeeds.
+- Owner-driver in B: trip captured as own driving, own day checking sent and queued.
+- Cross-business workspace read refused with 403.
+- Two-business user: picker, then A, then B, with no cross-business data; the selection survives a refresh; the next user starts clean.
+
+### Remaining after Task 17
+1. Fleet/driver/route/settings/user/preset writes have no tenant server actions; they are blocked in tenant mode.
+2. Membership-based user lifecycle and bootstrap.
+3. Hosted migration plan, and hosted or live UAT (not done).
+4. An expense-only driver day is not shown in the existing Banking queue. This is pre-existing UI behaviour, observed in Task 17 and not changed.
+5. If Save is clicked while a refresh is still loading, it is refused with "The workspace is not loaded. Refresh before saving." This is safe but abrupt.

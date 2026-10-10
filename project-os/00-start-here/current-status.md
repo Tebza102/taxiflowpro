@@ -33,6 +33,18 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Tenant-aware frontend finance workflow (Task 17, local only)
+
+Behind `VITE_TENANT_MODE=true` (live mode), the browser reads only through the server and writes finance only as explicit server actions.
+- Reads: authoritative membership/role, a one-business auto-open or an explicit picker/selector, and state scoped per user + business.
+- Writes: version + request id per action, with no whole-snapshot saves.
+- A conflict keeps the user's entry and asks for a refresh.
+- Fleet, user, settings and preset writes are unavailable in tenant mode.
+- Actor names are resolved within the business.
+- Browser proof against LOCAL Supabase with real local Auth: 6/6 on a fresh reset (capture → submit → count → verify → bank → report, refresh, owner-driver, business switching, isolation, stale-save conflict).
+- Demo mode is unchanged (mock Playwright).
+- Details and remaining gaps: `tenant-design.md` → Task 17. Not pushed; nothing hosted.
+
 ### Essential finance server actions complete (Task 16, local only)
 
 Standalone `income.count`/`income.verify`, `record.edit` and `record.delete` added on the same authorized, atomic, retry-safe path.

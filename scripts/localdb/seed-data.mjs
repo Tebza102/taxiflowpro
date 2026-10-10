@@ -33,11 +33,14 @@ export const buildSyntheticSnapshot = () => ({
   routes: [{ id: "uat-route-a", name: "UAT Route A", code: "UA", fare: 20, active: true }],
   financeTransactions: [
     { id: "uat-fin-1", type: "income", incomeKind: "standard", vehicle: "UAT-TEST-01", driverStaffId: "uat-drv-01", route: "UAT Route A", tripDate: day, amountClaimed: 400, status: "pending", createdAt: at("08:00") },
-    { id: "uat-fin-2", type: "income", incomeKind: "standard", vehicle: "UAT-TEST-01", driverStaffId: "uat-drv-01", route: "UAT Route A", tripDate: day, amountClaimed: 300, status: "counted", actualCashReceived: 290, createdAt: at("09:00") },
+    { id: "uat-fin-2", type: "income", incomeKind: "standard", vehicle: "UAT-TEST-01", driverStaffId: "uat-drv-01", route: "UAT Route A", tripDate: day, amountClaimed: 300, status: "pending", createdAt: at("09:00") },
     { id: "uat-fin-3", type: "income", incomeKind: "standard", vehicle: "UAT-TEST-02", route: "UAT Route A", tripDate: day, amountClaimed: 200, status: "verified", actualCashReceived: 200, createdAt: at("10:00") },
     { id: "uat-fin-4", type: "income", incomeKind: "standard", vehicle: "UAT-TEST-02", route: "UAT Route A", tripDate: day, amountClaimed: 100, status: "banked", actualCashReceived: 100, depositId: "uat-dep-1", createdAt: at("11:00") },
+    { id: "uat-fin-6", type: "income", incomeKind: "standard", vehicle: "UAT-TEST-02", route: "UAT Route A", tripDate: day, amountClaimed: 150, status: "counted", actualCashReceived: 150, createdAt: at("12:00") },
+    { id: "uat-fin-5", type: "income", incomeKind: "standard", vehicle: "UAT-TEST-01", driverStaffId: "uat-drv-01", route: "UAT Route A", tripDate: "2026-10-02", amountClaimed: 250, status: "pending", createdAt: "2026-10-02T08:00:00+02:00" },
   ],
-  dailyCashUps: [{ id: "uat-cu-1", driverStaffId: "uat-drv-01", workDate: day, status: "counted", actualCashReceived: 680, countedByRole: "Admin", createdAt: at("18:00") }],
+  // Day checking sent by the driver, awaiting the admin hand-in (expected 400 + 300 = 700).
+  dailyCashUps: [{ id: "uat-cu-1", driverStaffId: "uat-drv-01", driverName: "UAT Driver", workDate: day, status: "pending", actualCashReceived: null, expectedCashIn: 700, createdAt: at("18:00") }],
   deposits: [{ id: "uat-dep-1", amount: 100, depositedAt: at("15:00"), reference: "UAT-DEP-1" }],
   verificationQueue: [],
   defects: [{ id: "uat-def-1", vehicle: "UAT-TEST-02", title: "UAT synthetic defect", status: "open" }],
@@ -88,7 +91,10 @@ export const buildBusinessBSnapshot = () => {
     staffId: user.staffId ?? null,
   }));
   snapshot.vehicles = snapshot.vehicles.map((vehicle) => ({ ...vehicle, id: `${vehicle.id}-b`, registration: `${vehicle.registration}-B` }));
-  snapshot.financeTransactions = snapshot.financeTransactions.map((record) => ({ ...record, id: `${record.id}-b` }));
+  const toB = (staffId) => (staffId === "uat-drv-01" ? "uat-drv-b-01" : staffId);
+  snapshot.drivers = snapshot.drivers.map((driver) => ({ ...driver, staffId: toB(driver.staffId), email: "driver.b@example.com", name: "UAT Driver B" }));
+  snapshot.financeTransactions = snapshot.financeTransactions.map((record) => ({ ...record, id: `${record.id}-b`, ...(record.driverStaffId ? { driverStaffId: toB(record.driverStaffId) } : {}) }));
+  snapshot.dailyCashUps = snapshot.dailyCashUps.map((entry) => ({ ...entry, id: `${entry.id}-b`, driverStaffId: toB(entry.driverStaffId), driverName: "UAT Driver B" }));
   return snapshot;
 };
 

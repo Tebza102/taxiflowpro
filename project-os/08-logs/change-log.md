@@ -386,3 +386,22 @@ Prepared. Installation is a human step.
 **Coverage:** schema (rebuilt from migrations), Auth (users + identities incl. password hashes), snapshot. **Not covered:** Auth sessions/tokens/MFA/audit, storage, hosted configuration, any live restore.
 
 **Next action:** `next-action.md` → 1e.
+
+### 2026-10-10 02:54 — Tenant database foundation (local synthetic only; branch agent/tenant-db-foundation)
+
+**Changed by:** Claude Code (agent). No hosted, push, deploy or live data.
+
+**Steps (SAST):**
+- 02:34 — Preflight; branched `agent/tenant-db-foundation` from `7fe64a7` (the release branch is unchanged).
+- 02:35 — Design: `project-os/04-technical/tenant-design.md`.
+- 02:36 — Wrote the migration `20261010003451_tenant_foundation.sql` and its rollback; tenant fixtures (business B, owner-driver, inactive, non-member, new-hire identities). `setup.mjs reset` now applies the tenant migration on top of legacy data.
+- 02:37 — Reset OK. Confirmed `postgres` has bypassrls and owns the tables, so there is no policy recursion.
+- 02:39 — `tenant-tests.mjs access`: 33/33.
+- 02:42 — `tenant-tests.mjs rollback`: 7/8. The one failure was a test bug (`order by 1` in `string_agg`); after the fix, 8/8.
+- 02:44 — Updated `verify.mjs` (16/16, 0 WARN) and `drill.mjs` (tenant-aware; PASS).
+- 02:48–02:53 — Final sequence on the committed code: reset, access 33/33, rollback 8/8, verify 16/0/0.
+- 02:53 — `node --test tests/*.test.mjs` 285/285 (7 new static tenant tests); sync guards and build pass; secret scan clean.
+
+**Integration gaps:** API routes, `dataGateway` direct access, `userLifecycle` membership management, hosted migration plan. See `tenant-design.md`.
+
+**Next action:** `next-action.md` → 1f.

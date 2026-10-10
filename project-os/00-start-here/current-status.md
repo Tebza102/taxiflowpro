@@ -33,6 +33,10 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Tenant database foundation (branch `agent/tenant-db-foundation`, local only)
+
+Branched from `7fe64a7`; the hardening release branch `agent/owner-first-auth-reset` is unchanged. Businesses, authoritative memberships (Owner/Admin/Manager/Driver; Viewer demo-only; owner-driver linkage), one snapshot per business with an explicit mapping for `taxiflow-live`, an Owner-only membership RPC, tenant-reassignment triggers, and no browser access to snapshots. Proven on the local synthetic database: access 33/33, rollback/compatibility 8/8, verify 16/16, drill PASS. **Not integrated:** the API and frontend still use the single row with direct browser access and would be denied under these rules. See `project-os/04-technical/tenant-design.md`.
+
 ### Local commits after the deployed SHA (not pushed)
 
 - `105e3385ef9f9f6c022bd7aef9c34c7a9e215ee0` — UAT safeguards (tooling + 26 mock tests). The deployed Preview is still `628121b`.

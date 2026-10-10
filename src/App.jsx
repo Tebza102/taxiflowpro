@@ -34,6 +34,12 @@ import { MobileBottomSheet } from "./components/MobileBottomSheet";
 import { TripLegOptionalFields } from "./components/TripLegOptionalFields";
 import { ReportsPanel } from "./components/ReportsPanel";
 import TenantAccessPanel from "./components/TenantAccessPanel";
+const formatSignedMoney = (value) => {
+  const amount = Number(value ?? 0);
+  if (amount === 0) return formatMoney(0);
+  return `${amount > 0 ? "+" : "−"}${formatMoney(Math.abs(amount))}`;
+};
+import { buildZeroCashClosure, getDayCashSettlement, getDriverCashUpWorkflowStatus as getDayWorkflowStatus, isClosedWithoutDeposit } from "./lib/cashUpContract";
 import { repository } from "./lib/dataGateway";
 import {
   TENANT_UNSUPPORTED_MESSAGE,
@@ -3504,6 +3510,12 @@ function App() {
     if (existingCashUp?.status === "banked") {
       return { ok: false, error: "Deposited day checkings can no longer be updated." };
     }
+    if (existingCashUp) {
+      const closedStatus = getDayWorkflowStatus(existingCashUp, daySummary);
+      if (closedStatus === "counted" || closedStatus === "verified" || isClosedWithoutDeposit(existingCashUp)) {
+        return { ok: false, error: `This day checking is already ${closedStatus}; it is closed and can no longer be changed.` };
+      }
+    }
 
     const nextCashUp = {
       ...existingCashUp,
@@ -3762,7 +3774,10 @@ function App() {
             `verify:${cashUpTarget.id}`,
             "cashup.verify",
             { cashUpId: cashUpTarget.id, ...(hasAmount ? { actualCashReceived: amount } : {}) },
-            "Day checking verified and added to cash ready for banking.",
+            (result) =>
+              result.closedWithoutDeposit
+                ? "Day checking verified and closed: no cash to bank (no deposit)."
+                : "Day checking verified and added to cash ready for banking.",
           );
         }
         return {
@@ -3933,6 +3948,7 @@ function App() {
           };
         }
 
+        const daySettlement = getDayCashSettlement(daySummary, finalAmount);
         const nextCashUp = {
           ...cashUpTarget,
           status: "verified",
@@ -3940,6 +3956,11 @@ function App() {
           verifiedAt: now,
           verifiedBy: actorId,
           verifiedByRole: activeRole,
+          cashToHandIn: daySettlement.cashToHandIn,
+          uncoveredCashExpenses: daySettlement.uncoveredCashExpenses,
+          settlement: daySettlement.noCashToBank
+            ? buildZeroCashClosure(daySummary, { now, actorId, actorRole: activeRole })
+            : null,
         };
         const nextTransactions = syncTransactionsForDriverCashUp(
           current.financeTransactions ?? [],
@@ -3997,7 +4018,9 @@ function App() {
 
         return {
           ok: true,
-          message: "Day checking verified and added to cash ready for banking.",
+          message: daySettlement.noCashToBank
+            ? "Day checking verified and closed: no cash to bank (no deposit)."
+            : "Day checking verified and added to cash ready for banking.",
           shortage: Math.max(Number(daySummary.expectedCashIn ?? 0) - finalAmount, 0),
         };
       }
@@ -4294,7 +4317,7 @@ function App() {
       dailyCashUps: Array.isArray(current.dailyCashUps) ? current.dailyCashUps : [],
     });
     const verifiedDriverCashUps = driverCashUpQueue.filter(
-      (entry) => entry.workflowStatus === "verified",
+      (entry) => entry.workflowStatus === "verified" && !entry.closedWithoutDeposit,
     );
     const verifiedDriverCashUpIds = new Set(
       verifiedDriverCashUps.map((entry) => entry.id).filter(Boolean),
@@ -4302,8 +4325,17 @@ function App() {
     const verifiedDriverCashUpTransactionIds = new Set(
       verifiedDriverCashUps.flatMap((entry) => buildCashUpTransactionIds(entry)),
     );
+    // Records of zero-cash days closed without a deposit are never banked.
+    const closedDayTransactionIds = new Set(
+      driverCashUpQueue
+        .filter((entry) => entry.workflowStatus === "verified" && entry.closedWithoutDeposit)
+        .flatMap((entry) => buildCashUpTransactionIds(entry)),
+    );
     const standaloneVerifiedTransactions = (current.financeTransactions ?? []).filter(
-      (record) => record.status === "verified" && !verifiedDriverCashUpTransactionIds.has(record.id),
+      (record) =>
+        record.status === "verified" &&
+        !verifiedDriverCashUpTransactionIds.has(record.id) &&
+        !closedDayTransactionIds.has(record.id),
     );
     const recordsLocked = verifiedDriverCashUps.length + standaloneVerifiedTransactions.length;
 
@@ -4404,7 +4436,8 @@ function App() {
           : entry,
       ),
       financeTransactions: current.financeTransactions.map((record) =>
-        record.status === "verified" || verifiedDriverCashUpTransactionIds.has(record.id)
+        (record.status === "verified" && !closedDayTransactionIds.has(record.id)) ||
+        verifiedDriverCashUpTransactionIds.has(record.id)
           ? {
               ...record,
               status: "banked",
@@ -8328,6 +8361,19 @@ function FinancePanel({
                       <InfoPair label="Difference" value={formatMoney(queueEntry.shortage)} />
                       {isDriverCashUp ? (
                         <>
+                          <InfoPair
+                            label="Cash to hand in"
+                            value={formatMoney(queueEntry.cashToHandIn ?? 0)}
+                          />
+                          {queueEntry.variance !== null && queueEntry.variance !== undefined ? (
+                            <InfoPair label="Signed variance" value={formatSignedMoney(queueEntry.variance)} />
+                          ) : null}
+                          {Number(queueEntry.uncoveredCashExpenses ?? 0) > 0 ? (
+                            <InfoPair
+                              label="Cash expenses above takings (funding source unconfirmed)"
+                              value={formatMoney(queueEntry.uncoveredCashExpenses)}
+                            />
+                          ) : null}
                           <InfoPair
                             label="Income"
                             value={formatMoney(queueEntry.totalIncome ?? 0)}
@@ -13863,6 +13909,13 @@ function DriverCashSummaryBoard({
         <InfoPair label="Expenses" value={formatMoney(summary?.totalExpenses ?? 0)} />
         <InfoPair label="Cash expenses" value={formatMoney(summary?.cashExpenses ?? 0)} />
         <InfoPair label="Expected cash in" value={formatMoney(summary?.expectedCashIn ?? 0)} />
+        <InfoPair label="Cash to hand in" value={formatMoney(getDayCashSettlement(summary ?? {}).cashToHandIn)} />
+        {getDayCashSettlement(summary ?? {}).uncoveredCashExpenses > 0 ? (
+          <InfoPair
+            label="Cash expenses above takings (funding source unconfirmed)"
+            value={formatMoney(getDayCashSettlement(summary ?? {}).uncoveredCashExpenses)}
+          />
+        ) : null}
       </div>
 
       <div className="finance-form-meta">

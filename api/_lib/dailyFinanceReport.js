@@ -1,7 +1,9 @@
 import {
   findDriverCashUpEntry,
   getCashUpCoverageKey,
+  getDayCashSettlement,
   getDriverCashUpWorkflowStatus,
+  isClosedWithoutDeposit,
   getFinanceRecordCashUpCoverageKey,
   getFinanceRecordDriverName,
   getFinanceRecordDriverStaffId,
@@ -183,6 +185,10 @@ const buildDriverDayCashUp = (snapshot, record) => {
     nonCashExpenses: roundAmount(summary.nonCashExpenses) ?? 0,
     cashExpensesNetted: true,
     expectedCashHandIn: roundAmount(summary.expectedCashIn),
+    // Expense-only / negative days: kept separate, never netted (variance stays signed).
+    cashToHandIn: getDayCashSettlement(summary).cashToHandIn,
+    uncoveredCashExpenses: getDayCashSettlement(summary).uncoveredCashExpenses,
+    closedWithoutDeposit: isClosedWithoutDeposit(cashUpEntry),
     actualCashReceived: counted == null ? null : roundAmount(counted),
     stageSource: cashUpEntry ?? record,
     submittedAt: normalizeText(cashUpEntry?.createdAt ?? cashUpEntry?.checkedAt),

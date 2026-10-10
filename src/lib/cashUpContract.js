@@ -197,3 +197,43 @@ export const getDriverCashUpWorkflowStatus = (entry, summary) => {
 
   return explicitStatus ?? "pending";
 };
+
+// --- Day cash settlement (expense-only and negative days) ------------------------
+// Expected cash = income − cash expenses and can be negative (cash expenses
+// larger than the day's takings). The two halves are kept separate and never
+// netted: cash to hand in is never below R 0, and any excess cash expense is
+// "uncovered" with an UNCONFIRMED funding source (TaxiFlow does not assume the
+// driver is owed it). Variance stays counted − expected, signed, as before.
+const roundMoney = (value) => Math.round(Number(value) * 100) / 100;
+
+export const getDayCashSettlement = (summary = {}, counted = null) => {
+  const expectedCashIn = roundMoney(summary.expectedCashIn ?? 0);
+  const hasCount = counted !== null && counted !== undefined && counted !== "" && Number.isFinite(Number(counted));
+  const countedCash = hasCount ? roundMoney(counted) : null;
+  return {
+    expectedCashIn,
+    cashToHandIn: Math.max(expectedCashIn, 0),
+    uncoveredCashExpenses: Math.max(-expectedCashIn, 0),
+    countedCash,
+    variance: hasCount ? roundMoney(countedCash - expectedCashIn) : null,
+    // Nothing to bank: no cash was due and none was counted.
+    noCashToBank: Math.max(expectedCashIn, 0) === 0 && (!hasCount || countedCash === 0),
+  };
+};
+
+// A verified day with nothing to bank is CLOSED WITHOUT A DEPOSIT. The workflow
+// status stays "verified" (pending|counted|verified|banked is unchanged); this
+// explicit indicator keeps it out of every deposit batch.
+export const isClosedWithoutDeposit = (entry) => entry?.settlement?.closedWithoutDeposit === true;
+
+export const buildZeroCashClosure = (summary, { now, actorId, actorRole }) => {
+  const settlement = getDayCashSettlement(summary, 0);
+  return {
+    cashToHandIn: 0,
+    uncoveredCashExpenses: settlement.uncoveredCashExpenses,
+    closedWithoutDeposit: true,
+    closedAt: now,
+    closedBy: actorId,
+    closedByRole: actorRole,
+  };
+};

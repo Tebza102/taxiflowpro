@@ -210,7 +210,9 @@ test("lockDeposit is async, confirmed-write, and only locks records already in s
   assert.doesNotMatch(fn, /\bsetSnapshot\(/, "lockDeposit must not call setSnapshot() directly");
   assert.match(fn, /commitLiveSnapshotMutation\(current, nextSnapshot\)/);
   assert.match(fn, /entry\.workflowStatus === "verified"/);
-  assert.match(fn, /record\.status === "verified" && !verifiedDriverCashUpTransactionIds\.has\(record\.id\)/);
+  assert.match(fn, /record\.status === "verified" &&\s*!verifiedDriverCashUpTransactionIds\.has\(record\.id\)/);
+  // Zero-cash days closed without a deposit are never banked (expense-only handling).
+  assert.match(fn, /!closedDayTransactionIds\.has\(record\.id\)/);
   assert.match(fn, /Only the manager or owner can finalise a verified deposit batch\./);
 
   const commitCallIndex = fn.indexOf("commitLiveSnapshotMutation(current, nextSnapshot)");

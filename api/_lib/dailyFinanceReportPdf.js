@@ -354,7 +354,9 @@ const drawRecordDetails = (ctx, report) => {
   const status =
     cashUp.basis === "driver-day" && !cashUp.submitted
       ? "Captured, day cash-up not yet submitted"
-      : STATUS_LABELS[cashUp.status] ?? cashUp.status;
+      : cashUp.closedWithoutDeposit
+        ? "Verified, closed: no cash to bank"
+        : STATUS_LABELS[cashUp.status] ?? cashUp.status;
   const driver = report.header.driver;
 
   drawSectionTitle(ctx, "Record details");
@@ -438,6 +440,13 @@ const drawCashControl = (ctx, report) => {
     { label: "Expected cash hand-in", value: money(cashUp.expectedCashHandIn) },
     { label: "Actual cash received", value: awaiting ? "Awaiting count" : money(cashUp.actualCashReceived) },
     { label: "Cash variance", value: describeVariance(cashUp), emphasis: true },
+    ...(cashUp.basis === "driver-day"
+      ? [{ label: "Cash to hand in", value: money(cashUp.cashToHandIn ?? 0) }]
+      : []),
+    ...(Number(cashUp.uncoveredCashExpenses ?? 0) > 0
+      ? [{ label: "Cash expenses above takings", value: money(cashUp.uncoveredCashExpenses), note: "Funding source unconfirmed; not banked" }]
+      : []),
+    ...(cashUp.closedWithoutDeposit ? [{ label: "Closure", value: "Closed: no cash to bank" }] : []),
   ];
 
   drawSideBySide(ctx, {
@@ -448,7 +457,7 @@ const drawCashControl = (ctx, report) => {
     }`.trim(),
     chart: {
       title: `Cash reconciliation - variance: ${describeVariance(cashUp)}`,
-      emptyMessage: "No data recorded",
+      emptyMessage: cashUp.closedWithoutDeposit ? "No cash to bank: closed without a deposit" : "No data recorded",
       bars:
         cashUp.expectedCashHandIn == null
           ? []
@@ -520,7 +529,11 @@ const drawWorkflow = (ctx, report) => {
             : `${money(deposit.batchAmount)}${deposit.recordsInBatch ? ` (batch of ${deposit.recordsInBatch} records)` : ""}`,
         ],
       ]
-    : [["Deposit status", cashUp.status === "banked" ? "Banked; linked deposit record not found" : "Not banked yet"]];
+    : [["Deposit status", cashUp.status === "banked"
+      ? "Banked; linked deposit record not found"
+      : cashUp.closedWithoutDeposit
+        ? "Closed: no cash to bank"
+        : "Not banked yet"]];
 
   drawDetailGrid(ctx, depositItems);
 };

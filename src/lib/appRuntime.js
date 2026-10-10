@@ -21,6 +21,8 @@ import {
   getSafeWindow,
 } from "./browserRuntime";
 import {
+  getDayCashSettlement,
+  isClosedWithoutDeposit,
   getCashUpCoverageKey,
   getDriverCashUpWorkflowStatus,
   getExpectedOpeningOdo,
@@ -2089,9 +2091,15 @@ const buildDriverCashUpQueueEntry = (source, entry = {}) => {
     checkedAtLabel: formatStamp(entry.checkedAt ?? entry.updatedAt ?? entry.createdAt),
     submittedAt: formatTime(entry.checkedAt ?? entry.updatedAt ?? entry.createdAt),
     workflowStatus,
-    workflowLabel: workflow.label,
-    workflowTone: workflow.tone,
+    workflowLabel: isClosedWithoutDeposit(entry) ? "Closed: no cash to bank" : workflow.label,
+    workflowTone: isClosedWithoutDeposit(entry) ? "info" : workflow.tone,
     status: deriveQueueStatus({ status: workflowStatus }, shortage, gapKm),
+    // Expense-only / negative days: cash to hand in and uncovered cash expenses
+    // (funding source unconfirmed) are shown separately; variance stays signed.
+    cashToHandIn: getDayCashSettlement(summary).cashToHandIn,
+    uncoveredCashExpenses: getDayCashSettlement(summary).uncoveredCashExpenses,
+    variance: getDayCashSettlement(summary, Number.isFinite(counted) ? counted : null).variance,
+    closedWithoutDeposit: isClosedWithoutDeposit(entry),
     dayAnalytics: buildDriverCashUpAnalytics(summary),
   };
 };
@@ -2928,7 +2936,7 @@ const deriveSnapshot = (source) => {
     driverCashUpQueue.map((entry) => getCashUpCoverageKey(entry)).filter(Boolean),
   );
   const activeDriverCashVerificationQueue = driverCashUpQueue.filter(
-    (entry) => entry.incomeCount > 0 && entry.workflowStatus !== "banked",
+    (entry) => entry.entryCount > 0 && entry.workflowStatus !== "banked" && !entry.closedWithoutDeposit,
   );
   const standaloneVerificationQueue = activeIncomeBatch
     .filter((record) => {
@@ -3002,10 +3010,12 @@ const deriveSnapshot = (source) => {
       ),
   );
   const verifiedDriverCashUps = driverCashUpQueue.filter(
-    (entry) => entry.workflowStatus === "verified",
+    (entry) => entry.workflowStatus === "verified" && !entry.closedWithoutDeposit,
   );
   const verifiedDriverCashUpTransactionIds = new Set(
-    verifiedDriverCashUps.flatMap((entry) => buildCashUpTransactionIds(entry)),
+    driverCashUpQueue
+      .filter((entry) => entry.workflowStatus === "verified")
+      .flatMap((entry) => buildCashUpTransactionIds(entry)),
   );
   const verifiedStandaloneIncome = verifiedIncome.filter(
     (record) => !verifiedDriverCashUpTransactionIds.has(record.id),

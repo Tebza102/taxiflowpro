@@ -364,6 +364,18 @@ export function ReportsPanel({ snapshot, activeRole, canAccessReports, accessTok
                   <span>Cash variance</span>
                   <strong data-testid="reports-variance">{describeVariance(report.cashUp)}</strong>
                 </div>
+                {report.cashUp.basis === "driver-day" ? (
+                  <div className="info-pair">
+                    <span>Cash to hand in</span>
+                    <strong>{formatRand(report.cashUp.cashToHandIn ?? 0)}</strong>
+                  </div>
+                ) : null}
+                {Number(report.cashUp.uncoveredCashExpenses ?? 0) > 0 ? (
+                  <div className="info-pair" data-testid="reports-uncovered">
+                    <span>Cash expenses above takings (funding source unconfirmed)</span>
+                    <strong>{formatRand(report.cashUp.uncoveredCashExpenses)}</strong>
+                  </div>
+                ) : null}
                 <div className="info-pair">
                   <span>Standard / special income</span>
                   <strong>
@@ -384,7 +396,10 @@ export function ReportsPanel({ snapshot, activeRole, canAccessReports, accessTok
                 </div>
                 <div className="info-pair">
                   <span>Deposit</span>
-                  <strong>{report.deposit?.reference ?? "Not deposited"}</strong>
+                  <strong>
+                    {report.deposit?.reference ??
+                      (report.cashUp.closedWithoutDeposit ? "Closed: no cash to bank" : "Not deposited")}
+                  </strong>
                 </div>
               </div>
             </>

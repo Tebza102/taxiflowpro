@@ -1,7 +1,10 @@
 import { createHash, randomUUID } from "node:crypto";
 
 import {
+  buildZeroCashClosure,
+  getDayCashSettlement,
   getDriverCashUpWorkflowStatus,
+  isClosedWithoutDeposit,
   summarizeDriverDayCash,
 } from "../../src/lib/cashUpContract.js";
 import { normalizeTripFinanceTransactions } from "../../src/lib/tripHistory.js";
@@ -169,9 +172,16 @@ export const applyFinanceAction = (storedSnapshot, request, requester, now = new
     const summary = daySummary(stored, driverStaffId, request.fields.workDate);
     if (summary.entryCount === 0) throw createHttpError(409, "Save at least one income or expense entry before sending checking for the day.");
     const existing = cashUps.find((entry) => text(entry.driverStaffId) === driverStaffId && text(entry.workDate) === request.fields.workDate) ?? null;
-    if (existing?.status === "banked" || getDriverCashUpWorkflowStatus(existing, summary) === "banked") {
+    const existingStatus = existing ? getDriverCashUpWorkflowStatus(existing, summary) : null;
+    if (existing?.status === "banked" || existingStatus === "banked") {
       throw createHttpError(409, "Deposited day checkings can no longer be updated.");
     }
+    // A counted or verified day is closed (no reopening): re-submitting it would
+    // silently reset the hand-in and manager check.
+    if (existing && (existingStatus === "counted" || existingStatus === "verified" || isClosedWithoutDeposit(existing))) {
+      throw createHttpError(409, `This day checking is already ${existingStatus}; it is closed and can no longer be changed.`);
+    }
+    const daySettlement = getDayCashSettlement(summary);
     const id = existing?.id ?? `cashup-${driverStaffId}-${request.fields.workDate}`;
     const cashUp = {
       ...(existing ?? {}),
@@ -185,8 +195,11 @@ export const applyFinanceAction = (storedSnapshot, request, requester, now = new
       totalExpenses: summary.totalExpenses,
       cashExpenses: summary.cashExpenses,
       expectedCashIn: summary.expectedCashIn,
+      cashToHandIn: daySettlement.cashToHandIn,
+      uncoveredCashExpenses: daySettlement.uncoveredCashExpenses,
       entryCount: summary.entryCount,
       status: "pending",
+      settlement: null,
       actualCashReceived: null,
       checkedAt: now,
       checkedBy: requester.id,
@@ -264,7 +277,20 @@ export const applyFinanceAction = (storedSnapshot, request, requester, now = new
   if (status !== "counted") throw createHttpError(409, status === "verified" ? "This day checking has already been verified." : "An administrator must record the day hand-in before manager verification.");
   const amount = request.fields.actualCashReceived ?? Number(target.actualCashReceived);
   if (!Number.isFinite(amount) || amount < 0) throw createHttpError(409, "An administrator must record the day hand-in before manager verification.");
-  const cashUp = { ...target, status: "verified", actualCashReceived: amount, verifiedAt: now, verifiedBy: requester.id, verifiedByRole: requester.role };
+  const settlementView = getDayCashSettlement(summary, amount);
+  const cashUp = {
+    ...target,
+    status: "verified",
+    actualCashReceived: amount,
+    verifiedAt: now,
+    verifiedBy: requester.id,
+    verifiedByRole: requester.role,
+    cashToHandIn: settlementView.cashToHandIn,
+    uncoveredCashExpenses: settlementView.uncoveredCashExpenses,
+    settlement: settlementView.noCashToBank
+      ? buildZeroCashClosure(summary, { now, actorId: requester.id, actorRole: requester.role })
+      : null,
+  };
   next.dailyCashUps = cashUps.map((entry) => (entry === target ? cashUp : entry));
   next.financeTransactions = (stored.financeTransactions ?? []).map((record) =>
     ids.has(record.id) ? { ...record, status: "verified", verifiedAt: now, verifiedBy: requester.id, verifiedByRole: requester.role } : record,
@@ -276,7 +302,18 @@ export const applyFinanceAction = (storedSnapshot, request, requester, now = new
   return {
     snapshot: next,
     targetId: target.id,
-    response: { action: request.action, cashUpId: target.id, status: "verified", expectedCashIn: summary.expectedCashIn, actualCashReceived: amount, variance: Math.round((amount - summary.expectedCashIn) * 100) / 100, shortage: Math.max(summary.expectedCashIn - amount, 0) },
+    response: {
+      action: request.action,
+      cashUpId: target.id,
+      status: "verified",
+      expectedCashIn: summary.expectedCashIn,
+      actualCashReceived: amount,
+      variance: Math.round((amount - summary.expectedCashIn) * 100) / 100,
+      shortage: Math.max(summary.expectedCashIn - amount, 0),
+      cashToHandIn: settlementView.cashToHandIn,
+      uncoveredCashExpenses: settlementView.uncoveredCashExpenses,
+      closedWithoutDeposit: settlementView.noCashToBank,
+    },
   };
 };
 
@@ -311,11 +348,15 @@ const lockDeposit = (stored, request, requester, now) => {
   ];
   if (foreign.length) throw createHttpError(404, `These records do not exist in this business: ${foreign.join(", ")}.`);
 
-  const verified = cashUps
+  const allVerified = cashUps
     .map((entry) => ({ entry, summary: daySummary(stored, text(entry.driverStaffId), text(entry.workDate)) }))
     .filter(({ entry, summary }) => getDriverCashUpWorkflowStatus(entry, summary) === "verified");
+  // Zero-cash days closed without a deposit stay out of every batch, and their
+  // records are not "standalone" either: nothing from them is ever banked.
+  const verified = allVerified.filter(({ entry }) => !isClosedWithoutDeposit(entry));
+  const closedRecordIds = new Set(allVerified.filter(({ entry }) => isClosedWithoutDeposit(entry)).flatMap(({ summary }) => [...linkedIds(summary)]));
   const cashUpTransactionIds = new Set(verified.flatMap(({ summary }) => [...linkedIds(summary)]));
-  const standalone = transactions.filter((record) => record.status === "verified" && !cashUpTransactionIds.has(record.id));
+  const standalone = transactions.filter((record) => record.status === "verified" && !cashUpTransactionIds.has(record.id) && !closedRecordIds.has(record.id));
   const batchCashUpIds = verified.map(({ entry }) => text(entry.id)).sort();
   const batchTransactionIds = [...new Set([...cashUpTransactionIds, ...standalone.map((record) => record.id)])].map(text).sort();
 

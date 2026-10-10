@@ -186,7 +186,7 @@ export const parseExpense = (fields) => {
 // Driver role: always driver capture, own linkage required.
 // Owner with linkage: may capture as driver (owner-driver) or management.
 // Owner/Admin/Manager: management capture needs finance edit (Owner always).
-const resolveMode = (requester, requested) => {
+export const resolveMode = (requester, requested) => {
   if (requester.role === "Driver") {
     if (requested === "management") throw createHttpError(403, "Drivers can only capture their own work.");
     if (!text(requester.driverStaffId)) throw createHttpError(403, "Your membership is not linked to a driver record.");
@@ -203,14 +203,14 @@ const resolveMode = (requester, requested) => {
   return "management";
 };
 
-const findVehicle = (stored, vehicleId) => {
+export const findVehicle = (stored, vehicleId) => {
   const vehicle = (stored.vehicles ?? []).find((item) => text(item.id) === vehicleId);
   if (!vehicle) throw createHttpError(404, "That vehicle does not exist in this business.");
   if (vehicle.archivedAt || text(vehicle.status).toLowerCase() === "archived") throw createHttpError(409, "That vehicle is archived.");
   return vehicle;
 };
 
-const driverContext = (stored, requester, mode, workDate) => {
+export const driverContext = (stored, requester, mode, workDate) => {
   if (mode !== "driver") return { driverStaffId: null, driverName: null };
   const driverStaffId = text(requester.driverStaffId);
   const driver = (stored.drivers ?? []).find((item) => text(item.staffId) === driverStaffId);
@@ -243,13 +243,13 @@ const meta = (requester, now, requestId) => ({
 // Each builder returns { record, audit } for a NEW record. The record id is
 // derived from the requestId, so a retried request can never create a second
 // record even if the request log were lost.
-export const buildStandardIncome = (stored, f, requester, now, requestId) => {
-  const mode = resolveMode(requester, f.captureAs);
+export const buildStandardIncome = (stored, f, requester, now, requestId, edit = null) => {
+  const mode = edit ? edit.mode : resolveMode(requester, f.captureAs);
   const vehicle = findVehicle(stored, f.vehicleId);
-  const { driverStaffId, driverName } = driverContext(stored, requester, mode, f.tripDate);
+  const { driverStaffId, driverName } = edit ?? driverContext(stored, requester, mode, f.tripDate);
   const totals = getDailyTripLogbookTotals(f.tripLogbook);
-  const expectedOpening = getExpectedOpeningOdo(stored.financeTransactions ?? [], stored.vehicles ?? [], f.vehicleId, null);
-  const id = `txn-inc-${requestId}`;
+  const expectedOpening = getExpectedOpeningOdo(stored.financeTransactions ?? [], stored.vehicles ?? [], f.vehicleId, edit?.id ?? null);
+  const id = edit?.id ?? `txn-inc-${requestId}`;
   const record = {
     id,
     type: "income",
@@ -285,12 +285,12 @@ export const buildStandardIncome = (stored, f, requester, now, requestId) => {
   return { record, audit: { action: "create", entityType: "income", entityId: id, title: `Trip income added / ${vehicle.registration}`, detail: `${vehicle.route} / ${totals.tripCount} trips / ${totals.totalPassengers} passengers / ${totals.totalAmount}` }, extra: { discrepancy: record.discrepancy, expectedOpeningOdo: expectedOpening, amountClaimed: totals.totalAmount, mode } };
 };
 
-export const buildSpecialIncome = (stored, f, requester, now, requestId) => {
-  const mode = resolveMode(requester, f.captureAs);
+export const buildSpecialIncome = (stored, f, requester, now, requestId, edit = null) => {
+  const mode = edit ? edit.mode : resolveMode(requester, f.captureAs);
   const vehicle = findVehicle(stored, f.vehicleId);
-  const { driverStaffId, driverName } = driverContext(stored, requester, mode, f.tripDate);
+  const { driverStaffId, driverName } = edit ?? driverContext(stored, requester, mode, f.tripDate);
   const businessKm = f.closingOdo - f.openingOdo;
-  const id = `txn-sp-${requestId}`;
+  const id = edit?.id ?? `txn-sp-${requestId}`;
   const record = {
     id,
     type: "income",
@@ -330,14 +330,15 @@ export const buildSpecialIncome = (stored, f, requester, now, requestId) => {
   return { record, audit: { action: "create", entityType: "income", entityId: id, title: `Extra trip added / ${vehicle.registration}`, detail: `${f.fromLocation} to ${f.toLocation} / ${f.amount}` }, extra: { amountClaimed: f.amount, mode } };
 };
 
-export const buildExpense = (stored, f, requester, now, requestId) => {
-  const mode = resolveMode(requester, f.captureAs);
+export const buildExpense = (stored, f, requester, now, requestId, edit = null) => {
+  const mode = edit ? edit.mode : resolveMode(requester, f.captureAs);
   const vehicle = f.expenseKind === "asset" ? findVehicle(stored, f.vehicleId) : null;
-  const { driverStaffId, driverName } = driverContext(stored, requester, mode, f.expenseDate);
-  const id = `txn-exp-${requestId}`;
+  const { driverStaffId, driverName } = edit ?? driverContext(stored, requester, mode, f.expenseDate);
+  const id = edit?.id ?? `txn-exp-${requestId}`;
   // Existing rule: management with finance edit records verified expenses;
-  // driver-captured expenses start pending.
-  const status = mode === "management" ? "verified" : "pending";
+  // driver-captured expenses start pending. Edits always stay pending (an edit
+  // must never skip the hand-in/verify workflow).
+  const status = edit ? "pending" : mode === "management" ? "verified" : "pending";
   const record = {
     id,
     type: "expense",

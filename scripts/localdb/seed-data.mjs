@@ -36,6 +36,7 @@ export const buildSyntheticSnapshot = () => ({
     { id: "uat-fin-2", type: "income", incomeKind: "standard", vehicle: "UAT-TEST-01", driverStaffId: "uat-drv-01", route: "UAT Route A", tripDate: day, amountClaimed: 300, status: "pending", createdAt: at("09:00") },
     { id: "uat-fin-3", type: "income", incomeKind: "standard", vehicle: "UAT-TEST-02", route: "UAT Route A", tripDate: day, amountClaimed: 200, status: "verified", actualCashReceived: 200, createdAt: at("10:00") },
     { id: "uat-fin-4", type: "income", incomeKind: "standard", vehicle: "UAT-TEST-02", route: "UAT Route A", tripDate: day, amountClaimed: 100, status: "banked", actualCashReceived: 100, depositId: "uat-dep-1", createdAt: at("11:00") },
+    { id: "uat-fin-7", type: "income", incomeKind: "special", isSpecial: true, vehicle: "UAT-TEST-02", route: "Depot to Airport", tripDate: day, amountClaimed: 300, amount: 300, status: "pending", createdAt: at("13:00") },
     { id: "uat-fin-6", type: "income", incomeKind: "standard", vehicle: "UAT-TEST-02", route: "UAT Route A", tripDate: day, amountClaimed: 150, status: "counted", actualCashReceived: 150, createdAt: at("12:00") },
     { id: "uat-fin-5", type: "income", incomeKind: "standard", vehicle: "UAT-TEST-01", driverStaffId: "uat-drv-01", route: "UAT Route A", tripDate: "2026-10-02", amountClaimed: 250, status: "pending", createdAt: "2026-10-02T08:00:00+02:00" },
   ],

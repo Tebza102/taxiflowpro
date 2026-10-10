@@ -6,6 +6,7 @@ import {
 } from "../../src/lib/cashUpContract.js";
 import { normalizeTripFinanceTransactions } from "../../src/lib/tripHistory.js";
 import { CAPTURE_ACTIONS } from "./financeCapture.js";
+import { RECORD_ACTIONS } from "./financeRecordActions.js";
 import { createHttpError } from "./tenantAuth.js";
 
 // Scoped server-side finance actions. Pure: given the stored business snapshot,
@@ -32,6 +33,8 @@ export const FINANCE_ACTIONS = Object.freeze({
   // Driver -> own driver work; Owner with linkage -> driver or management;
   // Owner/Admin/Manager -> management with finance edit (Owner always).
   ...Object.fromEntries(Object.entries(CAPTURE_ACTIONS).map(([name, spec]) => [name, { roles: ["Owner", "Admin", "Manager", "Driver"], fields: spec.fields, capture: spec }])),
+  // Standalone count/verify and pending-record edit/delete (financeRecordActions.js).
+  ...Object.fromEntries(Object.entries(RECORD_ACTIONS).map(([name, spec]) => [name, { roles: spec.roles, fields: spec.fields, record: spec }])),
 });
 
 const ENVELOPE_FIELDS = ["action", "requestId", "expectedVersion", "fields"];
@@ -69,6 +72,15 @@ export const parseFinanceActionRequest = (body) => {
   if (unknown.length) throw createHttpError(400, `Unsupported fields for ${action}: ${unknown.join(", ")}.`);
 
   const parsed = {};
+  if (spec.record) {
+    return {
+      action,
+      requestId: requestId.toLowerCase(),
+      expectedVersion,
+      fields: spec.record.parse(fields),
+      requestHash: createHash("sha256").update(stable({ action, fields })).digest("hex"),
+    };
+  }
   if (spec.capture) {
     return {
       action,
@@ -200,6 +212,10 @@ export const applyFinanceAction = (storedSnapshot, request, requester, now = new
   }
 
   if (request.action === "deposit.lock") return lockDeposit(stored, request, requester, now);
+  if (spec.record) {
+    const result = spec.record.apply(stored, request.fields, requester, now, request.requestId);
+    return { ...result, response: { action: request.action, ...result.response } };
+  }
   if (spec.capture) {
     const { record, audit, extra } = spec.capture.build(stored, request.fields, requester, now, request.requestId);
     if ((stored.financeTransactions ?? []).some((item) => text(item.id) === record.id)) {

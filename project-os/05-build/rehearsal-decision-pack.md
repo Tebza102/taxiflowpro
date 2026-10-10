@@ -1,5 +1,7 @@
 # Hosted Rehearsal Decision Pack (final amendments 2026-10-10)
 
+> **SUPERSEDED 2026-10-10 (Task 25):** no separate hosted rehearsal and no extra spend. The release now follows `pilot-release-checklist.md` on the existing platform. Kept for history only.
+
 Gathered **read-only**:
 - the Supabase connector's account, project and price lookups;
 - the Vercel CLI's reads of the team and projects;

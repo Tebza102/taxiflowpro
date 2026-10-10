@@ -33,6 +33,47 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Simple three-owner pilot (Task 25; local only; nothing hosted)
+
+**No separate hosted rehearsal and no extra spend.** The rehearsal decision pack and checklist are superseded by `05-build/pilot-release-checklist.md`, which covers the existing platform.
+
+**Complexity review**
+- **Kept** (each has a workflow or security purpose):
+  - release files 01–03;
+  - the local live-schema rehearsal tooling;
+  - the hosted operator scripts and data loader;
+  - the legacy-key lockout order;
+  - the business picker;
+  - branding.
+- **Retired** (documents only): the hosted rehearsal decision pack and checklist.
+- **Proposed, awaiting approval (behaviour not changed):**
+  - **P1:** remove the `VITE_TENANT_MODE` / `TAXIFLOW_TENANT_MODE` dual mode, so a live build is always tenant. This fails safe because a mis-set variable can no longer select the legacy path.
+  - **P2:** defer release file 04 (`assign_initial_owner`), because the live inventory already maps an active Owner. Apply it only if the pre-flight shows none.
+
+**Expense-only days (implemented):**
+- Every day with entries reaches Banking.
+- "Cash to hand in" and "Cash expenses above takings (funding source unconfirmed)" are shown separately; the variance stays signed.
+- A verified day with no cash to bank closes with `settlement.closedWithoutDeposit` (status stays `verified`). It is never banked, and no R 0 deposit is created.
+- A counted or verified day refuses re-submission (no reopening).
+- There is no reimbursement feature.
+- Shared helper `src/lib/cashUpContract.js`, used by the server (`financeActions.js`), the client (`App.jsx`, `appRuntime.js`) and the reports (preview and PDF).
+
+**Rendered PDF inspection: done.** A normal report and a closed zero-cash report were rendered to PNG with the Windows PDF API. Three closed-day labels were corrected:
+- status: "Verified, closed: no cash to bank";
+- deposit status: "Closed: no cash to bank";
+- reconciliation chart: an explicit closed message instead of "No data recorded".
+
+Both reports fit on one page.
+
+**Hosting facts** (checked from the docs, 2026-10-10):
+- **Vercel Hobby** is non-commercial only (**X1**).
+- **Supabase's default SMTP** only emails org team members (**X2**).
+- **Supabase Free** has no automatic backups and pauses after a low-activity week (**X3**).
+
+**Onboarding plan:** one real Owner first, then Owners 2 and 3 after the first working day succeeds (`11-client-delivery/first-owner-onboarding.md`).
+
+**Evidence:** see the Task 25 change-log entry.
+
 ### Approval A finalised (Task 24; documents only)
 
 - **Synthetic-only first rehearsal.** The production backup is taken read-only, kept encrypted and separate, and not restored.

@@ -1,5 +1,7 @@
 # Rehearsal and Cutover Checklist (TaxiFlow tenant pilot)
 
+> **SUPERSEDED 2026-10-10 (Task 25):** no separate hosted rehearsal and no extra spend. The release now follows `pilot-release-checklist.md` on the existing platform. Kept for history only.
+
 Status: **draft for review; nothing executed.** Revised 2026-10-10 for **two bounded approvals**. Scope, spend limits and the **stop conditions** are defined in `rehearsal-decision-pack.md` sections 5–6 and apply to every row. Inside an approval's scope no further per-step approval is needed. Anything outside it is a stop.
 - Part A needs **Authorization A** (rehearsal only).
 - Part B needs **Authorization B** (production), which is given separately and only after Part A is signed off.

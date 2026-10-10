@@ -1,6 +1,22 @@
 # Next Action
 
-## Immediate Next Step (updated 2026-10-09 ~22:35)
+## Immediate Next Step (updated 2026-10-10, Task 25)
+
+**There is no separate hosted rehearsal and no extra spend.** The release follows `project-os/05-build/pilot-release-checklist.md` on the existing platform. Onboarding follows `project-os/11-client-delivery/first-owner-onboarding.md`.
+
+**Tebogo (decisions and authorizations):**
+1. **X1 Vercel:** the Hobby plan is non-commercial only. Authorize the upgrade of the `apprigate` team to Pro ($20/month), or choose another eligible host. No purchase made.
+2. **X2 email:** choose the custom SMTP provider and sender domain, and authorize its SPF/DKIM DNS records. Without these, setup emails cannot reach pilot Owners.
+3. **X3 backups:** accept Supabase Free (no automatic backups; operator encrypted backups daily during the pilot) or upgrade.
+4. **Proposals P1 and P2** (`current-status.md`, Task 25): approve or refuse them. P1 removes the tenant-mode switch. P2 skips release file 04 because an Owner already maps.
+5. Authorize the release window: push, merge to `main`, keys, migrations 01–03, deploy, promote.
+6. Name the first pilot Owner and collect their set-up data.
+
+**Agent, after authorization:** run the checklist rows 1–13, then onboard the first Owner. Add Owners 2 and 3 only after the first working day succeeds.
+
+## Previous next steps (history)
+
+### 2026-10-09 ~22:35
 
 The local test gaps are closed and committed locally (`a424d84`, `00df61a`, `78d44c2`, `9cc33fa`, plus the Project OS commit). See `current-status.md` → Local commits not yet pushed.
 

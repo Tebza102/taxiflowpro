@@ -1,5 +1,7 @@
 # Release Plan: Tenant Pilot (hosted), DOCUMENT ONLY
 
+> **2026-10-10 (Task 25):** there is no separate hosted rehearsal. The executable release steps are in `pilot-release-checklist.md` (existing platform, blockers X1–X3). Sections 9 and 11 below are kept for reference.
+
 Status 2026-10-10: **plan only. Nothing in this document has been executed against a hosted project, DNS or email.**
 - Branch: `agent/tenant-db-foundation` (local commits).
 - Production: `main` @ `008ce8e` on the live Supabase project `vfxftviwteypasredjgm`.
@@ -218,8 +220,8 @@ Vercel **Preview** environments get **no** production secret key.
 7. Backup: the post-cutover encrypted backup decrypts and matches its manifest.
 
 ## 10. Open acceptance items (carry into the rehearsal)
-- **Expense-only driver day:** analysed in `expense-only-days.md`. It is submitted but never reaches Banking (`incomeCount > 0` filter), so it is never closed, and reimbursements are not tracked. Rule R1–R4 is recommended; **a decision and, if accepted, the implementation and tests are needed before rehearsal sign-off.**
-- **Rendered PDF page visual inspection:** not yet done (the logo geometry and colours were checked from the PDF source only).
+- ~~Expense-only driver day~~: **implemented and tested locally 2026-10-10** (`expense-only-days.md`, top note).
+- ~~Rendered PDF page visual inspection~~: **done 2026-10-10.** A normal report and a closed zero-cash report were rendered to PNG and inspected; the closed-day wording was corrected.
 - **Installed-app icons on real devices** (Android maskable, iOS home screen): not yet verified.
 - **Hosted email delivery** of the setup email: not yet verified.
 

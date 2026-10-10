@@ -698,3 +698,51 @@ Prepared. Installation is a human step.
 - **Checklist Part A** rewritten (A1–A21).
 
 **Next action:** `next-action.md` → 1s.
+
+### 2026-10-10 19:45 — Simple three-owner pilot: expense-only handling, PDF inspection, existing-platform release checklist (Task 25)
+
+**Changed by:** Claude Code (agent). Local only. Read-only docs lookups (Supabase). No hosted change, purchase, push, deploy or DNS change.
+
+**Files changed:**
+- `src/lib/cashUpContract.js`, `api/_lib/financeActions.js`, `src/lib/appRuntime.js`, `src/App.jsx`
+- `api/_lib/dailyFinanceReport.js`, `api/_lib/dailyFinanceReportPdf.js`, `src/components/ReportsPanel.jsx`
+- `tests/finance-persistence.test.mjs`, `scripts/localdb/expense-only-tests.mjs` (new)
+- `project-os/05-build/pilot-release-checklist.md` (new), `project-os/11-client-delivery/first-owner-onboarding.md` (new)
+- release-plan, expense-only-days, the superseded rehearsal decision pack and checklist, current-status, next-action
+
+**Summary:**
+- **Expense-only days:**
+  - every day with entries is reviewed;
+  - cash to hand in and uncovered cash expenses ("funding source unconfirmed") are shown separately; the variance stays signed;
+  - zero-cash verified days carry `settlement.closedWithoutDeposit`, are excluded from deposits, and no R 0 deposit is created;
+  - statuses are unchanged;
+  - a counted or verified day refuses re-submission (no reopening);
+  - there is no reimbursement feature.
+- **PDF:** rendered and inspected; the closed-day wording was fixed (status, deposit status, chart message).
+- **Banking card:** the new label is "Signed variance" (it originally collided with the "Counted" test filter).
+- **Release route:** the existing platform, with no rehearsal environment. Blockers:
+  - X1: Vercel Hobby is non-commercial;
+  - X2: the default SMTP only emails team members;
+  - X3: Supabase Free has no automatic backups and can pause.
+- **Proposals awaiting approval:** P1 (remove the tenant-mode switch) and P2 (defer release file 04).
+
+**Tests run:**
+- unit tests 317/317;
+- sync guards pass;
+- build OK;
+- expense-only integration 32/32;
+- finance-action 56/56;
+- finance-capture 43/43;
+- finance-record 36/36;
+- tenant browser suite 9/9;
+- demo Playwright 33/34, the one failure being the label collision; after the fix, `driver-visibility` passes 6/6;
+- rendered PDF: 2 reports, 1 page each.
+
+**Result:** Pass (local).
+
+**Risks remaining:**
+- X1–X3;
+- the new keys with the server functions, and `/api/business/*` routing, are proven only on the skip-domain production deployment behind the maintenance page;
+- installed-app icons on real devices are still unverified.
+
+**Next action:** `next-action.md` (Task 25).

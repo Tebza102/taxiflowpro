@@ -1,5 +1,7 @@
 # Expense-only Driver Days: Behaviour Today and Recommended Rule
 
+> **IMPLEMENTED 2026-10-10 (Task 25):** every day with entries reaches Banking. Cash to hand in = max(expected, 0). Cash expenses above takings = max(-expected, 0), labelled "funding source unconfirmed" and never banked. The variance stays signed (counted - expected). A verified day with no cash to bank gets `settlement.closedWithoutDeposit` (status stays `verified`), is excluded from deposits (no R 0 deposit), and is locked. A counted or verified day cannot be re-submitted (no reopening). There is no reimbursement feature. Proof: `scripts/localdb/expense-only-tests.mjs` (32/32) and the rendered PDF inspection. The R3 reimbursement payable below is **not** built.
+
 > **Revised 2026-10-10 (supersedes R2/R3 wording):** an excess of cash expenses over takings is shown as **"funding source unconfirmed"** (no assumed reimbursement); the signed variance is preserved; zero-cash days close at verified and are not banked (no R 0 deposit). See `rehearsal-decision-pack.md` section 3.
 >
 > **Refined 2026-10-10:** funding sources, worked examples and the smallest pilot implementation (no automatic payables) are in `rehearsal-decision-pack.md` section 3. That refinement replaces R3's reimbursement payable for the pilot.

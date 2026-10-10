@@ -33,6 +33,14 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Scoped finance capture (Task 15, local only)
+
+`capture.standard_income`, `capture.special_income` and `capture.expense` are server actions (create only) using the existing atomic, version-checked, retry-safe pattern.
+- Drivers and linked Owner-drivers capture only their own work; management capture needs finance edit.
+- Vehicles and driver records are validated in the business, and days that are counted, verified or banked are closed to new driver work (**please confirm**).
+- Evidence: capture 43/43 with real tokens, parity with the browser helpers 5/5, Node 307/307.
+- Edit/delete and standalone count/verify remain. See `tenant-design.md`.
+
 ### Owner-driver submit and scoped banking (Task 14, local only)
 
 - `cashup.submit` now accepts an active Owner with a membership driver linkage (one login; an Owner without a linkage is refused).

@@ -201,3 +201,53 @@ Still not server actions: capture (`saveStandardIncome`/`saveSpecialIncome`/`sav
 2. Actor ids are auth user ids; report/UI display-name mapping is pending.
 3. Frontend integration, membership-based user lifecycle/bootstrap, and the hosted migration plan are all not started.
 4. Deposit references use a per-business sequence from the snapshot (`deposits.length + 1`), same as the browser. They are unique in practice but not enforced by a constraint.
+
+## Scoped finance capture (Task 15, local only)
+
+### Existing capture rules (src/App.jsx), as mapped
+
+| Operation | Validation | Calculations | Associations | Permission |
+|---|---|---|---|---|
+| `saveStandardIncome` | vehicle; trip date; time in/out valid and out > in; opening/closing odometer, closing > opening; ≥ 1 trip leg with different from/to stops, integer passengers ≥ 0, amount ≥ 0 | amount = logbook total (`calculateDailyAnalytics`); trip/day analytics fields; `discrepancy` = opening ≠ `getExpectedOpeningOdo` | vehicle by id; Driver → own staff id; management → no driver | Driver; other roles need finance edit |
+| `saveSpecialIncome` | vehicle; date; closing > opening; from, to and reason; fuel/oil and repairs ≥ 0; amount > 0 | businessKm = closing − opening; route "from to to" | as above | as above |
+| `saveExpense` | category; description; date; amount > 0; a vehicle cost (`asset`) needs a valid vehicle | `cashExpense` = payment method; status **verified** for management with finance edit, **pending** for drivers | asset → vehicle; operational → "General" | as above |
+
+None of these writes vehicle odometer history: the odometer only drives the discrepancy flag. Capture therefore writes exactly one record plus one audit event.
+
+### Server actions (create only)
+
+| Action | Who | Result |
+|---|---|---|
+| `capture.standard_income` | Driver (own linkage); Owner with linkage as `captureAs: "driver"`; Owner/Admin/Manager as management (finance edit; Owner always) | pending income, amount from the server-computed logbook total, discrepancy flag |
+| `capture.special_income` | same | pending extra-trip income |
+| `capture.expense` | same | driver: pending; management: verified (existing rule) |
+
+- Explicit fields only. Unknown fields (`role`, `status`, `driverStaffId`, `amountClaimed` on a leg, …) and whole snapshots get 400.
+- Vehicles must exist in the authorized business and not be archived (404/409). A driver capture's linked staff id must exist in that business's `drivers` (409).
+- **Closed days:** driver work for a date whose day checking is counted, verified or banked is refused (409). The browser does not check this: it lets such a day silently fall back to pending, which undermines a recorded hand-in or deposit. **Please confirm this rule.**
+- The record id is `txn-{inc|sp|exp}-<requestId>`, so a retry can never duplicate the record, even if the request log is lost. Actor (`createdBy` = auth user id, `createdByRole`) and audit are server-generated.
+- Timestamps are composed in SAST explicitly. The browser uses device-local time, which is SAST in practice; Vercel runs in UTC.
+- The small field helpers mirror `src/lib/appRuntime.js`, which cannot load in Node. `tests/finance-capture-parity.test.mjs` loads the real browser module through Vite's SSR loader and checks identical outputs, so the server cannot drift.
+- **Difference from the browser:** trip legs must name from/to stops explicitly. The browser can default them from the vehicle route.
+
+### Evidence (2026-10-10)
+
+- `node scripts/localdb/finance-capture-tests.mjs`: **43/43** with real local tokens and two businesses:
+  - 18 forged or invalid inputs all refused (400) with nothing written;
+  - associations: a Business B vehicle in A (404), an unknown vehicle, Driver A into B (403);
+  - modes: Driver as management refused, Owner without linkage as driver refused, Admin as driver refused; Driver A captures its own income (920, 2 trips, 21 passengers); Manager captures a verified expense; Admin an extra trip (30 km); Owner a vehicle cost;
+  - owner-driver: Owner B captures own driver work (`uat-drv-b-owner`) and management work; Driver B cannot use an A vehicle and captures its own expense;
+  - closed days refuse new driver work (expense and income);
+  - stale save refused; retry replayed with one copy; after log loss the retry is refused with still one copy;
+  - other keys and pre-existing records unchanged; no vehicle odometer rewrite.
+- Unit 4/4; parity 5/5.
+- Regression: 09:55–10:13 on fresh resets: finance actions 56/56, drill PASS (request log 5 rows MATCH), tenant access 35/35, rollback 8/8, verify 16 PASS/0 WARN, server auth 26/26.
+- `node --test tests/*.test.mjs` 307/307; build passes.
+
+### Remaining after Task 15
+
+1. **Edit and delete** of capture records: `draft.id` updates with the driver edit-reason rule, `buildDriverRecordEditTracking`, `deleteTransaction`, never once banked.
+2. **Standalone record count/verify** (`verifyIncome` on a non-day-cash-up record).
+3. Actor display names (auth user ids → staff names).
+4. Confirm the closed-day capture rule.
+5. Frontend integration; membership-based user lifecycle/bootstrap; hosted plan.

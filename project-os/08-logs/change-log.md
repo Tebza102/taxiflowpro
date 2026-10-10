@@ -459,3 +459,18 @@ Prepared. Installation is a human step.
 - Regression: 09:20–09:27 on fresh resets: tenant access 35/35, rollback 8/8, verify 16 PASS/0 WARN, server auth 26/26.
 
 **Next action:** `next-action.md` → 1i.
+
+### 2026-10-10 10:13 — Scoped finance capture (local only; Task 15)
+
+**Changed by:** Claude Code (agent). Local synthetic environment only; no frontend, push, hosted, live or deploy.
+
+**Steps (SAST):**
+- 09:39 — Preflight @ `d4cb5c4`; mapped `saveStandardIncome`/`saveSpecialIncome`/`saveExpense` (validation, calculations, associations, permissions).
+- 09:41 — `appRuntime.js` cannot load in Node. Wrote `api/_lib/financeCapture.js`: the shared `analytics.js` maths plus mirrored field helpers, SAST timestamps, mode/association/closed-day rules, request-derived record ids. Wired into `financeActions`.
+- 09:42 — Removed caps I had added that the app does not have (odometer jump, passenger count, leg count): no invented rules.
+- 09:43 — `tests/finance-capture-parity.test.mjs` (Vite SSR loads the real browser helpers): 5/5.
+- 09:44–09:53 — `finance-capture-tests.mjs` on a fresh reset: 43/43 on the first run.
+- 09:54 — Unit 4/4; Node 307/307; sync guards and build pass; secret scan clean.
+- Regression: 09:55–10:13 on fresh resets: finance actions 56/56, drill PASS (request log 5 rows MATCH), tenant access 35/35, rollback 8/8, verify 16 PASS/0 WARN, server auth 26/26.
+
+**Next action:** `next-action.md` → 1j.

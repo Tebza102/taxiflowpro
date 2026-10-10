@@ -1,0 +1,13 @@
+{
+  "framework": null,
+  "installCommand": "",
+  "buildCommand": "",
+  "outputDirectory": ".",
+  "routes": [
+    { "src": "/sw\\.js", "headers": { "cache-control": "no-store", "content-type": "application/javascript; charset=utf-8" }, "continue": true },
+    { "src": "/api(?:/.*)?", "status": 503, "headers": { "cache-control": "no-store", "retry-after": "3600", "content-type": "application/json; charset=utf-8" }, "dest": "/api-maintenance.json" },
+    { "src": "/vercel\\.json", "status": 404, "dest": "/index.html" },
+    { "handle": "filesystem" },
+    { "src": "/.*", "headers": { "cache-control": "no-store", "x-robots-tag": "noindex" }, "dest": "/index.html" }
+  ]
+}

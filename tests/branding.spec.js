@@ -112,6 +112,9 @@ test("report preview and A4 PDF carry the approved logo", async ({ page }) => {
   await page.locator("button.module-button").filter({ hasText: "Reports" }).first().click();
   await expect(page.getByTestId("reports-preview").getByText("Expected cash hand-in")).toBeVisible({ timeout: 30_000 });
   await page.screenshot({ path: `${SHOTS}/report-preview.png`, fullPage: false });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.screenshot({ path: `${SHOTS}/report-preview-mobile.png`, fullPage: false });
+  await page.setViewportSize({ width: 1280, height: 900 });
   const downloadPromise = page.waitForEvent("download");
   await page.getByTestId("reports-download").click();
   const download = await downloadPromise;
@@ -123,4 +126,49 @@ test("report preview and A4 PDF carry the approved logo", async ({ page }) => {
   expect(image).not.toBeNull();
   const [width, height] = (image[1] ? [image[1], image[2]] : [image[3], image[4]]).map(Number);
   expect([width, height]).toEqual([1268, 735]);
+});
+
+// Approved palette (Task 19 follow-up): theme tokens, browser/PWA theme colour
+// and real component colours, with WCAG contrast computed from the rendered
+// styles. Status colours keep their own values.
+test("approved palette is applied with readable component contrast", async ({ page }) => {
+  await signIn(page, "owner@taxiflow.local");
+  const result = await page.evaluate(async () => {
+    const root = getComputedStyle(document.documentElement);
+    const token = (name) => root.getPropertyValue(name).trim().toLowerCase();
+    const rgb = (value) => (value.match(/\d+(\.\d+)?/g) ?? []).slice(0, 3).map(Number);
+    const lum = (c) => {
+      const [r, g, b] = c.map((v) => v / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const ratio = (a, b) => {
+      const [x, y] = [lum(a), lum(b)];
+      return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+    };
+    const pair = (selector) => {
+      const element = document.querySelector(selector);
+      if (!element) return null;
+      const style = getComputedStyle(element);
+      return { fg: rgb(style.color), bg: rgb(style.backgroundColor), ratio: ratio(rgb(style.color), rgb(style.backgroundColor)) };
+    };
+    const manifest = await (await fetch("/manifest.webmanifest", { cache: "no-store" })).json();
+    return {
+      tokens: { navy: token("--navy"), slate: token("--slate"), yellow: token("--brand-yellow"), orange: token("--brand-orange"), success: token("--success"), warning: token("--warning"), danger: token("--danger"), info: token("--info") },
+      themeMeta: document.querySelector('meta[name="theme-color"]').content,
+      manifestTheme: manifest.theme_color,
+      manifestBackground: manifest.background_color,
+      activeModule: pair("button.module-button.active"),
+      heading: (() => { const h = document.querySelector(".app-toolbar h1"); return { fg: rgb(getComputedStyle(h).color), ratio: ratio(rgb(getComputedStyle(h).color), [255, 255, 255]) }; })(),
+    };
+  });
+  expect(result.tokens).toEqual({ navy: "#0a1925", slate: "#253947", yellow: "#fdb801", orange: "#f58801", success: "#27ae60", warning: "#f39c12", danger: "#e74c3c", info: "#3498db" });
+  expect(result.themeMeta).toBe("#0A1925");
+  expect(result.manifestTheme).toBe("#0A1925");
+  expect(result.manifestBackground).toBe("#FFFFFF");
+  expect(result.heading.fg).toEqual([10, 25, 37]);
+  expect(result.heading.ratio).toBeGreaterThan(7);
+  if (result.activeModule && result.activeModule.bg.length === 3 && result.activeModule.bg.some((v) => v !== 0)) {
+    expect(result.activeModule.ratio).toBeGreaterThan(4.5);
+  }
+  console.log(`[palette] heading ${result.heading.ratio.toFixed(2)}:1, active module ${result.activeModule ? result.activeModule.ratio.toFixed(2) : "n/a"}:1`);
 });

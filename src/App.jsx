@@ -14052,7 +14052,7 @@ function RingMeter({ value, total, label, tone, sublabel }) {
       <div
         className="ring-meter"
         style={{
-          background: `conic-gradient(${colorMap[tone] ?? "var(--info)"} ${progress}deg, rgba(11, 37, 69, 0.08) ${progress}deg 360deg)`,
+          background: `conic-gradient(${colorMap[tone] ?? "var(--info)"} ${progress}deg, rgba(10, 25, 37, 0.08) ${progress}deg 360deg)`,
         }}
       >
         <div className="ring-core">

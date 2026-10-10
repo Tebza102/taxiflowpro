@@ -11,9 +11,9 @@ import { formatOperatingDate, formatSastDateTime, formatSastTimestamp } from "./
 // fonts are licensed system fonts that can't be embedded, so Helvetica is used.
 const BRAND = {
   name: "TaxiFlow Pro",
-  navy: "#0B2545",
-  teal: "#1BC5BD",
-  gold: "#F4D03F",
+  // Approved brand palette (Task 19). Orange is a chart fill only, never text.
+  navy: "#0A1925",
+  orange: "#F58801",
   ink: "#1A1A1A",
   subtext: "#444444",
   muted: "#6B6B6B",
@@ -424,7 +424,7 @@ const drawDailyPosition = (ctx, report) => {
       emptyMessage: "No data recorded",
       bars: [
         { label: "Standard income", value: cashUp.standardIncome, style: "solid", color: BRAND.navy },
-        { label: "Special income", value: cashUp.specialIncome, style: "solid", color: BRAND.teal },
+        { label: "Special income", value: cashUp.specialIncome, style: "solid", color: BRAND.orange },
         { label: "Expenses", value: cashUp.totalExpenses, style: "hatched", color: BRAND.navy },
       ],
     },

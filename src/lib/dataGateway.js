@@ -10,6 +10,7 @@ import { configuredBackendMode, hasSupabaseConfig, supabase } from "./supabaseCl
 import { logStartupError, logStartupEvent } from "./runtimeDiagnostics";
 import { normalizeTripFinanceTransactions } from "./tripHistory";
 import { LIVE_WORKSPACE_KEY } from "./workspaceContract";
+import { clearTenantState, isTenantMode, loadWorkspace } from "./tenantWorkspace";
 
 const DATA_MODE_STORAGE_KEY = "taxiflow-data-mode-v2";
 const DEMO_SNAPSHOT_STORAGE_KEY = "taxiflow-demo-snapshot-v1";
@@ -1272,6 +1273,9 @@ export const repository = {
     return cloneSnapshot(nextSnapshot);
   },
   async resetLiveWorkspace(actorId = null) {
+    if (isTenantMode) {
+      return createStructuredResult(null, { ok: false, warning: "Workspace reset is not available in the business workspace." });
+    }
     const nextSnapshot = createLiveSnapshot();
     const resetResult = await persistSupabaseLiveSnapshot(nextSnapshot, actorId);
 
@@ -1324,6 +1328,9 @@ export const repository = {
     return cloneSnapshot(nextSnapshot);
   },
   async flushPendingLiveSnapshot() {
+    if (isTenantMode) {
+      return { ok: true, flushed: false, tenant: true };
+    }
     const pendingSnapshot = readPendingLiveSnapshot();
 
     if (!pendingSnapshot) {
@@ -1350,6 +1357,14 @@ export const repository = {
     return result;
   },
   async persistSnapshot(snapshot, mode = activeBackendMode) {
+    // No whole-snapshot save in tenant mode: covers the background, hidden-tab,
+    // page-close and sign-out saves and every legacy write path.
+    if (isTenantMode && normalizeBackendMode(mode) === "live") {
+      return createStructuredResult(null, {
+        ok: false,
+        warning: "This change is not available in the business workspace yet. Nothing was saved.",
+      });
+    }
     logStartupEvent("snapshot-persist-start", {
       mode: normalizeBackendMode(mode),
     });
@@ -1435,6 +1450,22 @@ export const repository = {
         return attachStructuredResult(nextSnapshot, { ok: true, warning: null });
       }
 
+      // Tenant mode reads only through the server; on any error it shows an
+      // empty workspace with a warning (never cached, taxiflow-live or demo data).
+      if (isTenantMode) {
+        const tenant = await loadWorkspace();
+        if (tenant.ok) {
+          logStartupEvent("snapshot-load-complete", { mode: activeBackendMode, ok: true, source: "tenant-server" });
+          return attachStructuredResult(normalizeSnapshotShape(tenant.snapshot, createLiveSnapshot()), { ok: true, warning: null, error: null, meta: tenant.meta });
+        }
+        return attachStructuredResult(createLiveSnapshot(), {
+          ok: false,
+          warning: tenant.needsSelection ? "Select a business to continue." : tenant.error,
+          error: null,
+          meta: { source: "tenant-unavailable", tenant: true, tenantNeedsSelection: Boolean(tenant.needsSelection), businesses: tenant.businesses ?? [] },
+        });
+      }
+
       if (canUseRemoteLiveData()) {
         return loadSupabaseLiveSnapshot();
       }
@@ -1490,6 +1521,10 @@ export const repository = {
     }
   },
   async invalidateLiveCache(reason = "manual") {
+    if (isTenantMode) {
+      clearTenantState();
+      return;
+    }
     await invalidateLiveCacheArtifacts(reason);
   },
 };

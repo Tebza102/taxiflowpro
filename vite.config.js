@@ -12,6 +12,23 @@ const reportApiDevRoutes = () => ({
     server.middlewares.use(async (req, res, next) => {
       const url = new URL(req.url ?? "/", "http://localhost");
       const match = /^\/api\/admin\/daily-log\/([^/]+)\/(report-view|report-pdf)$/.exec(url.pathname);
+      // Tenant business routes (dev only): same real handlers as Vercel's
+      // api/business/<name>.js routing.
+      const businessMatch = /^\/api\/business\/(workspace|memberships|finance-actions)$/.exec(url.pathname);
+
+      if (businessMatch) {
+        try {
+          const handlerUrl = pathToFileURL(
+            fileURLToPath(new URL(`./api/business/${businessMatch[1]}.js`, import.meta.url)),
+          ).href;
+          const { default: handler } = await import(handlerUrl);
+          req.query = Object.fromEntries(url.searchParams);
+          await handler(req, res);
+        } catch (error) {
+          next(error);
+        }
+        return;
+      }
 
       if (!match) {
         next();

@@ -115,6 +115,38 @@ export const authorizeBusinessRequest = async (req) => {
   };
 };
 
+// The caller's active businesses, read with the caller's own token (RLS:
+// own active memberships, businesses they belong to). No service role.
+export const listCallerBusinesses = async (req) => {
+  const accessToken = getBearerToken(req);
+  if (!accessToken) throw createHttpError(401, "A Supabase access token is required.");
+  const client = callerClient(accessToken);
+  const {
+    data: { user },
+    error: userError,
+  } = await client.auth.getUser(accessToken);
+  if (userError || !user?.id) throw createHttpError(401, "The supplied Supabase access token is invalid or expired.");
+  const { data: memberships, error } = await client
+    .from("business_memberships")
+    .select("business_id, role, driver_staff_id, active")
+    .eq("user_id", user.id)
+    .eq("active", true);
+  if (error) throw createHttpError(403, "Business membership could not be verified.");
+  const ids = (memberships ?? []).filter((m) => MEMBERSHIP_ROLES.includes(m.role)).map((m) => m.business_id);
+  const { data: businesses } = ids.length
+    ? await client.from("businesses").select("id, name").in("id", ids)
+    : { data: [] };
+  const names = new Map((businesses ?? []).map((b) => [String(b.id).toLowerCase(), b.name]));
+  return {
+    userId: user.id,
+    email: user.email ?? null,
+    businesses: (memberships ?? [])
+      .filter((m) => MEMBERSHIP_ROLES.includes(m.role))
+      .map((m) => ({ businessId: String(m.business_id).toLowerCase(), name: names.get(String(m.business_id).toLowerCase()) ?? "Business", role: m.role, driverLinked: Boolean(m.driver_staff_id) }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  };
+};
+
 // Service role is created only for an already-authorized request, and every
 // query it runs is pinned to that request's business.
 export const serviceClientFor = (authorization) => {

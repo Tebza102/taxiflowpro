@@ -34,6 +34,27 @@ import { MobileBottomSheet } from "./components/MobileBottomSheet";
 import { TripLegOptionalFields } from "./components/TripLegOptionalFields";
 import { ReportsPanel } from "./components/ReportsPanel";
 import { repository } from "./lib/dataGateway";
+import {
+  TENANT_UNSUPPORTED_MESSAGE,
+  isTenantMode,
+  runFinanceAction,
+  selectBusiness,
+  toTenantTripLeg,
+} from "./lib/tenantWorkspace";
+
+// Tenant mode: per-device view state that may change without a server action.
+const TENANT_LOCAL_VIEW_KEYS = ["driverTerminal"];
+const pickTenantLocalView = (snapshot) =>
+  Object.fromEntries(
+    TENANT_LOCAL_VIEW_KEYS.filter((key) => key in (snapshot ?? {})).map((key) => [key, snapshot[key]]),
+  );
+
+// Tenant mode: the server edits and deletes only pending records (counted,
+// verified and banked records - and closed days - are final there).
+const isFinanceRecordLocked = (record) =>
+  isTenantMode && repository.backendMode === "live"
+    ? record?.status !== "pending"
+    : record?.status === "banked";
 import { getSafeDocument, getSafeWindow, safeMatchMedia } from "./lib/browserRuntime";
 import { logStartupError, logStartupEvent } from "./lib/runtimeDiagnostics";
 import { hasSupabaseConfig, supabase } from "./lib/supabaseClient";
@@ -276,6 +297,12 @@ function App() {
   // Prevents the generic persistence effect from firing a redundant, uncoordinated
   // second write for the same mutation.
   const skipNextGenericPersistRef = useRef(false);
+  // Tenant mode (VITE_TENANT_MODE): the last snapshot the server returned. A local
+  // change with no tenant server action is reverted to it, never saved.
+  const tenantServerSnapshotRef = useRef(null);
+  const [tenantMeta, setTenantMeta] = useState(null);
+  const [tenantBusinessKey, setTenantBusinessKey] = useState(null);
+  const [tenantCaptureMode, setTenantCaptureMode] = useState("management");
   const [authDraft, setAuthDraft] = useState({
     email: "",
     password: "",
@@ -288,6 +315,13 @@ function App() {
   );
   const viewerModeLocked = isViewerRole(sessionRole);
   const effectiveBackendMode = viewerModeLocked ? "mock" : backendMode;
+  const tenantLive = isTenantMode && effectiveBackendMode === "live";
+  const tenantOwnerDriver =
+    tenantLive && tenantMeta?.role === "Owner" && Boolean(tenantMeta?.driverStaffId);
+  const tenantCaptureAs = () =>
+    activeRole === "Driver" || (tenantOwnerDriver && tenantCaptureMode === "driver")
+      ? "driver"
+      : "management";
 
   const beginLiveSync = () => {
     if (effectiveBackendMode !== "live") {
@@ -550,10 +584,30 @@ function App() {
       isMounted = false;
       finishLiveSync();
     };
-  }, [authEnabled, authLoading, authSession?.user?.id, effectiveBackendMode]);
+  }, [authEnabled, authLoading, authSession?.user?.id, effectiveBackendMode, tenantBusinessKey]);
 
   useEffect(() => {
     if (loading || !snapshot) {
+      return undefined;
+    }
+
+    if (isTenantMode && effectiveBackendMode === "live") {
+      skipNextGenericPersistRef.current = false;
+      const server = tenantServerSnapshotRef.current;
+      if (snapshot?.meta?.tenant) {
+        tenantServerSnapshotRef.current = snapshot;
+        setTenantMeta(snapshot.meta);
+      } else if (server) {
+        // Device view state (the driver terminal selection) may change locally;
+        // any other local change has no tenant server action, so it is undone.
+        const changedBusinessData = Object.keys({ ...server, ...snapshot }).some(
+          (key) => !TENANT_LOCAL_VIEW_KEYS.includes(key) && snapshot[key] !== server[key],
+        );
+        if (changedBusinessData) {
+          setBackendFeedback({ tone: "warning", message: TENANT_UNSUPPORTED_MESSAGE });
+          setSnapshot({ ...server, ...pickTenantLocalView(snapshot) });
+        }
+      }
       return undefined;
     }
 
@@ -687,7 +741,7 @@ function App() {
     }
 
     const handlePageHide = () => {
-      if (!latestSnapshotRef.current) {
+      if (isTenantMode || !latestSnapshotRef.current) {
         return;
       }
 
@@ -698,7 +752,7 @@ function App() {
     };
 
     const handleVisibilityChange = () => {
-      if (browserDocument.visibilityState !== "hidden" || !latestSnapshotRef.current) {
+      if (isTenantMode || browserDocument.visibilityState !== "hidden" || !latestSnapshotRef.current) {
         return;
       }
 
@@ -1021,6 +1075,9 @@ function App() {
   // operations - that dual-write is exactly what previously let the two stores drift
   // apart. Mock/demo mode never calls this; it keeps the original client-only flow.
   const callUserLifecycleApi = async ({ action, email, name, role, password, staffId, moduleAccess }) => {
+    if (tenantLive) {
+      return { ok: false, error: TENANT_UNSUPPORTED_MESSAGE };
+    }
     if (!authSession?.access_token) {
       return { ok: false, error: "No active session available for this account operation." };
     }
@@ -1066,6 +1123,10 @@ function App() {
     if (loaded?.ok !== false && loaded?.meta?.source === "remote-live") {
       setLastSuccessfulSyncAt(loaded?.meta?.liveVersion ?? new Date().toISOString());
     }
+    if (isTenantMode && loaded?.meta?.tenant) {
+      tenantServerSnapshotRef.current = loaded;
+      setTenantMeta(loaded.meta);
+    }
     return loaded;
   };
 
@@ -1088,6 +1149,12 @@ function App() {
       setSnapshot(nextSnapshot);
       latestSnapshotRef.current = nextSnapshot;
       return { ok: true, snapshot: nextSnapshot };
+    }
+    // Tenant mode has no whole-snapshot save: only the explicit finance actions
+    // (runTenantFinance) write. Fleet, user, settings and preset changes stay
+    // unavailable until they have their own server actions.
+    if (isTenantMode) {
+      return { ok: false, error: TENANT_UNSUPPORTED_MESSAGE };
     }
 
     const finishLiveSync = beginLiveSync();
@@ -1138,7 +1205,59 @@ function App() {
     }
   };
 
+  // Tenant finance: one explicit server action against the loaded version. The
+  // request id is kept only while the same request is retried after a network
+  // failure. On a version conflict nothing is reloaded, so the caller's form keeps
+  // the user's entry and the user is told to refresh first.
+  const runTenantFinance = async (requestKey, action, fields, successMessage) => {
+    const finishLiveSync = beginLiveSync();
+    try {
+      const result = await runFinanceAction(`${requestKey}:${JSON.stringify(fields)}`, action, fields);
+      if (!result.ok) {
+        if (result.conflict) {
+          setBackendFeedback({
+            kind: "live-conflict",
+            tone: "danger",
+            message: result.error,
+            actionLabel: "Refresh live data",
+          });
+        }
+        return { ok: false, error: result.error, conflict: Boolean(result.conflict) };
+      }
+      const canonical = await reloadCanonicalLiveSnapshot();
+      if (canonical?.ok === false) {
+        return { ok: false, error: "Saved, but the confirmation read failed. Refresh to verify." };
+      }
+      setLastSuccessfulSyncAt(canonical?.meta?.liveVersion ?? new Date().toISOString());
+      return {
+        ok: true,
+        message: typeof successMessage === "function" ? successMessage(result) : successMessage,
+      };
+    } finally {
+      finishLiveSync();
+    }
+  };
+
+  const handleTenantBusinessChange = (businessId) => {
+    const userId = authSession?.user?.id;
+    if (!userId || !businessId) {
+      return;
+    }
+    selectBusiness(userId, businessId);
+    setTenantCaptureMode("management");
+    tenantServerSnapshotRef.current = null;
+    latestSnapshotRef.current = null;
+    setTenantMeta(null);
+    setBackendFeedback(null);
+    setSnapshot(null);
+    setTenantBusinessKey(businessId);
+  };
+
   const commitUserAccessSnapshot = async (nextSnapshot) => {
+    if (tenantLive) {
+      setBackendFeedback({ tone: "warning", message: TENANT_UNSUPPORTED_MESSAGE });
+      return { ok: false, warning: TENANT_UNSUPPORTED_MESSAGE };
+    }
     pendingUserAccessWriteRef.current = true;
     pendingUserAccessSnapshotRef.current = nextSnapshot;
     setSnapshot(nextSnapshot);
@@ -1558,7 +1677,7 @@ function App() {
     setAuthSubmitting(true);
 
     const latestSnapshot = latestSnapshotRef.current;
-    if (latestSnapshot) {
+    if (latestSnapshot && !isTenantMode) {
       const persistResult = await repository.persistSnapshot(
         latestSnapshot,
         latestBackendModeRef.current,
@@ -1592,6 +1711,12 @@ function App() {
     } else {
       if (latestBackendModeRef.current === "live") {
         await repository.invalidateLiveCache("sign-out");
+      }
+      if (isTenantMode) {
+        tenantServerSnapshotRef.current = null;
+        latestSnapshotRef.current = null;
+        setTenantMeta(null);
+        setSnapshot(null);
       }
       setAuthSession(null);
       setAuthDraft((current) => ({
@@ -1639,6 +1764,19 @@ function App() {
         passwordResetFeedback={authRecoveryFeedback}
         passwordResetSubmitting={passwordResetRequestSubmitting}
         submitting={authSubmitting}
+      />
+    );
+  }
+
+  // Tenant mode, several active businesses and none chosen yet: no business
+  // data is loaded until the user picks one explicitly.
+  if (tenantLive && snapshot?.meta?.tenantNeedsSelection) {
+    return (
+      <TenantBusinessPicker
+        email={authSession?.user?.email ?? ""}
+        businesses={snapshot.meta.businesses ?? []}
+        onSelect={handleTenantBusinessChange}
+        onSignOut={handleSignOut}
       />
     );
   }
@@ -2798,6 +2936,43 @@ function App() {
       auditTrail: nextAuditTrail,
     };
 
+    if (tenantLive) {
+      if (isUpdate && existing.status !== "pending") {
+        return { ok: false, error: `Only pending records can be edited; this one is ${existing.status}.` };
+      }
+      // Route-stop defaults were applied above (createDailyTripLogEntry) and are
+      // sent explicitly: the server never invents trip stops.
+      const tenantNotes = String(draft.notes ?? existing?.notes ?? "").trim();
+      const tenantFields = {
+        vehicleId: draft.vehicleId,
+        tripDate,
+        timeIn,
+        timeOut,
+        openingOdo,
+        closingOdo,
+        tripLogbook: normalizedTripLogbook.map(toTenantTripLeg),
+        ...(tenantNotes ? { notes: tenantNotes } : {}),
+      };
+      const result = isUpdate
+        ? await runTenantFinance(
+            `edit:${existing.id}`,
+            "record.edit",
+            {
+              recordId: existing.id,
+              changes: tenantFields,
+              ...(driverEditReason ? { editReason: driverEditReason } : {}),
+            },
+            "Trip update saved and logged for owner review.",
+          )
+        : await runTenantFinance(
+            "standard-income",
+            "capture.standard_income",
+            { captureAs: tenantCaptureAs(), ...tenantFields },
+            "Trip saved and added to the daily total. Use Checking to wrap up the day for cash-in.",
+          );
+      return result.ok ? { ...result, nextOpeningOdo: closingOdo } : result;
+    }
+
     const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
 
     if (!commitResult.ok) {
@@ -3003,6 +3178,46 @@ function App() {
       auditTrail: nextAuditTrail,
     };
 
+    if (tenantLive) {
+      if (isUpdate && existing.status !== "pending") {
+        return { ok: false, error: `Only pending records can be edited; this one is ${existing.status}.` };
+      }
+      const tenantTimeIn = String(draft.timeIn ?? "").trim();
+      const tenantTimeOut = String(draft.timeOut ?? "").trim();
+      const tenantFields = {
+        vehicleId: draft.vehicleId,
+        tripDate,
+        openingOdo,
+        closingOdo,
+        fromLocation,
+        toLocation,
+        travelReason,
+        fuelOilCost,
+        repairMaintenanceCost,
+        amount,
+        ...(tenantTimeIn ? { timeIn: tenantTimeIn } : {}),
+        ...(tenantTimeOut ? { timeOut: tenantTimeOut } : {}),
+      };
+      const result = isUpdate
+        ? await runTenantFinance(
+            `edit:${existing.id}`,
+            "record.edit",
+            {
+              recordId: existing.id,
+              changes: tenantFields,
+              ...(driverEditReason ? { editReason: driverEditReason } : {}),
+            },
+            "Extra trip update saved and logged for owner review.",
+          )
+        : await runTenantFinance(
+            "special-income",
+            "capture.special_income",
+            { captureAs: tenantCaptureAs(), ...tenantFields },
+            "Extra trip saved and added to the daily total. Use Checking to wrap up the day for cash-in.",
+          );
+      return result;
+    }
+
     const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
 
     if (!commitResult.ok) {
@@ -3165,6 +3380,42 @@ function App() {
       auditTrail: nextAuditTrail,
     };
 
+    if (tenantLive) {
+      if (isUpdate && existing.status !== "pending") {
+        return { ok: false, error: `Only pending records can be edited; this one is ${existing.status}.` };
+      }
+      const tenantFields = {
+        expenseKind,
+        category: draft.category.trim(),
+        description,
+        expenseDate,
+        amount,
+        cashExpense: Boolean(draft.cashExpense),
+        ...(reference ? { reference } : {}),
+        ...(expenseKind === "asset" ? { vehicleId: draft.vehicleId } : {}),
+      };
+      const result = isUpdate
+        ? await runTenantFinance(
+            `edit:${existing.id}`,
+            "record.edit",
+            {
+              recordId: existing.id,
+              changes: tenantFields,
+              ...(driverEditReason ? { editReason: driverEditReason } : {}),
+            },
+            "Expense update saved and logged for owner review.",
+          )
+        : await runTenantFinance(
+            "expense",
+            "capture.expense",
+            { captureAs: tenantCaptureAs(), ...tenantFields },
+            status === "verified" && tenantCaptureAs() === "management"
+              ? "Expense saved and checked."
+              : "Expense saved and sent to a manager for review.",
+          );
+      return result;
+    }
+
     const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
 
     if (!commitResult.ok) {
@@ -3203,8 +3454,30 @@ function App() {
     if (!current) {
       return { ok: false, error: "Unable to send the day checking." };
     }
-    if (activeRole !== "Driver") {
+    if (activeRole !== "Driver" && !tenantOwnerDriver) {
       return { ok: false, error: "Only a driver can wrap up the day with checking." };
+    }
+    if (tenantLive) {
+      // The server sends checking for the caller's OWN linked driver record.
+      const ownStaffId = String(tenantMeta?.driverStaffId ?? "").trim();
+      if (!ownStaffId) {
+        return { ok: false, error: "Your membership is not linked to a driver record." };
+      }
+      const ownSummary = buildDriverDayCashSummary(deriveSnapshot(current), {
+        driverStaffId: ownStaffId,
+      });
+      if (ownSummary.entryCount === 0) {
+        return {
+          ok: false,
+          error: "Save at least one income or expense entry before sending checking for the day.",
+        };
+      }
+      return runTenantFinance(
+        "cashup-submit",
+        "cashup.submit",
+        { workDate: ownSummary.workDate },
+        "Checking sent. Management can now record one day hand-in for this shift.",
+      );
     }
 
     const actorId = resolveCurrentActorId(current);
@@ -3458,6 +3731,84 @@ function App() {
       (current.dailyCashUps ?? []).find(
         (entry) => getDailyCashUpStableId(entry) === transactionId,
       ) ?? null;
+
+    if (tenantLive) {
+      const hasAmount =
+        actualCashReceived !== undefined &&
+        actualCashReceived !== null &&
+        actualCashReceived !== "" &&
+        Number.isFinite(amount) &&
+        amount >= 0;
+      if (cashUpTarget) {
+        const tenantDay = buildDriverDayCashSummary(deriveSnapshot(current), {
+          driverStaffId: String(cashUpTarget.driverStaffId ?? "").trim() || null,
+          workDate: String(cashUpTarget.workDate ?? "").trim() || null,
+        });
+        const tenantStatus = getDriverCashUpWorkflowStatus(cashUpTarget, tenantDay);
+        if (tenantStatus === "pending") {
+          if (!hasAmount) {
+            return { ok: false, error: "Enter the cash received before recording the day hand-in." };
+          }
+          return runTenantFinance(
+            `handin:${cashUpTarget.id}`,
+            "cashup.record_handin",
+            { cashUpId: cashUpTarget.id, actualCashReceived: amount },
+            "Day checking recorded and waiting for manager verification.",
+          );
+        }
+        if (tenantStatus === "counted") {
+          return runTenantFinance(
+            `verify:${cashUpTarget.id}`,
+            "cashup.verify",
+            { cashUpId: cashUpTarget.id, ...(hasAmount ? { actualCashReceived: amount } : {}) },
+            "Day checking verified and added to cash ready for banking.",
+          );
+        }
+        return {
+          ok: false,
+          error:
+            tenantStatus === "banked"
+              ? "Deposited day checkings can no longer be changed."
+              : tenantStatus === "verified"
+                ? "This day checking has already been verified."
+                : "This day checking is not ready for another cash action.",
+        };
+      }
+      const tenantTarget = (current.financeTransactions ?? []).find(
+        (record) => record.id === transactionId,
+      );
+      if (!tenantTarget || tenantTarget.type !== "income") {
+        return { ok: false, error: "Income record not found." };
+      }
+      if (tenantTarget.status === "pending") {
+        if (!hasAmount) {
+          return { ok: false, error: "Enter the cash received before recording the hand-in." };
+        }
+        return runTenantFinance(
+          `count:${tenantTarget.id}`,
+          "income.count",
+          { recordId: tenantTarget.id, actualCashReceived: amount },
+          "Cash hand-in recorded and waiting for manager verification.",
+        );
+      }
+      if (tenantTarget.status === "counted") {
+        return runTenantFinance(
+          `verify:${tenantTarget.id}`,
+          "income.verify",
+          { recordId: tenantTarget.id, ...(hasAmount ? { actualCashReceived: amount } : {}) },
+          "Cash checking verified and added to cash ready for banking.",
+        );
+      }
+      return {
+        ok: false,
+        error:
+          tenantTarget.status === "banked"
+            ? "Deposited records can no longer be changed."
+            : tenantTarget.status === "verified"
+              ? "This cash checking has already been verified."
+              : "This income record is not ready for another cash action.",
+      };
+    }
 
     if (cashUpTarget) {
       const derived = deriveSnapshot(current);
@@ -3848,6 +4199,13 @@ function App() {
       return { ok: false, error: "Deposited records are final and cannot be deleted." };
     }
 
+    if (tenantLive) {
+      if (target.status !== "pending") {
+        return { ok: false, error: `Only pending records can be deleted; this one is ${target.status}.` };
+      }
+      return runTenantFinance(`delete:${target.id}`, "record.delete", { recordId: target.id }, "Record removed.");
+    }
+
     const nextAuditTrail = appendAuditTrail(current.auditTrail, [
       buildCurrentAuditEvent(current, {
         scope: "finance",
@@ -3950,6 +4308,26 @@ function App() {
 
     if (recordsLocked === 0) {
       return { ok: false, error: "No manager-checked records are ready to finalise." };
+    }
+
+    if (tenantLive) {
+      // The server banks only the exact verified batch reviewed here.
+      return runTenantFinance(
+        "deposit-lock",
+        "deposit.lock",
+        {
+          cashUpIds: [...verifiedDriverCashUpIds].map(String).sort(),
+          transactionIds: [
+            ...new Set([
+              ...verifiedDriverCashUpTransactionIds,
+              ...standaloneVerifiedTransactions.map((record) => record.id),
+            ]),
+          ]
+            .map(String)
+            .sort(),
+        },
+        (result) => `${result.recordsLocked} manager-checked records were added to ${result.reference}.`,
+      );
     }
 
     const now = new Date();
@@ -5192,7 +5570,8 @@ function App() {
     void revalidateLiveWorkspace({
       reason: "user-refresh-after-conflict",
       force: true,
-      showLoader: true,
+      // Tenant mode refreshes in place so an open form keeps the user's entry.
+      showLoader: !isTenantMode,
     });
 
   const handleBackendModeChange = async (nextMode) => {
@@ -5457,6 +5836,64 @@ function App() {
                 >
                   {liveSyncBanner.actionLabel}
                 </button>
+              )}
+            </div>
+          )}
+
+          {tenantLive && tenantMeta && (
+            <div
+              className="finance-feedback"
+              data-tone={tenantMeta.tenantNeedsSelection ? "warning" : "info"}
+              data-testid="tenant-bar"
+            >
+              {tenantMeta.tenantNeedsSelection || (tenantMeta.businesses?.length ?? 0) > 1 ? (
+                <label className="field">
+                  <span>Business</span>
+                  <select
+                    aria-label="Business"
+                    value={tenantMeta.businessId ?? ""}
+                    onChange={(event) => handleTenantBusinessChange(event.target.value)}
+                  >
+                    {!tenantMeta.businessId && <option value="">Select a business</option>}
+                    {(tenantMeta.businesses ?? []).map((business) => (
+                      <option key={business.businessId} value={business.businessId}>
+                        {business.name} ({business.role})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <span className="status-chip" data-tone="navy">
+                  {tenantMeta.businessName}
+                </span>
+              )}
+              {tenantOwnerDriver && (
+                <>
+                  <label className="field">
+                    <span>Capture as</span>
+                    <select
+                      aria-label="Capture as"
+                      value={tenantCaptureMode}
+                      onChange={(event) => setTenantCaptureMode(event.target.value)}
+                    >
+                      <option value="management">Management</option>
+                      <option value="driver">My own driving</option>
+                    </select>
+                  </label>
+                  <button
+                    type="button"
+                    className="action-button"
+                    onClick={async () => {
+                      const result = await submitDriverCashUp();
+                      setBackendFeedback({
+                        tone: result.ok ? "success" : "danger",
+                        message: result.ok ? result.message : result.error,
+                      });
+                    }}
+                  >
+                    Send my day checking
+                  </button>
+                </>
               )}
             </div>
           )}
@@ -7175,7 +7612,7 @@ function FinancePanel({
                       <button
                         type="button"
                         className="record-button"
-                        disabled={record.status === "banked" || !canEditFinanceUpdates}
+                        disabled={isFinanceRecordLocked(record) || !canEditFinanceUpdates}
                         onClick={() => handleEditIncome(record)}
                       >
                         Edit
@@ -7184,7 +7621,7 @@ function FinancePanel({
                         type="button"
                         className="record-button danger"
                         disabled={
-                          record.status === "banked" ||
+                          isFinanceRecordLocked(record) ||
                           !canEditFinanceUpdates ||
                           deletingRecordId === record.id
                         }
@@ -7611,7 +8048,7 @@ function FinancePanel({
                       <button
                         type="button"
                         className="record-button"
-                        disabled={record.status === "banked" || !canEditFinanceUpdates}
+                        disabled={isFinanceRecordLocked(record) || !canEditFinanceUpdates}
                         onClick={() => handleEditExpense(record)}
                       >
                         Edit
@@ -7620,7 +8057,7 @@ function FinancePanel({
                         type="button"
                         className="record-button danger"
                         disabled={
-                          record.status === "banked" ||
+                          isFinanceRecordLocked(record) ||
                           !canEditFinanceUpdates ||
                           deletingRecordId === record.id
                         }
@@ -8027,7 +8464,7 @@ function FinancePanel({
                         type="button"
                         className="record-button"
                         disabled={
-                          isDriverCashUp || sourceRecord.status === "banked" || !canEditFinanceUpdates
+                          isDriverCashUp || isFinanceRecordLocked(sourceRecord) || !canEditFinanceUpdates
                         }
                         onClick={() => !isDriverCashUp && handleEditIncome(sourceRecord)}
                       >
@@ -12132,7 +12569,7 @@ function DriversPanel({
                         <button
                           type="button"
                           className="record-button"
-                          disabled={record.status === "banked"}
+                          disabled={isFinanceRecordLocked(record)}
                           onClick={() =>
                             record.type === "expense"
                               ? handleEditDriverExpense(record)
@@ -13325,6 +13762,36 @@ function PasswordRecoveryShell({
               `Password must be at least ${MIN_LIVE_LOGIN_PASSWORD_LENGTH} characters long.`}
           </p>
         </form>
+      </div>
+    </div>
+  );
+}
+
+function TenantBusinessPicker({ email, businesses, onSelect, onSignOut }) {
+  return (
+    <div className="auth-shell">
+      <div className="auth-card" data-testid="tenant-picker">
+        <div className="auth-copy">
+          <p className="eyebrow">Choose a business</p>
+          <h1>Select a business</h1>
+          <p>{email} belongs to more than one business. Choose the one to open.</p>
+        </div>
+        <label className="field">
+          <span>Business</span>
+          <select aria-label="Business" value="" onChange={(event) => onSelect(event.target.value)}>
+            <option value="">Select a business</option>
+            {businesses.map((business) => (
+              <option key={business.businessId} value={business.businessId}>
+                {business.name} ({business.role})
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="finance-form-actions">
+          <button type="button" className="action-button" onClick={onSignOut}>
+            Sign out
+          </button>
+        </div>
       </div>
     </div>
   );

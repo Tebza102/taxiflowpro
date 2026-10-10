@@ -64,7 +64,7 @@ const resolveActorName = (snapshot, actorId) => {
 
   const staff = (snapshot.drivers ?? []).find((person) => person.staffId === id);
   const appUser = (snapshot.appUsers ?? []).find(
-    (user) => user.actorId === id || user.staffId === id || user.id === id,
+    (user) => user.actorId === id || user.staffId === id || user.id === id || user.authUserId === id,
   );
   const name = normalizeText(staff?.name) ?? normalizeText(appUser?.name);
 

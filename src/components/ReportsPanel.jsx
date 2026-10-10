@@ -7,6 +7,7 @@ import {
   getFinanceRecordWorkDate,
   normalizeCashUpWorkflowStatus,
 } from "../lib/cashUpContract";
+import { getActiveBusinessId } from "../lib/tenantWorkspace";
 
 // Adding a report later means adding an entry here plus its own endpoint pair.
 const REPORT_TEMPLATES = [
@@ -136,7 +137,11 @@ export function ReportsPanel({ snapshot, activeRole, canAccessReports, accessTok
     () => ({ headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {} }),
     [accessToken],
   );
-  const modeQuery = `mode=${isDemo ? "mock" : "live"}`;
+  // Tenant mode: the report is read for the business currently loaded.
+  const activeBusinessId = isDemo ? null : getActiveBusinessId();
+  const modeQuery = `mode=${isDemo ? "mock" : "live"}${
+    activeBusinessId ? `&business=${encodeURIComponent(activeBusinessId)}` : ""
+  }`;
 
   useEffect(() => {
     if (!selectedId) {

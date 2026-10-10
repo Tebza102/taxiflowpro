@@ -1,5 +1,6 @@
 import * as core from "./appRuntime.js";
 import { configuredBackendMode } from "./supabaseClient.js";
+import { isTenantMode } from "./tenantWorkspace.js";
 
 export * from "./appRuntime.js";
 
@@ -67,7 +68,10 @@ export const resolveAuthIdentity = (user, snapshot) => {
   const email = core.normalizeEmailAddress(user.email);
   const metadataRole = core.normalizeRole(user.app_metadata?.role ?? user.user_metadata?.role);
 
-  if (!email || !metadataRole) {
+  // Tenant mode: the role is the server-confirmed membership role, which the
+  // workspace endpoint writes onto the caller's own directory entry; editable
+  // JWT metadata is not required or trusted for it.
+  if (!email || (!metadataRole && !isTenantMode)) {
     return null;
   }
 
@@ -89,7 +93,11 @@ export const resolveAuthIdentity = (user, snapshot) => {
     user.user_metadata?.staff_id ??
     null;
 
-  const role = storedUser.role ?? metadataRole;
+  const role = isTenantMode ? core.normalizeRole(storedUser.role) : storedUser.role ?? metadataRole;
+
+  if (!role) {
+    return null;
+  }
   const actorId = storedUser.actorId ?? metadataStaffId ?? user.id ?? `${role.toLowerCase()}-session`;
 
   return {

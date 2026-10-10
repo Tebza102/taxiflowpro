@@ -1,4 +1,5 @@
 import { mockSnapshot } from "../../src/data/mockData.js";
+import { annotateActors, loadBusinessActors } from "./actorNames.js";
 import { projectWorkspace, resolveWorkspaceScope } from "./scopedWorkspace.js";
 import {
   authorizeBusinessRequest,
@@ -40,11 +41,17 @@ const loadAuthorizedLiveSnapshot = async (req) => {
   if (!scope) throw createHttpError(403, "Your membership does not grant access to this business's workspace.");
 
   const member = { email: requester.email, role: requester.role, staffId: requester.driverStaffId, active: true };
+  // Actor names come from this business's members only, resolved after the
+  // role projection so a scoped caller learns no names outside its view.
+  const actors = await loadBusinessActors(authorization);
+  const annotated = annotateActors(projectWorkspace(cloneSnapshot(row.snapshot), member, scope), actors);
   return {
-    snapshot: projectWorkspace(cloneSnapshot(row.snapshot), member, scope),
+    snapshot: annotated.snapshot,
+    actorNames: annotated.names,
     source: "live",
     workspaceKey: row.workspace_key,
     businessId: authorization.businessId,
+    version: row.updated_at,
     scope,
     requestedBy: requester,
   };

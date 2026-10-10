@@ -37,7 +37,7 @@ const sliceFrom = (source, marker, length = 2200) => {
 // ---------------------------------------------------------------------------
 
 test("saveStandardIncome is async, confirmed-write, and preserves the trip logbook/odometer rules", () => {
-  const fn = sliceFrom(appSource, "const saveStandardIncome = async (draft) => {", 9700);
+  const fn = sliceFrom(appSource, "const saveStandardIncome = async (draft) => {", 11800);
 
   assert.doesNotMatch(fn, /\bsetSnapshot\(/, "saveStandardIncome must not call setSnapshot() directly");
   assert.match(fn, /commitLiveSnapshotMutation\(current, nextSnapshot\)/);
@@ -57,7 +57,7 @@ test("saveStandardIncome is async, confirmed-write, and preserves the trip logbo
 });
 
 test("saveSpecialIncome is async, confirmed-write, and preserves the business-travel validation", () => {
-  const fn = sliceFrom(appSource, "const saveSpecialIncome = async (draft) => {", 7000);
+  const fn = sliceFrom(appSource, "const saveSpecialIncome = async (draft) => {", 9000);
 
   assert.doesNotMatch(fn, /\bsetSnapshot\(/, "saveSpecialIncome must not call setSnapshot() directly");
   assert.match(fn, /commitLiveSnapshotMutation\(current, nextSnapshot\)/);
@@ -69,7 +69,7 @@ test("saveSpecialIncome is async, confirmed-write, and preserves the business-tr
 });
 
 test("saveExpense is async, confirmed-write, and preserves the auto-verify-for-management rule", () => {
-  const fn = sliceFrom(appSource, "const saveExpense = async (draft) => {", 6000);
+  const fn = sliceFrom(appSource, "const saveExpense = async (draft) => {", 8000);
 
   assert.doesNotMatch(fn, /\bsetSnapshot\(/, "saveExpense must not call setSnapshot() directly");
   assert.match(fn, /commitLiveSnapshotMutation\(current, nextSnapshot\)/);
@@ -84,7 +84,7 @@ test("saveExpense is async, confirmed-write, and preserves the auto-verify-for-m
 });
 
 test("submitDriverCashUp is async, confirmed-write, and links both financeTransactions and dailyCashUps in one snapshot", () => {
-  const fn = sliceFrom(appSource, "const submitDriverCashUp = async () => {", 5000);
+  const fn = sliceFrom(appSource, "const submitDriverCashUp = async () => {", 5900);
 
   assert.doesNotMatch(fn, /\bsetSnapshot\(/, "submitDriverCashUp must not call setSnapshot() directly");
   assert.match(fn, /commitLiveSnapshotMutation\(current, nextSnapshot\)/);
@@ -103,12 +103,12 @@ test("submitDriverCashUp is async, confirmed-write, and links both financeTransa
 // ---------------------------------------------------------------------------
 
 test("verifyIncome is async and never calls setSnapshot directly", () => {
-  const fn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 16000);
+  const fn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 19600);
   assert.doesNotMatch(fn, /\bsetSnapshot\(/, "verifyIncome must not call setSnapshot() directly");
 });
 
 test("verifyIncome: driver cash-up pending->counted transition is confirmed before success, and never jumps to verified", () => {
-  const fn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 16000);
+  const fn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 19600);
 
   const pendingBranchIndex = fn.indexOf('if (workflowStatus === "pending") {');
   const countedBranchIndex = fn.indexOf('if (workflowStatus === "counted") {');
@@ -124,10 +124,12 @@ test("verifyIncome: driver cash-up pending->counted transition is confirmed befo
 });
 
 test("verifyIncome: driver cash-up counted->verified transition is confirmed before success, and never jumps to banked", () => {
-  const fn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 16000);
+  const fn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 19600);
 
   const countedBranchIndex = fn.indexOf('if (workflowStatus === "counted") {');
-  const alreadyVerifiedIndex = fn.indexOf("This day checking has already been verified");
+  // Searched after the legacy counted branch (the tenant-mode branch earlier in the
+  // function carries the same refusal text).
+  const alreadyVerifiedIndex = fn.indexOf("This day checking has already been verified", countedBranchIndex);
   assert.ok(countedBranchIndex !== -1 && alreadyVerifiedIndex !== -1);
   const countedBranch = fn.slice(countedBranchIndex, alreadyVerifiedIndex);
 
@@ -139,7 +141,7 @@ test("verifyIncome: driver cash-up counted->verified transition is confirmed bef
 });
 
 test("verifyIncome: standalone income pending->counted transition is confirmed before success, and never jumps to verified", () => {
-  const fn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 16000);
+  const fn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 19600);
 
   const standaloneMarker = "const target = current.financeTransactions.find((record) => record.id === transactionId);";
   const standaloneIndex = fn.indexOf(standaloneMarker);
@@ -159,7 +161,7 @@ test("verifyIncome: standalone income pending->counted transition is confirmed b
 });
 
 test("verifyIncome: standalone income counted->verified transition is confirmed before success, and never jumps to banked", () => {
-  const fn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 16000);
+  const fn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 19600);
 
   const standaloneMarker = "const target = current.financeTransactions.find((record) => record.id === transactionId);";
   const standaloneIndex = fn.indexOf(standaloneMarker);
@@ -178,14 +180,14 @@ test("verifyIncome: standalone income counted->verified transition is confirmed 
 });
 
 test("verifyIncome keeps the banked-is-final guard for both cash-ups and standalone records", () => {
-  const fn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 16000);
+  const fn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 19600);
 
   assert.match(fn, /Deposited day checkings can no longer be changed\./);
   assert.match(fn, /Deposited records can no longer be changed\./);
 });
 
 test("deleteTransaction is async, confirmed-write, and refuses to delete banked records", () => {
-  const fn = sliceFrom(appSource, "const deleteTransaction = async (transactionId) => {", 3000);
+  const fn = sliceFrom(appSource, "const deleteTransaction = async (transactionId) => {", 3500);
 
   assert.doesNotMatch(fn, /\bsetSnapshot\(/, "deleteTransaction must not call setSnapshot() directly");
   assert.match(fn, /commitLiveSnapshotMutation\(current, nextSnapshot\)/);
@@ -203,7 +205,7 @@ test("deleteTransaction is async, confirmed-write, and refuses to delete banked 
 });
 
 test("lockDeposit is async, confirmed-write, and only locks records already in status verified", () => {
-  const fn = sliceFrom(appSource, "const lockDeposit = async () => {", 6000);
+  const fn = sliceFrom(appSource, "const lockDeposit = async () => {", 7000);
 
   assert.doesNotMatch(fn, /\bsetSnapshot\(/, "lockDeposit must not call setSnapshot() directly");
   assert.match(fn, /commitLiveSnapshotMutation\(current, nextSnapshot\)/);
@@ -212,13 +214,14 @@ test("lockDeposit is async, confirmed-write, and only locks records already in s
   assert.match(fn, /Only the manager or owner can finalise a verified deposit batch\./);
 
   const commitCallIndex = fn.indexOf("commitLiveSnapshotMutation(current, nextSnapshot)");
-  const successIndex = fn.indexOf("manager-checked records were added to");
+  // The legacy success message is the last one (the tenant branch formats the server result earlier).
+  const successIndex = fn.lastIndexOf("manager-checked records were added to");
   assert.ok(commitCallIndex !== -1 && successIndex !== -1);
   assert.ok(commitCallIndex < successIndex);
 });
 
 test("lockDeposit verifies the confirmed deposit AND that every linked transaction/cash-up actually shows banked", () => {
-  const fn = sliceFrom(appSource, "const lockDeposit = async () => {", 6000);
+  const fn = sliceFrom(appSource, "const lockDeposit = async () => {", 7000);
 
   assert.match(fn, /commitResult\.snapshot\?\.deposits/);
   assert.match(fn, /confirmedDeposit/);
@@ -228,7 +231,7 @@ test("lockDeposit verifies the confirmed deposit AND that every linked transacti
 });
 
 test("lockDeposit reports a clear failure (not a silent no-op) when there is nothing to lock", () => {
-  const fn = sliceFrom(appSource, "const lockDeposit = async () => {", 6000);
+  const fn = sliceFrom(appSource, "const lockDeposit = async () => {", 7000);
 
   assert.match(fn, /if \(recordsLocked === 0\) {\s*return \{ ok: false, error: "No manager-checked records are ready to finalise\." \};\s*}/);
 });
@@ -239,9 +242,9 @@ test("lockDeposit reports a clear failure (not a silent no-op) when there is not
 // ---------------------------------------------------------------------------
 
 test("FINANCE ACCEPTANCE: newly captured income/expense/cash-up records always start pending, never any other status", () => {
-  const standardFn = sliceFrom(appSource, "const saveStandardIncome = async (draft) => {", 9700);
-  const specialFn = sliceFrom(appSource, "const saveSpecialIncome = async (draft) => {", 7000);
-  const cashUpFn = sliceFrom(appSource, "const submitDriverCashUp = async () => {", 5000);
+  const standardFn = sliceFrom(appSource, "const saveStandardIncome = async (draft) => {", 11800);
+  const specialFn = sliceFrom(appSource, "const saveSpecialIncome = async (draft) => {", 9000);
+  const cashUpFn = sliceFrom(appSource, "const submitDriverCashUp = async () => {", 5900);
 
   assert.match(standardFn, /status: "pending"/);
   assert.match(specialFn, /status: "pending"/);
@@ -249,7 +252,7 @@ test("FINANCE ACCEPTANCE: newly captured income/expense/cash-up records always s
 });
 
 test("FINANCE ACCEPTANCE: verifyIncome can only ever write status counted or status verified, never pending or banked", () => {
-  const fn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 16000);
+  const fn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 19600);
 
   const statusWrites = [...fn.matchAll(/status:\s*"([a-z]+)"/g)].map((match) => match[1]);
   const uniqueStatuses = new Set(statusWrites);
@@ -261,18 +264,18 @@ test("FINANCE ACCEPTANCE: verifyIncome can only ever write status counted or sta
 });
 
 test("FINANCE ACCEPTANCE: lockDeposit is the only function that writes status banked, and only from already-verified records", () => {
-  const lockDepositFn = sliceFrom(appSource, "const lockDeposit = async () => {", 6000);
+  const lockDepositFn = sliceFrom(appSource, "const lockDeposit = async () => {", 7000);
   assert.match(lockDepositFn, /status: "banked"/);
 
   // The other six mutation functions must never themselves assign "banked" -
   // deposit finalisation is the sole path to that status, preserving the
   // contract's "no operation may skip a status" invariant.
   const otherFns = [
-    sliceFrom(appSource, "const saveStandardIncome = async (draft) => {", 9700),
-    sliceFrom(appSource, "const saveSpecialIncome = async (draft) => {", 7000),
-    sliceFrom(appSource, "const saveExpense = async (draft) => {", 6000),
-    sliceFrom(appSource, "const submitDriverCashUp = async () => {", 5000),
-    sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 16000),
+    sliceFrom(appSource, "const saveStandardIncome = async (draft) => {", 11800),
+    sliceFrom(appSource, "const saveSpecialIncome = async (draft) => {", 9000),
+    sliceFrom(appSource, "const saveExpense = async (draft) => {", 8000),
+    sliceFrom(appSource, "const submitDriverCashUp = async () => {", 5900),
+    sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 19600),
   ];
 
   for (const fn of otherFns) {
@@ -281,11 +284,11 @@ test("FINANCE ACCEPTANCE: lockDeposit is the only function that writes status ba
 });
 
 test("FINANCE ACCEPTANCE: banked records are final - blocked from edit, delete, and re-verification everywhere they are touched", () => {
-  const standardFn = sliceFrom(appSource, "const saveStandardIncome = async (draft) => {", 9700);
-  const specialFn = sliceFrom(appSource, "const saveSpecialIncome = async (draft) => {", 7000);
-  const expenseFn = sliceFrom(appSource, "const saveExpense = async (draft) => {", 6000);
-  const deleteFn = sliceFrom(appSource, "const deleteTransaction = async (transactionId) => {", 3000);
-  const verifyFn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 16000);
+  const standardFn = sliceFrom(appSource, "const saveStandardIncome = async (draft) => {", 11800);
+  const specialFn = sliceFrom(appSource, "const saveSpecialIncome = async (draft) => {", 9000);
+  const expenseFn = sliceFrom(appSource, "const saveExpense = async (draft) => {", 8000);
+  const deleteFn = sliceFrom(appSource, "const deleteTransaction = async (transactionId) => {", 3500);
+  const verifyFn = sliceFrom(appSource, "const verifyIncome = async (transactionId, actualCashReceived) => {", 19600);
 
   assert.match(standardFn, /existing\?\.status === "banked"/);
   assert.match(specialFn, /existing\?\.status === "banked"/);
@@ -296,8 +299,8 @@ test("FINANCE ACCEPTANCE: banked records are final - blocked from edit, delete, 
 });
 
 test("FINANCE ACCEPTANCE: deposit/cash-up links (depositId, cashUpIds, incomeRecordIds/expenseRecordIds) are preserved through the persistence rewrite", () => {
-  const lockDepositFn = sliceFrom(appSource, "const lockDeposit = async () => {", 6000);
-  const cashUpFn = sliceFrom(appSource, "const submitDriverCashUp = async () => {", 5000);
+  const lockDepositFn = sliceFrom(appSource, "const lockDeposit = async () => {", 7000);
+  const cashUpFn = sliceFrom(appSource, "const submitDriverCashUp = async () => {", 5900);
 
   assert.match(lockDepositFn, /depositId,\s*\n\s*bankedAt: timestamp,/);
   assert.match(lockDepositFn, /cashUpIds: \[\.\.\.verifiedDriverCashUpIds\]/);

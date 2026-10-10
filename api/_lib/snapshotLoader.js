@@ -1,168 +1,52 @@
-import { createClient } from "@supabase/supabase-js";
-
 import { mockSnapshot } from "../../src/data/mockData.js";
-import { normalizeModuleViewAccess } from "../../src/lib/moduleAccessPolicy.js";
-import { resolveServerWorkspaceKey } from "./workspaceKey.js";
+import { projectWorkspace, resolveWorkspaceScope } from "./scopedWorkspace.js";
+import {
+  authorizeBusinessRequest,
+  buildRequester,
+  createHttpError,
+  getBearerToken,
+  readBusinessSnapshot,
+} from "./tenantAuth.js";
 
-// The workspace_snapshots RLS policy grants read/write to any authenticated
-// user (`using (true)`) - it is not scoped per caller. That's only safe because
-// this app is single-tenant: there is exactly one canonical workspace row,
-// resolved server-side via resolveServerWorkspaceKey(). Never resolve the
-// workspace key from caller-supplied input (query params, body) - doing so
-// would let an authenticated caller target an arbitrary workspace_key with no
-// ownership check at all. If this product ever becomes multi-tenant, real
-// isolation additionally requires per-user RLS policies keyed to a workspace
-// membership table, not just a differently-sourced key.
-const LIVE_WORKSPACE_KEY = resolveServerWorkspaceKey();
+// Loads the caller's business snapshot through the shared tenant authorization
+// boundary (tenantAuth.js): token validated, active membership resolved from the
+// database, explicit business selection when the caller has more than one, and
+// service-role access only after that. There is no fallback to the legacy
+// 'taxiflow-live' row. The returned snapshot is role-scoped: a Driver receives
+// only the driver projection for their linked staff id, never the whole
+// snapshot (scopedWorkspace.projectWorkspace).
 
 const cloneSnapshot = (snapshot) => JSON.parse(JSON.stringify(snapshot));
 
-const createHttpError = (statusCode, message) => {
-  const error = new Error(message);
-  error.statusCode = statusCode;
-  return error;
-};
-
 const normalizeMode = (value) => {
   const normalized = String(value ?? "auto").trim().toLowerCase();
-
   return ["auto", "live", "mock"].includes(normalized) ? normalized : "auto";
 };
 
-const getHeaderValue = (headers, key) => {
-  if (!headers) {
-    return null;
-  }
-
-  const directValue = headers[key] ?? headers[key.toLowerCase()] ?? null;
-
-  if (Array.isArray(directValue)) {
-    return directValue[0] ?? null;
-  }
-
-  return directValue ?? null;
-};
-
-const getBearerToken = (req) => {
-  const authorization = String(getHeaderValue(req?.headers, "authorization") ?? "").trim();
-
-  if (!authorization.toLowerCase().startsWith("bearer ")) {
-    return null;
-  }
-
-  return authorization.slice(7).trim() || null;
-};
-
-const getSupabaseUrl = () =>
-  process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || null;
-
-const getSupabaseAnonKey = () =>
-  process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || null;
-
-const createAuthenticatedSnapshotClient = (accessToken) => {
-  const supabaseUrl = getSupabaseUrl();
-  const supabaseAnonKey = getSupabaseAnonKey();
-
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return null;
-  }
-
-  return createClient(supabaseUrl, supabaseAnonKey, {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-    global: {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    },
+const scopeFor = (requester) =>
+  resolveWorkspaceScope({
+    email: requester.email,
+    role: requester.role,
+    staffId: requester.driverStaffId,
+    moduleAccess: requester.moduleAccess,
+    active: true,
   });
-};
 
-const normalizeEmail = (value) => String(value ?? "").trim().toLowerCase();
+const loadAuthorizedLiveSnapshot = async (req) => {
+  const authorization = await authorizeBusinessRequest(req);
+  const row = await readBusinessSnapshot(authorization);
+  const requester = buildRequester(authorization, row.snapshot);
+  const scope = scopeFor(requester);
+  if (!scope) throw createHttpError(403, "Your membership does not grant access to this business's workspace.");
 
-// Role comes from the caller's ACTIVE entry in the live account directory
-// (snapshot.appUsers), matched on the email Supabase verified for the token -
-// the same "valid Auth identity + active membership" rule the user-management
-// endpoints use. Token metadata is never trusted for the role: user_metadata is
-// editable by the signed-in user, so reading it would let a caller pick a role.
-export const resolveRequester = (user, liveSnapshot) => {
-  const email = normalizeEmail(user?.email);
-  const member = email
-    ? (liveSnapshot?.appUsers ?? []).find((entry) => normalizeEmail(entry?.email) === email)
-    : null;
-  const activeMember = member && member.active !== false ? member : null;
-
+  const member = { email: requester.email, role: requester.role, staffId: requester.driverStaffId, active: true };
   return {
-    id: user?.id ?? null,
-    email: user?.email ?? null,
-    role: activeMember?.role ?? null,
-    activeMember: Boolean(activeMember),
-    // Same normalisation the browser applies, so the Owner's per-account toggles
-    // (e.g. Money off) mean the same thing here as in the UI.
-    moduleAccess: activeMember
-      ? normalizeModuleViewAccess(activeMember.moduleAccess, activeMember.role)
-      : null,
-  };
-};
-
-const authenticateAccessToken = async (accessToken) => {
-  const supabase = createAuthenticatedSnapshotClient(accessToken);
-
-  if (!supabase) {
-    throw createHttpError(
-      503,
-      "Supabase server configuration is incomplete for the live daily log report view.",
-    );
-  }
-
-  const {
-    data: { user },
-    error: userError,
-  } = await supabase.auth.getUser(accessToken);
-
-  if (userError || !user) {
-    throw createHttpError(401, "The supplied Supabase access token is invalid or expired.");
-  }
-
-  return { supabase, user };
-};
-
-const readLiveWorkspaceSnapshot = async (supabase, workspaceKey) => {
-  const { data, error } = await supabase
-    .from("workspace_snapshots")
-    .select("snapshot")
-    .eq("workspace_key", workspaceKey)
-    .maybeSingle();
-
-  if (error) {
-    throw createHttpError(502, "Unable to load the live workspace snapshot.");
-  }
-
-  if (!data?.snapshot) {
-    throw createHttpError(404, "The live workspace snapshot could not be found.");
-  }
-
-  return data.snapshot;
-};
-
-const loadLiveSnapshot = async ({ accessToken, workspaceKey = LIVE_WORKSPACE_KEY } = {}) => {
-  if (!accessToken) {
-    throw createHttpError(
-      401,
-      "A Supabase access token is required to load the live daily log report view.",
-    );
-  }
-
-  const { supabase, user } = await authenticateAccessToken(accessToken);
-  const liveSnapshot = await readLiveWorkspaceSnapshot(supabase, workspaceKey);
-
-  return {
-    snapshot: cloneSnapshot(liveSnapshot),
+    snapshot: projectWorkspace(cloneSnapshot(row.snapshot), member, scope),
     source: "live",
-    workspaceKey,
-    requestedBy: resolveRequester(user, liveSnapshot),
+    workspaceKey: row.workspace_key,
+    businessId: authorization.businessId,
+    scope,
+    requestedBy: requester,
   };
 };
 
@@ -171,51 +55,30 @@ export const loadServerSnapshot = async ({ req, mode } = {}) => {
   const accessToken = getBearerToken(req);
 
   if (resolvedMode === "mock") {
-    // Demo data is served to a signed-in caller as that caller: membership and
-    // role are still resolved from the live directory, so role gates apply.
-    // Only an unauthenticated request gets requestedBy null (dev-only, enforced
-    // by the report access gate).
+    // Demo data, but a signed-in caller is still authorized through the tenant
+    // boundary so role gates apply. Only an unauthenticated request gets
+    // requestedBy null (non-production only, enforced by the report gate).
     let requestedBy = null;
-
+    let businessId = null;
     if (accessToken) {
-      const { supabase, user } = await authenticateAccessToken(accessToken);
-      requestedBy = resolveRequester(user, await readLiveWorkspaceSnapshot(supabase, LIVE_WORKSPACE_KEY));
+      const authorization = await authorizeBusinessRequest(req);
+      requestedBy = buildRequester(authorization, null);
+      businessId = authorization.businessId;
     }
-
-    return {
-      snapshot: cloneSnapshot(mockSnapshot),
-      source: "mock",
-      workspaceKey: null,
-      requestedBy,
-    };
+    return { snapshot: cloneSnapshot(mockSnapshot), source: "mock", workspaceKey: null, businessId, scope: null, requestedBy };
   }
 
-  if (accessToken) {
-    // Always the canonical, server-resolved key - never caller-supplied (see
-    // the note above LIVE_WORKSPACE_KEY).
-    return loadLiveSnapshot({ accessToken, workspaceKey: LIVE_WORKSPACE_KEY });
-  }
+  if (accessToken) return loadAuthorizedLiveSnapshot(req);
 
   if (resolvedMode === "live") {
-    throw createHttpError(
-      401,
-      "A Supabase access token is required when mode=live is requested for the report view.",
-    );
+    throw createHttpError(401, "A Supabase access token is required when mode=live is requested.");
   }
 
   if (process.env.NODE_ENV !== "production") {
-    return {
-      snapshot: cloneSnapshot(mockSnapshot),
-      source: "mock",
-      workspaceKey: null,
-      requestedBy: null,
-    };
+    return { snapshot: cloneSnapshot(mockSnapshot), source: "mock", workspaceKey: null, businessId: null, scope: null, requestedBy: null };
   }
 
-  throw createHttpError(
-    401,
-    "This report view endpoint requires a Supabase access token in production.",
-  );
+  throw createHttpError(401, "This endpoint requires a Supabase access token in production.");
 };
 
 export { createHttpError };

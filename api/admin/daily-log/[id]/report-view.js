@@ -33,6 +33,7 @@ export const resolveReportViewPayload = (snapshotResult, reportId) => {
     meta: {
       source: snapshotResult.source,
       workspaceKey: snapshotResult.workspaceKey,
+      businessId: snapshotResult.businessId ?? null,
       requestedBy: snapshotResult.requestedBy ? { role: snapshotResult.requestedBy.role } : null,
       endpoint: `/api/admin/daily-log/${reportId}/report-view`,
     },

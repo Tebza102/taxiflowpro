@@ -2,10 +2,10 @@ import { createHttpError } from "./snapshotLoader.js";
 
 export const REPORT_ALLOWED_ROLES = ["Owner", "Admin", "Manager"];
 
-// requestedBy is resolved server-side from the caller's active appUsers
-// membership (see resolveRequester in snapshotLoader.js), never from the token
-// or the browser. Reports need an allowed role AND the account's Money access,
-// which moduleAccess.reports mirrors (the Owner is never restricted).
+// requestedBy is resolved server-side from the caller's active business
+// membership in the database (see tenantAuth.js), never from the token, the
+// browser or snapshot.appUsers. Reports need an allowed role AND the account's
+// Money access, which moduleAccess.reports mirrors (the Owner is never restricted).
 export const assertReportAccess = ({ source, requestedBy } = {}) => {
   if (!requestedBy) {
     // An unauthenticated demo fixture is only ever permitted outside

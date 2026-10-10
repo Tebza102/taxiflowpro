@@ -183,7 +183,7 @@ try {
   const allMatch = (obj) => Object.values(obj).every((v) => (typeof v === "object" ? allMatch(v) : v === "MATCH"));
   const signInsOk = [...SEED_USERS, ...TENANT_USERS].every((user) => report.access[user.email] === "sign-in ok");
   report.result = {
-    schema: report.afterRebuild.publicTables === "business_memberships,businesses,workspace_snapshots" ? "RECOVERED from repo migrations (not from the backup)" : "FAIL",
+    schema: report.afterRebuild.publicTables === "business_memberships,businesses,finance_action_requests,workspace_snapshots" ? "RECOVERED from repo migrations (not from the backup)" : "FAIL",
     auth: allMatch(report.authChecks) && signInsOk ? "RECOVERED: users + identities from the export; all synthetic sign-ins work" : "FAIL",
     tenants: allMatch(report.tenantChecks) && report.access.ownerASeesOnlyA && report.access.ownerBSeesOnlyB ? "RECOVERED: businesses + memberships match; tenant-scoped visibility holds" : "FAIL",
     snapshots: allMatch(report.snapshotChecks) && report.access.serverReadsSnapshots === `${original.workspaces.length} rows` && report.access.driverDirectSnapshotRead.startsWith("denied") ? "RECOVERED: per-business hash, keys, counts, updated_at, updated_by, business_id match; browser still denied, server reads" : "FAIL",

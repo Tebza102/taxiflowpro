@@ -30,7 +30,7 @@ record(noKey.status === 401 ? "PASS" : "FAIL", "API refuses requests without a k
 record(query("select 1;") === "1" ? "PASS" : "FAIL", "database reachable", "select 1 in the local container");
 
 const tables = query("select string_agg(tablename, ',' order by tablename) from pg_tables where schemaname = 'public';");
-record(tables === "business_memberships,businesses,workspace_snapshots" ? "PASS" : "FAIL", "baseline + tenant schema loaded", `public tables: ${tables || "(none)"}`);
+record(tables === "business_memberships,businesses,finance_action_requests,workspace_snapshots" ? "PASS" : "FAIL", "baseline + tenant schema loaded", `public tables: ${tables || "(none)"}`);
 
 const rls = query("select string_agg(relrowsecurity::text, ',') from pg_class where oid in ('public.workspace_snapshots'::regclass, 'public.businesses'::regclass, 'public.business_memberships'::regclass);");
 record(rls === "true,true,true" || rls === "t,t,t" ? "PASS" : "FAIL", "RLS enabled on all tenant tables", rls);

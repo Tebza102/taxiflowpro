@@ -4,6 +4,7 @@
 //   node scripts/localdb/setup.mjs start     up (existing volume), check bindings + Windows listeners
 //   node scripts/localdb/setup.mjs reset     fresh volume, migrations + synthetic seed
 //   node scripts/localdb/setup.mjs schema    fresh volume, migrations only (used by the drill)
+//   node scripts/localdb/setup.mjs hosted    fresh volume, exact live-schema copy + hosted release files + synthetic seed
 //   node scripts/localdb/setup.mjs stop      down, keeping the volume
 // Any published service reachable beyond 127.0.0.1 stops the stack immediately.
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -108,30 +109,49 @@ commit;
   console.log(`[localdb] rolled back with ${file}`);
 };
 
-export const rebuild = ({ seed }) => {
+// Hosted rehearsal: the local marker plus an exact synthetic copy of the LIVE
+// schema (scripts/localdb/hosted-copy), then the hosted release files in order.
+export const HOSTED_LEGACY = [
+  path.join(MIGRATIONS_DIR, "20261009232558_local_marker.sql"),
+  path.join(SOURCE, "hosted-copy", "20261009232600_live_schema_copy.sql"),
+];
+export const HOSTED_RELEASE = [
+  path.join(REPO_ROOT, "supabase", "release", "tenant-pilot", "01_tenant_foundation.sql"),
+  path.join(MIGRATIONS_DIR, "20261010063144_finance_actions.sql"),
+  path.join(MIGRATIONS_DIR, "20261010113000_pilot_onboarding.sql"),
+  path.join(MIGRATIONS_DIR, "20261011090000_assign_initial_owner.sql"),
+];
+
+export const rebuild = ({ seed, hosted = false, releaseFiles = true }) => {
   prepare();
   compose(["down"]);
   removeComposeVolume();
   start();
   waitFor("auth.users (GoTrue migrations)", () => psql("select to_regclass('auth.users') is not null;", { allowFailure: true }).stdout.trim() === "t");
   const files = readdirSync(MIGRATIONS_DIR).filter((name) => name.endsWith(".sql")).sort();
-  const legacy = files.filter((name) => name <= LEGACY_BASELINE_LAST);
-  const later = files.filter((name) => name > LEGACY_BASELINE_LAST);
+  const legacy = hosted ? HOSTED_LEGACY : files.filter((name) => name <= LEGACY_BASELINE_LAST).map((name) => path.join(MIGRATIONS_DIR, name));
+  const later = hosted ? (releaseFiles ? HOSTED_RELEASE : []) : files.filter((name) => name > LEGACY_BASELINE_LAST).map((name) => path.join(MIGRATIONS_DIR, name));
   // The marker migration must run before any guarded statement can pass.
   for (const file of legacy) {
     psql(`begin;
-${readFileSync(path.join(MIGRATIONS_DIR, file), "utf8")}
+${readFileSync(file, "utf8")}
 commit;
 `);
-    console.log(`[localdb] applied ${file}`);
+    console.log(`[localdb] applied ${path.relative(REPO_ROOT, file)}`);
   }
   assertLocalDatabase();
   if (seed) {
     guardedSql(buildSeedSql());
     console.log("[localdb] legacy synthetic seed loaded (single workspace, pre-tenant)");
   }
-  for (const file of later) applyMigrationFile(file);
-  if (seed) {
+  for (const file of later) {
+    guardedSql(`begin;
+${readFileSync(file, "utf8")}
+commit;
+`);
+    console.log(`[localdb] applied ${path.relative(REPO_ROOT, file)}`);
+  }
+  if (seed && (!hosted || releaseFiles)) {
     guardedSql(buildTenantSeedSql());
     console.log("[localdb] tenant synthetic seed loaded (business B, extra identities)");
   }
@@ -144,9 +164,11 @@ if (isMain) {
   else if (mode === "start") start();
   else if (mode === "reset") rebuild({ seed: true });
   else if (mode === "schema") rebuild({ seed: false });
+  else if (mode === "hosted") rebuild({ seed: true, hosted: true });
+  else if (mode === "hosted-pre") rebuild({ seed: true, hosted: true, releaseFiles: false });
   else if (mode === "stop") compose(["down"]);
   else {
-    console.error("Usage: node scripts/localdb/setup.mjs prepare|start|reset|schema|stop");
+    console.error("Usage: node scripts/localdb/setup.mjs prepare|start|reset|schema|hosted|stop");
     process.exit(2);
   }
   console.log(`[localdb] ${mode} done (${WORKDIR})`);

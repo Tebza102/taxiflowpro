@@ -163,5 +163,10 @@ revoke all on function public.create_business_with_owner(text, text, uuid, text,
 grant execute on function public.create_business_with_owner(text, text, uuid, text, jsonb) to service_role;
 revoke all on function public.apply_membership_change(uuid, uuid, uuid, text, boolean, text, timestamptz, jsonb) from public, anon, authenticated;
 grant execute on function public.apply_membership_change(uuid, uuid, uuid, text, boolean, text, timestamptz, jsonb) to service_role;
--- One membership path: the browser RPC from the foundation is withdrawn.
-revoke all on function public.set_business_membership(uuid, uuid, text, boolean, text) from public, anon, authenticated, service_role;
+-- One membership path: the browser RPC from the local foundation is withdrawn.
+-- (The hosted foundation never creates it, so this is conditional.)
+do $$ begin
+  if to_regprocedure('public.set_business_membership(uuid, uuid, text, boolean, text)') is not null then
+    revoke all on function public.set_business_membership(uuid, uuid, text, boolean, text) from public, anon, authenticated, service_role;
+  end if;
+end $$;

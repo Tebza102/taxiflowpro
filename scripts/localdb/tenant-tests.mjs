@@ -51,7 +51,9 @@ const membersPost = async (client, body) => {
   return { status: out.statusCode, json };
 };
 
-const denied = (response) => Boolean(response.error) && (response.error.code === "42501" || /permission denied|not allowed|Only an active Owner|cannot|Sign in/i.test(response.error.message));
+// PGRST202: the function does not exist at all (the hosted release never creates the
+// browser membership RPC), which is a refusal too.
+const denied = (response) => Boolean(response.error) && (response.error.code === "42501" || response.error.code === "PGRST202" || /permission denied|not allowed|Only an active Owner|cannot|Sign in/i.test(response.error.message));
 const describe = (response) =>
   response.error ? `${response.error.code ?? ""} ${response.error.message}`.trim() : `${Array.isArray(response.data) ? response.data.length : response.data ? 1 : 0} row(s)`;
 

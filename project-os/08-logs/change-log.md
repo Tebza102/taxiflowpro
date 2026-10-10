@@ -474,3 +474,17 @@ Prepared. Installation is a human step.
 - Regression: 09:55–10:13 on fresh resets: finance actions 56/56, drill PASS (request log 5 rows MATCH), tenant access 35/35, rollback 8/8, verify 16 PASS/0 WARN, server auth 26/26.
 
 **Next action:** `next-action.md` → 1j.
+
+### 2026-10-10 11:05 — Essential finance server actions complete (local only; Task 16)
+
+**Changed by:** Claude Code (agent). Local synthetic environment only; no frontend, push, hosted, live or deploy.
+
+**Steps (SAST):**
+- 10:16 — Preflight @ `a47202f`. Mapped standalone `verifyIncome`, `deleteTransaction` and `buildDriverRecordEditTracking`.
+- 10:18 — Capture builders take an edit context. `api/_lib/financeRecordActions.js`: standalone count/verify, edit, delete. Wired into `financeActions`. Standalone pending fixture added.
+- 10:20–10:28 — `finance-record-tests.mjs` 32/36: the edit field-list defect (forged `status` accepted) plus one test expectation.
+- 10:29–10:37 — Fixed; 36/36.
+- 10:38 — Unit 4/4; Node 311/311; sync guards and build pass; secret scan clean.
+- Regression: 10:39–11:04 on fresh resets: capture 43/43, finance actions 56/56, drill PASS (request log MATCH), tenant access 35/35, rollback 8/8, verify 16 PASS/0 WARN, server auth 26/26.
+
+**Next action:** `next-action.md` → 1k.

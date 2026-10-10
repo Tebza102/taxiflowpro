@@ -251,3 +251,55 @@ None of these writes vehicle odometer history: the odometer only drives the disc
 3. Actor display names (auth user ids → staff names).
 4. Confirm the closed-day capture rule.
 5. Frontend integration; membership-based user lifecycle/bootstrap; hosted plan.
+
+## Essential finance server actions complete (Task 16, local only)
+
+### Decisions recorded (Tebogo, 2026-10-10)
+
+- **Closed-day guard kept, intentionally.** Driver capture into, and edits/deletes touching, a driver day whose checking is counted, verified or banked are refused. This intentionally changes the browser's behaviour, where such a day silently fell back to pending.
+- **No reopening or adjustment feature** in this phase.
+- **Explicit trip stops.** Server requests must name each leg's from/to stops. The frontend must supply the existing route defaults (`getRouteStops` via `createDailyTripLogEntry`) before calling the server.
+
+### Complete server action matrix (POST /api/business/finance-actions)
+
+| Action | Who | Rule |
+|---|---|---|
+| `capture.standard_income` / `capture.special_income` / `capture.expense` | Driver (own); Owner with linkage as driver; Owner/Admin/Manager management (finance edit) | create pending (management expense: verified); closed-day guard |
+| `income.count` | Owner, Admin | standalone income pending → counted; driver work refused (day checking only) |
+| `income.verify` | Owner, Manager | standalone income counted → verified |
+| `record.edit` | Driver (own record, reason required); Owner/Admin/Manager with finance edit (reason optional) | pending records only; same field list and validation as capture; id, creator and driver ownership preserved; stays pending; edit history when a reason is given; closed-day guard on the old and new dates |
+| `record.delete` | Owner/Admin/Manager with finance edit | pending records only; closed-day guard; server audit |
+| `cashup.submit` | Driver; Owner with driver linkage | day → pending (not banked) |
+| `cashup.record_handin` | Owner, Admin | pending → counted |
+| `cashup.verify` | Owner, Manager | counted → verified |
+| `deposit.lock` | Owner, Manager (finance edit) | exact reviewed verified batch → banked |
+
+**Intentional differences from the browser:**
+- edit/delete only for pending records (the browser deletes counted/verified records);
+- management edits of an expense keep it pending (the browser would mark it verified);
+- standalone count/verify excludes driver work;
+- the edit-history summary text is a server field diff, not the browser's formatted sentence.
+
+### Defect found and fixed during Task 16
+
+`record.edit` passed `changes` straight to the capture parser without the capture field-list check, so an edit carrying `status: "verified"` was accepted. The record still stayed pending because the server forces it, but the request should have been refused. Edits now use the same explicit field list as capture. `tests/finance-record-actions.test.mjs` covers forged `status`, `amountClaimed`, `discrepancy`, `driverStaffId` and `createdBy`.
+
+### Evidence (2026-10-10)
+
+- `node scripts/localdb/finance-record-tests.mjs`: **36/36** (real local tokens, two businesses). The first run gave 32/36: the defect above (with two knock-on failures) plus one test expectation (404 after log loss is a valid refusal).
+  - **Standalone:** Driver and Manager hand-in refused, Admin counts (variance −20); Admin verify refused, Manager verifies; driver work refused; Business B id 404 / B selection 403; banked refused; stale refused; retry replayed.
+  - **Edit:** driver without a reason refused; forged `status` refused; `captureAs` refused; banked refused; an edit touching a counted day refused; a counted record refused; a driver edits its own pending record (550, history, creator and ownership kept); a Manager edits it (ownership kept, stays pending); Driver B cannot reach an A record.
+  - **Owner-driver:** edits its own driver expense with history and the linkage preserved, then deletes it.
+  - **Delete:** Driver refused; verified, banked, counted-day and Business B records refused; stale refused; Manager deletes with an audit entry; retry replayed; after log loss the retry is refused and nothing changes.
+  - Unrelated keys and records unchanged.
+- Unit: `tests/finance-record-actions.test.mjs` 4/4.
+- Regression: 10:39–11:04 on fresh resets: capture 43/43, finance actions 56/56, drill PASS (request log MATCH), tenant access 35/35, rollback 8/8, verify 16 PASS/0 WARN, server auth 26/26.
+- `node --test tests/*.test.mjs` 311/311; build passes.
+
+### Remaining finance gaps
+
+1. Reopening/adjusting a counted, verified or banked day (deliberately out of scope).
+2. Edits to non-pending records and deletion of counted/verified records (the browser allows these; the server refuses them).
+3. Actor display names: server actor ids are auth user ids.
+4. Expense presets (`saveExpensePreset`) and any other non-finance writes (fleet, drivers, routes, settings) have no server actions yet.
+5. Frontend integration (including route-stop defaults and business selection); membership-based user lifecycle/bootstrap; hosted migration plan.

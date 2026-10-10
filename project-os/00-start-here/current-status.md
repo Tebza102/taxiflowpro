@@ -33,6 +33,14 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Essential finance server actions complete (Task 16, local only)
+
+Standalone `income.count`/`income.verify`, `record.edit` and `record.delete` added on the same authorized, atomic, retry-safe path.
+- Edit/delete apply to pending records only, with driver ownership, required driver edit reasons and edit history; never banked; closed-day guard.
+- Decisions recorded: closed-day guard kept (intentional change), no reopening, explicit trip stops (the frontend supplies route defaults).
+- Evidence: record actions 36/36 with real tokens (an edit field-list defect was found and fixed); Node 311/311.
+- **Finance server actions now cover capture, cash-up, standalone, edit/delete and banking.** See `tenant-design.md`.
+
 ### Scoped finance capture (Task 15, local only)
 
 `capture.standard_income`, `capture.special_income` and `capture.expense` are server actions (create only) using the existing atomic, version-checked, retry-safe pattern.

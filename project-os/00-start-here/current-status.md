@@ -33,6 +33,20 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Domain taxiflow.co.za added to the release scope (Task 28; read-only inspection; nothing changed)
+
+- **Registry:** registered via Absolute Hosting (expires 2027-03-26) but on **`serverHold`**. It resolves nowhere (NXDOMAIN at the co.za registry, 1.1.1.1 and 8.8.8.8).
+- **Nameservers:** `ns1/ns2.accelerit.ltd`; they serve no zone for it (REFUSED).
+- **Records:** no published records, including no MX or email records.
+- **Vercel:** apex and `www` are already attached to `taxiflowpro` as production domains, with no www redirect.
+  - **Production is still the legacy build `008ce8e`.** DNS records must therefore be added only once the maintenance page is on production (new checklist row 5a).
+- **Plan** (`05-build/pilot-release-checklist.md` section 5; X4; rows 5a, 11 and 12):
+  - registrar lifts the hold;
+  - Vercel `www` redirects 308 to the apex;
+  - at row 5a: A @ `216.198.79.1` and `64.29.17.1`, CNAME `www` `a1963e84e6a53d28.vercel-dns-017.com.`;
+  - Supabase Site URL `https://taxiflow.co.za`, allow-list `https://taxiflow.co.za/**` only.
+- **No code change needed:** redirects follow the request host or fall back to the Site URL.
+
 ### Operational safeguards (Task 27; local only; nothing hosted)
 
 Started from verified HEAD `24a58f77f735b3d324c1231fea07bf89231aaa54` (clean worktree).

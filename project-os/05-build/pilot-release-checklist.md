@@ -2,7 +2,8 @@
 
 Status 2026-10-10: **ready for review; nothing executed.** This checklist replaces the hosted-rehearsal route (`rehearsal-decision-pack.md`, `rehearsal-cutover-checklist.md`, both superseded). There is **no separate hosted rehearsal and no extra spend**. The release runs on the existing platform:
 - the Supabase project `vfxftviwteypasredjgm` (Free org "Apprigate");
-- the Vercel project `taxiflowpro` (Hobby team `apprigate`).
+- the Vercel project `taxiflowpro` (Hobby team `apprigate`);
+- the domain **`taxiflow.co.za`** (canonical), with `www.taxiflow.co.za` redirecting to it (section 5).
 
 Hosted-only checks (the new keys with the server functions, `/api/business/*` routing, email) are proven on a `--skip-domain` production deployment **behind the maintenance page**, before promotion.
 
@@ -14,6 +15,7 @@ Every row needs Tebogo's authorization for the window. A "stop" leaves the maint
 |---|---|---|---|
 | X1 | **Vercel Hobby is non-commercial only.** A taxi-owner pilot is commercial use. The only Vercel team on the account is `apprigate` (Hobby, no trial; CLI read 2026-10-10). **No existing entitlement covers it.** | Vercel Fair Use Guidelines (verified 2026-09-14, `rehearsal-decision-pack.md` section 1) | Tebogo upgrades the `apprigate` team to Pro (**$20/month**). **Not purchased.** |
 | X2 | **Setup emails cannot reach pilot Owners.** Without custom SMTP, Supabase's default sender only delivers to the org's team members and is rate-limited. | supabase.com/docs/guides/auth/auth-smtp (checked 2026-10-10) | Use the **existing `apprigate.com` mail hosting** (section 3). It already has SPF, DKIM, DMARC and valid TLS, so **no DNS change** is needed. |
+| X4 | **`taxiflow.co.za` is on `serverHold` at the .co.za registry**, so it does not resolve anywhere. The listed nameservers (`ns1/ns2.accelerit.ltd`) do not serve a zone for it (they answer REFUSED). | Registry WHOIS and DNS, read 2026-10-10 (section 5) | Tebogo asks the registrar (Absolute Hosting) to lift the hold and confirms the DNS zone exists. **No records are added yet** (see row 5a). No payment or purchase was made; if the registrar asks for one, that is Tebogo's decision. |
 | X3 | **Supabase Free has no automatic backups.** Only Pro and above get daily backups. Free projects are also paused after a low-activity week (restorable for 90 days). | supabase.com/docs/guides/platform/backups and `/free-project-pausing` (checked 2026-10-10) | **Operator daily encrypted backup** with `scripts/backup/backup.mjs` (section 4). It is built and tested locally (35/35) but **not yet run against production**. Daily pilot use should prevent pausing. |
 
 ## 1. Release rows
@@ -25,14 +27,15 @@ Every row needs Tebogo's authorization for the window. A "stop" leaves the maint
 | 3 | Keys (prep) | Create the publishable `web` and secret `vercel-production` keys; set the Production variables (`release-plan.md` section 6); no secret in Preview or Development | saved; no build yet | — |
 | 4 | **Maintenance** | Build the static maintenance deployment (no keys); disable the Git auto-deploy of `main`; merge the reviewed SHA to `main` | a ready URL; no build triggered | an unexpected build |
 | 5 | Window opens | Promote the maintenance page | users see maintenance | promote fails |
+| 5a | **Domain DNS** | **Only now**, with the maintenance page on production: add the section 5 records at the registrar DNS | `taxiflow.co.za` shows the maintenance page over valid HTTPS; `www` returns 308 to the apex; `http://` goes to `https://` | records or certificate not ready by row 11: continue the release, but **hold onboarding** until this row passes |
 | 6 | **Credentials** | Deactivate the legacy anon and service_role keys | legacy-key requests return **401** | a legacy key still works |
 | 7 | **Migration** | Apply release files 01, 02, 03 and 04 in that tested order, each in its own transaction. File 04 only **creates** the operator function. | each commits; 01's assertions pass | an error: the file rolls back; stop |
 | 7a | Owner check | Run `scripts/hosted/assign-initial-owner.mjs` **only if** row 8 shows no active Owner. The function and planner refuse a business that already has one. | the live inventory maps 1 active Owner, so normally **not run** | — |
 | 8 | Access check | Run the `hosted-rehearsal-tests` checks as SQL; API calls with the new publishable key | no browser access to the 10 relations; 5 users mapped, 1 Owner | any browser access |
 | 9 | **Deployment** | `vercel deploy --prod --skip-domain` of the reviewed SHA | build OK; `/api/business/*` returns 401 without a token | build fails or returns 404 |
 | 10 | **Smoke tests** | On that URL: Owner sign-in, workspace, one finance action, Business access, report preview and PDF, `/api/admin/auth-users` returns 410 | all pass with the new keys | any fail: stay in maintenance; fix forward |
-| 11 | Promote | `vercel promote <deployment>`; delete or protect the old production and Preview deployments | the tenant app is live; no legacy deployment is public | promote fails: maintenance stays |
-| 12 | Email | Auth Site URL and redirect allow-list = the production URL; custom SMTP (X2); "Forgot password?" for a test inbox | the email arrives; the link works | not delivered: hold onboarding |
+| 11 | Promote | `vercel promote <deployment>`; delete or protect the old production and Preview deployments | the tenant app is live on `https://taxiflow.co.za`; no legacy deployment is public | promote fails: maintenance stays |
+| 12 | Email | Auth **Site URL `https://taxiflow.co.za`**; redirect allow-list **`https://taxiflow.co.za/**` only** (remove Preview and other hosts); custom SMTP (X2); "Forgot password?" for a test inbox | the email arrives; the link opens `https://taxiflow.co.za/` and the password can be set | not delivered, or the link points elsewhere: hold onboarding |
 | 13 | Close-out | First post-release backup (section 4 export, verify and check); record the SHA and evidence (no secrets) | PASS; `check` says OK | not PASS: back up again before onboarding |
 
 ## 2. Secure recovery (never weaken access)
@@ -63,7 +66,7 @@ Recovery detail: `release-plan.md` section 7.
    - username: the full mailbox address;
    - sender address: the same mailbox; sender name "TaxiFlow Pro".
 3. **Type the password only into that dashboard field.** Never put it in chat, Git, an env file or a ticket.
-4. In Authentication → URL Configuration: set the Site URL to the production URL and allow-list only the production URL.
+4. In Authentication → URL Configuration: set the Site URL to `https://taxiflow.co.za` and allow-list only `https://taxiflow.co.za/**`.
 5. Send a test: "Forgot password?" to a mailbox Tebogo controls. Check that it arrives, isn't spam, and that the link works.
 6. Keep the default rate limit of 30 auth emails per hour; it is enough for 3 Owners.
 
@@ -145,3 +148,76 @@ The tool refuses any host or user that does not belong to the `--target` project
   - project settings: Auth URLs, SMTP, keys and Vercel variables. These are recorded in this checklist and re-entered by hand.
 - **The backup contains password hashes and all business data.** Treat every copy as highly sensitive, even though it is encrypted.
 - **Decrypting needs this repository's `scripts/backup` and Node (tested with v24).** Record the commit SHA with the off-machine copy.
+
+## 5. Domain: taxiflow.co.za (canonical) and www redirect
+
+### Current state (read-only checks, 2026-10-10)
+
+**Registry** (WHOIS `whois.registry.net.za`):
+- registered via **Absolute Hosting** on 2026-03-26; expires 2027-03-26;
+- status **`serverHold`**;
+- nameservers `ns1.accelerit.ltd` (196.11.178.134) and `ns2.accelerit.ltd` (196.11.178.135).
+
+**Public DNS:**
+- the `co.za` registry servers, 1.1.1.1 and 8.8.8.8 all return **NXDOMAIN** for `taxiflow.co.za` and `www`;
+- both Accelerit nameservers answer **REFUSED** (no zone served).
+- So there are **no published records today, including no MX, SPF, DKIM or DMARC**. Email on this domain can't be working now.
+- If the registrar's DNS panel holds unpublished records (for example MX), they are kept unchanged.
+
+**DNS provider:** the registrar's DNS (Absolute Hosting, published on the Accelerit nameservers). Changes are made in that panel.
+
+**Vercel** (team `apprigate`, read-only CLI/API):
+- `taxiflow.co.za` and `www.taxiflow.co.za` are **already attached to the project `taxiflowpro` as production domains**. Both are "verified" and "misconfigured" (no DNS yet), and there is **no www redirect**.
+- **Production is still the legacy build** (`main` @ `008ce8e`, deployment of 2026-08-10).
+- **Risk:** if the hold is lifted and records are added before row 5, the domain would serve the legacy build. Hence row 5a: records only once the maintenance page is on production.
+- `taxiflow.apprigate.com` is also attached, but its DNS points to the shared host (164.160.91.17), not Vercel, so it does not serve the app.
+
+### Proposed changes (not applied; part of the release authorization)
+
+**A. Registrar (before the window; safe at any time because no records exist):**
+- lift the `serverHold`;
+- confirm the zone exists on the Accelerit nameservers, i.e. `Resolve-DnsName taxiflow.co.za -Type SOA -Server ns1.accelerit.ltd` answers.
+- Keep the nameservers unchanged.
+
+**B. Vercel project `taxiflowpro` → Domains (before the window; no effect until DNS exists):**
+- `taxiflow.co.za`: production domain (canonical), unchanged;
+- `www.taxiflow.co.za`: **Redirect to `taxiflow.co.za`, 308 (permanent)**;
+- `taxiflow.apprigate.com`: remove it from the project, or leave it (it does not reach Vercel). Its DNS on `apprigate.com` is **not** changed.
+
+**C. Registrar DNS records (row 5a only, with the maintenance page on production):**
+
+| Name | Type | Value | TTL |
+|---|---|---|---|
+| `taxiflow.co.za` (@) | A | `216.198.79.1` | 300 |
+| `taxiflow.co.za` (@) | A | `64.29.17.1` | 300 |
+| `www.taxiflow.co.za` | CNAME | `a1963e84e6a53d28.vercel-dns-017.com.` | 300 |
+
+The values are Vercel's rank-1 recommendation for this project, read 2026-10-10. Re-read them at row 5a from Vercel → Domains, and use whatever Vercel shows then.
+- **Remove** any other A, AAAA or CNAME records on @ or `www` (for example registrar parking pages). They would break HTTPS issuance or send users elsewhere.
+- **Keep unchanged** any MX, SPF/TXT, DKIM, DMARC or mail-host records.
+- **Do not add** any MX or email records. Setup and password emails are sent from `apprigate.com` (section 3), so `taxiflow.co.za` needs none.
+- **CAA:** none exist. If any are ever added, they must allow `letsencrypt.org`, which Vercel uses.
+- After 24 hours of stable operation, the TTL can go up to 3600.
+
+### HTTPS and checks at row 5a, then again after row 11
+
+| Check | Expected |
+|---|---|
+| `Resolve-DnsName taxiflow.co.za -Server 1.1.1.1` | A 216.198.79.1 and 64.29.17.1 |
+| Vercel → Domains | both domains "Valid Configuration"; certificate issued (Let's Encrypt, automatic) |
+| `curl -sI https://taxiflow.co.za` | 200, valid certificate for `taxiflow.co.za`; maintenance page at row 5a, tenant app after row 11 |
+| `curl -sI https://www.taxiflow.co.za` | 308, `location: https://taxiflow.co.za/` |
+| `curl -sI http://taxiflow.co.za` | redirect to `https://` |
+| "Forgot password?" on `https://taxiflow.co.za` (row 12) | the email link opens `https://taxiflow.co.za/` |
+| Operator setup emails | run the hosted operator scripts with `TAXIFLOW_SETUP_REDIRECT=https://taxiflow.co.za/`. If it is unset, Supabase uses the Site URL, which is also `https://taxiflow.co.za`. |
+
+**Code:** no change needed.
+- The app's "Forgot password?" and Business-access setup emails use the host the request came from.
+- Supabase only honours allow-listed hosts and otherwise falls back to the Site URL.
+
+### Recovery for the domain (never point users to the old build)
+- **Records wrong, or certificate not issued:**
+  - fix the records, or remove the @ and `www` records (the domain stops resolving);
+  - the tenant app stays reachable to the operator at its deployment URL;
+  - hold onboarding.
+- **Never** promote, alias or re-attach a legacy deployment (`008ce8e`) to `taxiflow.co.za`. App failures follow section 2 (maintenance page, then fix forward).

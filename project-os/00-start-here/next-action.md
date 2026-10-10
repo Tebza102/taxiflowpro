@@ -1,5 +1,14 @@
 # Next Action
 
+## Immediate Next Step (updated 2026-10-10, Task 28)
+
+`taxiflow.co.za` is in the release scope. The proposed changes are in `05-build/pilot-release-checklist.md` section 5 and are **not applied**.
+
+**Tebogo (in addition to the Task 27 list below):**
+1. **X4:** ask Absolute Hosting why `taxiflow.co.za` is on `serverHold` and have it lifted. Confirm the zone exists on the Accelerit nameservers. **Add no records yet.**
+2. Approve the proposed Vercel change (`www` redirects 308 to the apex) and the DNS records for row 5a.
+3. Decide whether to detach `taxiflow.apprigate.com` from the Vercel project.
+
 ## Immediate Next Step (updated 2026-10-10, Task 27)
 
 The local operational safeguards are done: the backup tool is tested (35/35) and the legacy production-user scripts are retired. **Nothing has been run against production.**

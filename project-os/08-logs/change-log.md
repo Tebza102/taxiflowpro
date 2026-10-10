@@ -825,3 +825,30 @@ Prepared. Installation is a human step.
 - X1 and X2 still need authorization.
 
 **Next action:** `next-action.md` (Task 27).
+
+### 2026-10-10 21:50 — taxiflow.co.za added to the release scope (Task 28)
+
+**Changed by:** Claude Code (agent). Read-only only: registry WHOIS, DNS (local resolver, 1.1.1.1, 8.8.8.8, co.za and Accelerit nameservers), Vercel CLI/API (domains, domain config, production deployments). No DNS, Vercel, Supabase or registrar change; no purchase.
+
+**Files changed:**
+- `project-os/05-build/pilot-release-checklist.md` (X4, rows 5a, 11 and 12, sections 3 and 5)
+- current-status, next-action
+
+**Findings:**
+- **Registry:** `serverHold`, so the domain resolves nowhere.
+- **Nameservers:** `ns1/ns2.accelerit.ltd` serve no zone (REFUSED).
+- **Records:** no published records, so there were no email records to preserve (any unpublished panel records are to be kept).
+- **Vercel:** apex and `www` are already attached to `taxiflowpro` production with no redirect, and production is still the legacy `008ce8e` build.
+- `taxiflow.apprigate.com` is attached but points to the shared host.
+
+**Plan:**
+- lift the hold;
+- `www` redirects 308 to the apex (Vercel);
+- add the DNS records only at row 5a (maintenance page on production);
+- set the Supabase Site URL and allow-list to `https://taxiflow.co.za` only;
+- HTTPS is issued automatically by Vercel (Let's Encrypt).
+- No code change: setup and recovery redirects follow the request host or the Site URL.
+
+**Tests run:** none needed (documents only; no code change).
+
+**Next action:** `next-action.md` (Task 28).

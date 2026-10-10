@@ -9,6 +9,11 @@
   --brand-orange: #f58801;
   --success: #27ae60;
   --warning: #f39c12;
+  /* Darker warning tone for warning TEXT and for warning chips/badges that carry
+     white text (5.3:1 on white, 4.8:1 on the warning tint). --warning stays for
+     bars, strips and fills without text. */
+  --warning-text: #9b5d00;
+  --warning-strong: #8a5300;
   --danger: #e74c3c;
   --info: #3498db;
   --text: #1a1a1a;
@@ -588,9 +593,12 @@ button {
   background: linear-gradient(135deg, var(--success), #4cc37c);
 }
 
-.metric-card[data-tone="warning"]::before,
-.status-chip[data-tone="warning"] {
+.metric-card[data-tone="warning"]::before {
   background: linear-gradient(135deg, var(--warning), #f6b13d);
+}
+
+.status-chip[data-tone="warning"] {
+  background: linear-gradient(135deg, var(--warning-strong), var(--warning-text));
 }
 
 .metric-card[data-tone="danger"]::before,
@@ -1003,7 +1011,7 @@ button {
 }
 
 .finance-form-note[data-tone="warning"] {
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .finance-form-note[data-tone="danger"] {
@@ -1180,7 +1188,7 @@ button {
 
 .fleet-health-card[data-tone="warning"] .eyebrow,
 .fleet-health-card[data-tone="warning"] h3 {
-  color: #9b5d00;
+  color: var(--warning-text);
 }
 
 .fleet-health-card[data-tone="danger"] {
@@ -1560,7 +1568,7 @@ button {
 }
 
 .compact-badge[data-tone="warning"] {
-  background: var(--warning);
+  background: var(--warning-text);
 }
 
 .compact-badge[data-tone="danger"] {
@@ -2031,7 +2039,7 @@ button {
 
 .driver-quick-action-button[data-tone="warning"] .driver-quick-action-icon {
   background: rgba(243, 156, 18, 0.12);
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .driver-quick-action-button[data-tone="navy"] .driver-quick-action-icon {

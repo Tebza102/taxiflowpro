@@ -172,3 +172,31 @@ test("approved palette is applied with readable component contrast", async ({ pa
   }
   console.log(`[palette] heading ${result.heading.ratio.toFixed(2)}:1, active module ${result.activeModule ? result.activeModule.ratio.toFixed(2) : "n/a"}:1`);
 });
+
+// Warning text keeps its warning meaning with a darker tone (>= 4.5:1).
+test("warning text and warning chips meet normal text contrast", async ({ page }) => {
+  await signIn(page, "owner@taxiflow.local");
+  await page.locator("button.module-button").filter({ hasText: "Reports" }).first().click();
+  const note = page.locator('.finance-form-note[data-tone="warning"]').first();
+  await expect(note).toContainText("Demo mode");
+  const ratios = await page.evaluate(() => {
+    const rgb = (value) => (value.match(/\d+(\.\d+)?/g) ?? []).slice(0, 3).map(Number);
+    const lum = (c) => {
+      const [r, g, b] = c.map((v) => v / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const ratio = (a, b) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
+    const noteEl = document.querySelector('.finance-form-note[data-tone="warning"]');
+    const root = getComputedStyle(document.documentElement);
+    const hex = (h) => [1, 3, 5].map((i) => parseInt(h.trim().slice(i, i + 2), 16));
+    return {
+      note: ratio(rgb(getComputedStyle(noteEl).color), [255, 255, 255]),
+      chipLightestStop: ratio([255, 255, 255], hex(root.getPropertyValue("--warning-text"))),
+      warningFill: root.getPropertyValue("--warning").trim(),
+    };
+  });
+  expect(ratios.note).toBeGreaterThanOrEqual(4.5);
+  expect(ratios.chipLightestStop).toBeGreaterThanOrEqual(4.5);
+  expect(ratios.warningFill).toBe("#f39c12");
+  console.log(`[warning] note ${ratios.note.toFixed(2)}:1, chip ${ratios.chipLightestStop.toFixed(2)}:1`);
+});

@@ -1,5 +1,7 @@
 # Expense-only Driver Days: Behaviour Today and Recommended Rule
 
+> **Refined 2026-10-10:** funding sources, worked examples and the smallest pilot implementation (no automatic payables) are in `rehearsal-decision-pack.md` section 3. That refinement replaces R3's reimbursement payable for the pilot.
+
 Investigated 2026-10-10 from the code; no change made. **A decision is needed before the hosted rehearsal.**
 
 ## How a driver day's cash works today

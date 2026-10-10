@@ -33,6 +33,16 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### Hosted rehearsal decision pack (Task 22; read-only; nothing created or purchased)
+
+- `project-os/05-build/rehearsal-decision-pack.md`:
+  - **Rehearsal options and costs.** The Free organisation's 2 active slots are used by TaxiFlow and Birdie Squad. Recommended: a **new separate Pro organisation with one Micro project, about $25**; Birdie Squad is untouched. Vercel is on **Hobby** (check commercial-use terms before production).
+  - **The exact email and domain inputs.**
+  - **Refined expense-only handling** (funding sources, examples, smallest pilot implementation, no automatic payables).
+  - **Corrected cutover:** the legacy keys are deactivated at the start of the window.
+- `project-os/05-build/rehearsal-cutover-checklist.md`: Part A rehearsal and Part B production, with separate authorisations.
+- **Still outstanding:** a rendered PDF page check, phone icons and hosted setup email.
+
 ### Release candidate prepared (Task 21; hosted inventory read-only; nothing applied)
 
 - **Read-only live inventory** (metadata only), in `project-os/05-build/hosted-inventory.md`:

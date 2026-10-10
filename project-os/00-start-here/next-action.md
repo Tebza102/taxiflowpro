@@ -8,6 +8,15 @@ The local test gaps are closed and committed locally (`a424d84`, `00df61a`, `78d
 1a. ~~Commit the UAT safeguards~~ — done locally: `105e3385ef9f9f6c022bd7aef9c34c7a9e215ee0` (tooling + tests) and `924ec70f9ae41da6ef57cca644ee19691d475cdc` (Project OS). Not pushed.
 1c-progress (2026-10-10 01:06): Docker Desktop 4.94.0 installed per-user (WSL 2, Linux containers, Windows containers off). Installer verified by SHA-256 and Authenticode. Terms accepted by Tebogo; engine 29.8.2 running; `docker run --rm hello-world` passed; port 2375 not exposed. **Next:** Supabase local init per `project-os/05-build/local-supabase-setup.md` steps 4–8, on Tebogo's go-ahead (open a new terminal so the Docker PATH entry is loaded).
 1d-progress (2026-10-10 02:01): ~~local Supabase binding blocker~~ resolved with option 3 (Compose, explicit 127.0.0.1 ports, CLI disabled by an invalid sentinel config). Verify 14 PASS / 1 WARN; synthetic drill passed for schema, Auth and snapshot. Committed locally; not pushed.
+1q (2026-10-10): decision pack and checklist ready (Task 22).
+
+**Tebogo:**
+1. Approve rehearsal option A (about $25) and give **Authorization A**.
+2. Supply the email and domain inputs (decision-pack section 2).
+3. Decide the expense-only pilot rule (decision-pack section 3).
+4. Check the Vercel Hobby terms for the pilot.
+
+**Next (agent, after the decision):** implement and test the expense-only pilot rule locally; then run Part A of `rehearsal-cutover-checklist.md`, with approval at each step.
 1p (2026-10-10): release candidate prepared (Task 21). **Decisions for Tebogo before the hosted rehearsal** (`release-plan.md` section 11):
 1. The rehearsal project slot.
 2. The SMTP provider, domain and production URL.

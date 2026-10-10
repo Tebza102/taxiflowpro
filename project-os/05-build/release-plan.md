@@ -72,6 +72,15 @@ Run read-only SQL as the project owner and save the output to the encrypted evid
 
 **Principle:** old clients and old privileged deployments are locked out by **credentials and database access**, never by service-worker updates.
 
+> **Superseded order (2026-10-10, decision pack section 4):** the order below let the old production keep a working service_role key until step 6. The authoritative order is now `rehearsal-cutover-checklist.md` Part B:
+> 1. maintenance page;
+> 2. **deactivate the legacy keys (verify the 401s)**;
+> 3. backup;
+> 4. migrations;
+> 5. `deploy --prod --skip-domain`;
+> 6. smoke test;
+> 7. promote.
+
 **Verified Supabase key method** (supabase.com/docs: "Rotating Anon, Service, and JWT Secrets", "Migrating to publishable and secret API keys", "Understanding API keys", "JWT Signing Keys"; read 2026-10-10):
 - The legacy JWT-based `anon` and `service_role` keys **can no longer be rotated**.
 - The supported path:

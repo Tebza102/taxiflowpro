@@ -648,3 +648,21 @@ Prepared. Installation is a human step.
 - Node 317/317; build pass; secret scan clean.
 
 **Next action:** `next-action.md` → 1p.
+
+### 2026-10-10 18:40 — Hosted rehearsal decision pack and checklist (Task 22)
+
+**Changed by:** Claude Code (agent). Read-only only: Supabase connector account, project and price lookups; Supabase and Vercel docs; Vercel CLI team read. Nothing was created, purchased, paused, deployed or pushed.
+
+**Summary:**
+- **Supabase:** "Apprigate" organisation on the Free plan. Active: TaxiFlow and Birdie Squad (both free slots used). New project in that org: $0, but over the free limit; branch: $0.01344/hour, and only on a paid org.
+- **Recommendation:** a separate Pro organisation with one Micro project (about $25/month; the $10 compute credit covers Micro), plus a separate Vercel project for the rehearsal.
+- **Vercel:** Hobby plan; the commercial-use check is left for Tebogo.
+- **Email and domain:** inputs listed; none assumed.
+- **Expense-only days:** refined with funding sources and examples A–D; smallest safe pilot implementation; no automatic payables.
+- **Cutover gap fixed:** the old production kept its service_role key until after the migrations. Now: maintenance page, then deactivate the legacy keys (401 verified), then backup and migrations, then `deploy --prod --skip-domain`, smoke test and promote.
+- **New-key compatibility:** the rehearsal uses only new keys (its legacy keys are deactivated first). Code review: no key in Authorization headers and no raw REST calls.
+- **Checklist:** `rehearsal-cutover-checklist.md` (Part A rehearsal, Authorization A; Part B production, Authorization B).
+
+**Tests run:** none needed (documents only); the tree was clean at the start (`9de3997`).
+
+**Next action:** `next-action.md` → 1q.

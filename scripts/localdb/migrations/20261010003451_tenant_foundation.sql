@@ -45,7 +45,7 @@ end $$;
 -- --- Explicit mapping of the existing workspace (no shared fallback) ------------
 
 insert into public.businesses (id, slug, name)
-values ('10000000-0000-4000-8000-00000000000a', 'taxiflow-legacy', 'TaxiFlow pilot business (existing workspace)')
+values ('10000000-0000-4000-8000-00000000000a', 'taxiflow-legacy', 'TaxiFlow Pro')
 on conflict (id) do nothing;
 
 update public.workspace_snapshots

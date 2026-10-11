@@ -1344,3 +1344,28 @@ Recorded for later review (out of scope): **the layout looks different from the 
   - Copied with its manifest to `G:\My Drive\TaxiFlow backups\`; SHA-256 matches for both files. Tebogo to confirm the cloud upload.
 - **Release result:** rows 1–11 and 13 PASS. Row 12 works (delivery, landing page, password set) but **DKIM `taxiflow.co.za` fails** and mail lands in Spam. Under the row 12 rule, onboarding is **held** pending Tebogo's decision (see `next-action.md`).
 - Live: `e59417a` as `dpl_FruSfHfKnvUv8Gv367g6wzeduEpv` on `taxiflow.co.za`.
+
+### 2026-10-11 — Release stabilisation: role check closed (no code change), DKIM ticket drafted, test member and backup confirmed
+
+**1. Business access role mismatch**
+- Server path: `members.js` → `parseRole` → `apply_membership_change` passes the role through unchanged and accepts only Admin, Manager or Driver.
+- New `tests/localdb-browser/tenant-access-roles.spec.js`, on a fresh `setup.mjs hosted` stack (synthetic `@example.com` users).
+- **Run on the unchanged code** (the earlier spec version also had an automation case):
+  - Manager, Admin and Driver chosen with `selectOption` saved exactly, and so did Manager chosen with the keyboard (focus, ArrowDown);
+  - only the automation case (dropdown value set with no change event) saved **Admin**, reproducing row 12. The success message correctly reported the saved role.
+- **Cause:** the row 12 grant was made by browser automation, whose click did not register; the keyboard path then moved the visible value without the change event reaching React. A person's selection does not do this. **No code fix and no deploy.** The candidate FormData fix is kept in `git stash` only.
+- **Final spec (normal paths only): 1/1 PASS.** Each role saves exactly, persists after reload, and gets the matching server permissions:
+  - Manager: workspace role Manager, no member list, cash-up verify allowed;
+  - Admin: member list allowed, verify denied;
+  - Driver: both denied.
+
+**2. DKIM:** sanitised ticket drafted in `05-build/email-dkim-hosting-ticket.md`; **not sent**.
+- Proven: the cPanel `d=taxiflow.co.za` signature includes Message-ID in `h=`; the only Message-ID, `E1xFuKB-002bmI-N8@server13.antispam.co.za`, matches the relay's queue id; Gmail `dkim=fail` (taxiflow.co.za), `dkim=pass` (out.zamailgate.com), SPF and DMARC pass.
+- Passing E1 (webmail, id `1xFhpj-0000000CFIh-3vXH`, Tebogo's Gmail check) is cited; no raw E1 headers were ever recorded.
+- **Hypothesis (unconfirmed):** the relay's added Message-ID breaks the signature. Onboarding new Owners stays paused.
+
+**3. Test member and backup**
+- Production read-only:
+  - `apprigate@gmail.com` membership `active=false` (since 14:18:40 UTC); active memberships 5; Owners 1.
+  - One Auth session remains. Acting as that user in a rolled-back read-only transaction: 0 businesses and 0 memberships visible; no snapshot privilege. The API also refuses (`tenantAuth` returns 403 without an active membership).
+- Backup `…T15-15-11-698Z`: Drive for Desktop (the account holding both files) reported `active_uploads: 0, operation_queue_size: 0` at 15:51 UTC. The Drive connector here is a different Google account and the browser pane cannot sign in to Google, so this is local sync evidence, not a server listing.

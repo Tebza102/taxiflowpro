@@ -4,9 +4,9 @@
 
 TaxiFlow Pro is currently in a production-hardening release phase on draft PR #2. The feature branch has replaced premature client-side success reporting for live Supabase mutations with confirmed persistence patterns, hardened Owner-first authentication and user lifecycle handling, standardised the live workspace contract, added password recovery, and preserved the existing finance workflow. Application logic is already substantially implemented; the remaining work is release validation and controlled rollout, not product redesign.
 
-## Release state (2026-10-11 17:30 SAST): secure tenant app LIVE; onboarding ON HOLD for DKIM decision
+## Release state (2026-10-11 18:00 SAST, after stabilisation): secure tenant app LIVE for existing users; new-Owner onboarding ON HOLD (DKIM)
 
-The secure tenant release is live on `https://taxiflow.co.za`. Rows 1–11 and 13 PASS. Row 12 works, but one email criterion fails (DKIM), so **real Owner onboarding is on hold** until Tebogo decides (see `next-action.md`).
+The secure tenant release is live on `https://taxiflow.co.za`. Rows 1–11 and 13 PASS. Row 12 works, but one email criterion fails (DKIM), so **onboarding new Owners is on hold** until the hosting ticket (`05-build/email-dkim-hosting-ticket.md`) is resolved and DKIM passes on a repeat test.
 
 | Item | Value |
 |---|---|
@@ -14,14 +14,14 @@ The secure tenant release is live on `https://taxiflow.co.za`. Rows 1–11 and 1
 | Live deployment | `taxiflowpro-jng5n1ced` (`dpl_FruSfHfKnvUv8Gv367g6wzeduEpv`), promoted; `taxiflow.co.za` stays attached |
 | Other deployments | `cmlp6fmww` (maintenance fallback) and `301dw9v3b` (branch Preview) only; bypass secrets: 0; auto-assign off |
 | Supabase | `vfxftviwteypasredjgm`; release files 01–04 applied, all post-checks PASS; legacy JWT keys disabled; publishable `web_app` and secret `vercel_production` only |
-| Data | 1 business "TaxiFlow Pro"; 5 active memberships; 1 active Owner; 1 inactive test membership (`apprigate@gmail.com`) |
-| Backups (all in `C:\Users\appri\taxiflow-recovery\backups` and `G:\My Drive\TaxiFlow backups`, SHA-256 matches) | final pre-migration `…T07-38-37-806Z` (`390a7d12…`); after-release `…T15-15-11-698Z` tenant format (`7ce304fb…`) |
+| Data | 1 business "TaxiFlow Pro"; 5 active memberships; 1 active Owner; 1 inactive test membership (`apprigate@gmail.com`; its remaining sign-in session sees 0 businesses and 0 memberships, verified 18:00 SAST) |
+| Backups (all in `C:\Users\appri\taxiflow-recovery\backups` and `G:\My Drive\TaxiFlow backups`, SHA-256 matches; Drive for Desktop reported 0 pending uploads at 17:51 SAST) | final pre-migration `…T07-38-37-806Z` (`390a7d12…`); after-release `…T15-15-11-698Z` tenant format (`7ce304fb…`) |
 | Auth URLs | Site URL `https://taxiflow.co.za`; redirects `https://taxiflow.co.za/**` only |
-| Email | SMTP `notifications@taxiflow.co.za` as "TaxiFlow"; delivered, but to Gmail **Spam**; SPF and DMARC pass, DKIM `taxiflow.co.za` **fail** (the relay adds a Message-ID after signing) |
+| Email | SMTP `notifications@taxiflow.co.za` as "TaxiFlow"; delivered, but to Gmail **Spam**; SPF and DMARC pass, DKIM `taxiflow.co.za` **fail**. Proven: the only Message-ID was added by the relay after the cPanel signature. Hypothesis: that addition breaks the signature. Ticket drafted, not sent |
 
-**Open findings (not fixed in this release):**
-1. Grant-access role: Manager shown, Admin recorded (once, via the keyboard). Review before Owners grant access.
-2. DKIM / Spam (above).
+**Open findings:**
+1. Grant-access role: **closed, no code change.** Normal selection (pointer and keyboard) saves Admin, Manager and Driver exactly, persists after reload, and gives the matching server permissions (`tests/localdb-browser/tenant-access-roles.spec.js`, 1/1). The row 12 mismatch came only from browser automation that changed the dropdown without a change event.
+2. DKIM / Spam (above): blocks new-Owner onboarding.
 3. The layout differs from the legacy app; no functional problem.
 4. Chrome autofill puts a random value in the email field (Tebogo's saved entries).
 

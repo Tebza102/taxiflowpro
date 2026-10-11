@@ -1,17 +1,16 @@
 # Next Action
 
-## Immediate Next Step (updated 2026-10-11 17:30 SAST, after release row 13)
+## Immediate Next Step (updated 2026-10-11 18:00 SAST, after stabilisation)
 
-The release is live and backed up. Before onboarding real pilot Owners:
+**Existing users can use the app today. Onboarding new Owners stays paused.**
 
-1. **Tebogo decides on the email DKIM failure** (row 12 criterion). The options are:
-   - **(recommended)** open a ticket with Absolute Hosting: the outbound relay (`delivery.antispam.co.za` / `out.zamailgate.com`) adds a `Message-ID` after cPanel DKIM signing, so the `taxiflow.co.za` signature fails. Ask them to stop that, or to sign after relaying. Then repeat one recovery email and check that DKIM passes;
-   - or accept the risk for the pilot (SPF and DMARC pass) and tell each Owner to check Spam and mark "Not spam".
-2. **Review the grant-access role defect** (Manager shown, Admin recorded) before any Owner grants access to staff. This is a separate task: reproduce it locally, fix it, and release it through the normal gates.
-3. Tebogo confirms in drive.google.com that `…T15-15-11-698Z.tfbk` and its manifest have uploaded.
-4. Then onboard the first pilot Owner (`11-client-delivery/first-owner-onboarding.md`).
+1. **Tebogo sends the drafted ticket** `05-build/email-dkim-hosting-ticket.md` to Absolute Hosting. Do not treat DKIM as resolved.
+2. After the host's change, send one recovery email to the external mailbox. Confirm `dkim=pass header.i=@taxiflow.co.za`, then mark checklist row 12 passed.
+3. Only then onboard the first new Owner (`11-client-delivery/first-owner-onboarding.md`).
 
-Later, not release scope: branded Supabase email templates; the layout review; Chrome saved-entry clean-up.
+Closed: the grant-role mismatch (automation only; no code change); the test member (inactive, denied); the after-release backup (verified, synced).
+
+Later, not now: branded email templates; the layout review; Chrome saved entries; signing out the inactive test account's leftover session (harmless: no data access).
 
 ## Immediate Next Step (updated 2026-10-10 23:35 SAST, Task 32)
 

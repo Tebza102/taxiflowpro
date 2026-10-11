@@ -1297,3 +1297,10 @@ Recorded for later review (out of scope): **the layout looks different from the 
 - keep `jng5n1ced` (live), `cmlp6fmww` (maintenance fallback) and `301dw9v3b` (current branch preview, no secret);
 - revoke the Deployment Protection bypass secret.
 - Run by Tebogo: pending.
+
+### 2026-10-11 — Row 11 clean-up done (verified)
+
+- **Deployments remaining:** `jng5n1ced` (live, `dpl_FruSfHfKnvUv8Gv367g6wzeduEpv`), `cmlp6fmww` (maintenance fallback), `301dw9v3b` (branch preview, no secret). All other deployments were deleted.
+- **Protection bypass secrets configured: 0** (revoked).
+- taxiflow.co.za still serves the tenant build.
+- **Pending (Tebogo):** remove the dead `VERCEL_AUTOMATION_BYPASS_SECRET` and `SUPABASE_SERVICE_ROLE_KEY` lines from `.env.uat.local`.

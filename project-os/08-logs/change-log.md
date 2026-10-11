@@ -1304,3 +1304,32 @@ Recorded for later review (out of scope): **the layout looks different from the 
 - **Protection bypass secrets configured: 0** (revoked).
 - taxiflow.co.za still serves the tenant build.
 - **Pending (Tebogo):** remove the dead `VERCEL_AUTOMATION_BYPASS_SECRET` and `SUPABASE_SERVICE_ROLE_KEY` lines from `.env.uat.local`.
+
+### 2026-10-11 — Row 12: external email and full password reset — functional PASS; DKIM finding
+
+**Method:**
+- Owner (`owner@apprigate.com`) granted temporary access to `apprigate@gmail.com` ("Gmail test") in Business access on taxiflow.co.za (built-in browser).
+- Tebogo opened each link in a separate incognito session and set the passwords privately.
+
+**Results:**
+- **Setup email:** sent by Supabase as `notifications@taxiflow.co.za` (authenticated, from 52.210.122.178) via relay `delivery.antispam.co.za` (cPanel Track Delivery 15:43:15, accepted). Delivered to Gmail **Spam**. The link opened `https://taxiflow.co.za/`; the password was set.
+- **Recovery email** (Forgot password? on taxiflow.co.za): delivered to Gmail **Spam**, subject "Reset Your Password", From "TaxiFlow" <notifications@taxiflow.co.za>. Link `redirect_to=https://taxiflow.co.za`; the reset worked. The one-time token was used and is not recorded here.
+- **Gmail authentication:**
+  - **SPF pass** (164.160.88.223 za-outgoing-13-6.antispam.co.za);
+  - **DMARC pass** (p=none, via SPF alignment);
+  - **DKIM `taxiflow.co.za` FAIL**: the outbound relay adds a `Message-ID` header after the cPanel signature (Supabase sends none; the signature covers Message-ID);
+  - DKIM `out.zamailgate.com` pass (relay, not aligned).
+- **Removal:** the Owner removed access ("Access removed for apprigate@gmail.com.").
+  - DB read-only check: membership `active=false` at 14:18:40 UTC; active memberships 5; active Owners 1.
+  - The membership list did not refresh immediately in the UI (cosmetic; logged).
+
+**Findings for later review** (no change in this release):
+1. **Grant-access role:** the dropdown showed Manager, but the grant recorded **Admin** (selection via keyboard in the built-in browser). Check that the role sent always matches the role displayed.
+2. **Platform email DKIM / Spam:**
+   - ask Absolute Hosting to stop the relay modifying headers after signing, or to sign taxiflow.co.za after relaying;
+   - brand the Supabase email templates;
+   - meanwhile, tell Owners to check Spam and mark "Not spam".
+3. **Layout:** looks different from the legacy app; no functional problem (Tebogo).
+4. **Chrome autofill:** a saved Chrome entry autofills a random value into the taxiflow.co.za **email** field; Tebogo to review the saved entries.
+
+`.env.uat.local`: removed the two revoked lines (`VERCEL_AUTOMATION_BYPASS_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`); no values were printed.

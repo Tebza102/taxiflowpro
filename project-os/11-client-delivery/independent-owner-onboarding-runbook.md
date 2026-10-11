@@ -13,7 +13,7 @@ Status 2026-10-11: **prepared; not run.** Only existing, tested tooling is used.
 | 3 | New business B | onboard only after A passes step 6 |
 
 **Hard rules:**
-- **No invitations until DKIM passes.** Creating a business creates its Owner account, and that immediately sends the password-setup email. So `--apply` in step 4 waits until the DKIM retest passes (`05-build/email-dkim-hosting-ticket.md`, then `00-start-here/next-action.md`). Before that, only steps 0–3 (inputs, dry run, backup) are allowed.
+- **No invitations until DKIM passes.** For an Owner email with no TaxiFlow sign-in yet, creating the business creates the account and immediately sends the password-setup email. (An existing account gets no email; see step 2.) So `--apply` in step 4 waits until the DKIM retest passes (`05-build/email-dkim-hosting-ticket.md`, then `00-start-here/next-action.md`). Before that, only steps 0–3 (inputs, dry run, backup) are allowed.
 - **New Owners never join TaxiFlow Pro.** Do not add them in TaxiFlow Pro → Settings → Business access. Each Owner is created only by `onboard-business.mjs`, as Owner of their own business.
 - **Passwords:** Owners set their own, privately, from the setup email. The operator never sees, types or sends a password.
 - **Typed confirmations:** every `--apply` asks for the typed project ref in an interactive terminal. Tebogo runs those steps.
@@ -30,7 +30,8 @@ Once (operator credentials):
 Per business:
 1. **Slug:** short, lower case, unique, for example `pilot-one`.
 2. **Business name:** exact. The data file must match it.
-3. **Owner name and email.** The email must not already sign in to TaxiFlow, and must not be a TaxiFlow Pro member. Step 2 shows whether the account exists.
+3. **Owner name and email:** the Owner's real email. It may be new to TaxiFlow, or already have a TaxiFlow sign-in. Step 2 shows which.
+   - If it already has a sign-in, say which business access the person **should** keep. Example: an existing TaxiFlow Pro member who should stay one.
 4. **Whether the Owner also drives** (`--owner-drives`).
 5. **Set-up data file** `<slug>.json`, from `scripts/pilot/business-data.example.json`; the rules are in `05-build/pilot-business-data.md`:
    - routes (start and end stops);
@@ -64,7 +65,14 @@ node scripts/hosted/onboard-business.mjs --target vfxftviwteypasredjgm --env-fil
 
 Expected: `business: "new"` and `ownerAccount: "new (password-setup email)"`.
 
-**Stop** if `ownerAccount` says `existing`. That email already has a TaxiFlow sign-in, possibly in TaxiFlow Pro. Use a different email; never move or reuse a TaxiFlow Pro login.
+If `ownerAccount` says `existing (unchanged)`, the script supports this safely. Checked in `api/_lib/tenantOnboarding.js` (`createBusinessWithOwner`, `ensureAuthUser`) and the `create_business_with_owner` RPC:
+- the existing account is reused unchanged: no password reset and no email;
+- an Owner membership is added in the **new** business only;
+- memberships in other businesses (for example TaxiFlow Pro) are left exactly as they are, neither added nor removed.
+
+A person with access to more than one business then chooses the business in the app's business picker. This is proven locally (`tests/localdb-browser/tenant-finance.spec.js`, two-business user). It has not yet been exercised on production.
+
+Before step 4, confirm the person's existing access is intended. Don't ask the Owner for a different email.
 
 ### 3. Backup before any change (Tebogo; hidden passphrase prompts)
 ```powershell
@@ -83,7 +91,11 @@ $env:TAXIFLOW_SETUP_REDIRECT = 'https://taxiflow.co.za/'
 node scripts/hosted/onboard-business.mjs --target vfxftviwteypasredjgm --env-file C:\Users\appri\taxiflow-recovery\operator.env --slug <slug> --name "<business name>" --owner-email <owner email> --owner-name "<owner name>" [--owner-drives] --apply
 ```
 
-Type the project ref when asked. Expected: `ok: true`, `status: "created"`, `ownerCreated: true`, `setupEmailSent: true`. Record the `businessId`.
+Type the project ref when asked. Expected: `ok: true` and `status: "created"`, then either:
+- new account: `ownerCreated: true`, `setupEmailSent: true`;
+- existing account: `ownerCreated: false`, `setupEmailSent: false`, which is correct because they keep their current password.
+
+Record the `businessId`.
 
 If `setupEmailSent` is false, tell the Owner to use **Forgot password?** on `https://taxiflow.co.za`. Never set a password for them.
 
@@ -108,20 +120,23 @@ The loader never touches sign-ins, memberships or money records.
 1. Re-run the step 1 query. Expected:
    - TaxiFlow Pro: **unchanged** (5 active members, 1 Owner);
    - the new business: 1 active member, its Owner.
-2. Check that the new Owner has exactly one membership:
+2. Check that the Owner's memberships match the intended access:
    ```sql
    select b.slug, m.role, m.active from public.business_memberships m
    join public.businesses b on b.id = m.business_id
    join auth.users u on u.id = m.user_id
    where lower(u.email) = lower('<owner email>');
    ```
-   Expected: one row, `<slug> / Owner / true`.
+   Expected:
+   - **new account:** exactly one row, `<slug> / Owner / true`;
+   - **existing account:** the `<slug> / Owner / true` row, plus **only** the memberships they already had (step 1 / step 2 record), with unchanged roles and active flags.
 3. The Owner sets their password privately from the email and signs in at `https://taxiflow.co.za`. Expected:
    - the tenant bar shows **only** their business name;
    - their vehicles, routes and drivers are present;
    - nothing from TaxiFlow Pro (or business A, when doing B) is visible;
-   - Business access lists only themselves.
-4. TaxiFlow Pro's Owner (`owner@apprigate.com`) opens Business access. Expected: the same 5 active people as before; the new Owner is **not** listed.
+   - Business access lists only themselves;
+   - an Owner who also belongs to another business sees the business picker. In each business they see only that business's data.
+4. TaxiFlow Pro's Owner (`owner@apprigate.com`) opens Business access. Expected: the same 5 active people as before. The new Owner is not added; an existing TaxiFlow Pro member stays listed only as they were.
 5. Record the evidence in `08-logs/change-log.md` (no passwords, links or tokens).
 
 **If any check fails:** stop. Do not onboard the next business. Restore the business with `backup.mjs restore --business <uuid>` only on an explicit decision.

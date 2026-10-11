@@ -1158,3 +1158,11 @@ No legacy key change, deploy, migration or merge.
 **To remove:** the earlier backup `…T03-24-06-317Z.tfbk` and its manifest. It was encrypted with the database password. Tebogo deletes it himself; the agent does not permanently delete data.
 
 **Still open:** an encrypted off-machine copy of the new backup.
+
+### 2026-10-11 07:30 SAST — Backup housekeeping done
+
+- **Removed by Tebogo:** the earlier backup `…T03-24-06-317Z` (`.tfbk` and manifest), which was encrypted with the database password. The local folder now holds `backup-log.txt` and the 05-08 backup only.
+- **Off-machine copy:** `G:My DriveTaxiFlow backups` (Google Drive, apprigate@gmail.com) received the 05-08 `.tfbk` and manifest, copied by the agent at Tebogo's request.
+  - SHA-256 of both copies matches the originals.
+  - The `.tfbk` hash matches the manifest (`8bada899…`).
+  - The file is encrypted; the passphrase is only in Tebogo's password manager.

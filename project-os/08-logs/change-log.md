@@ -986,3 +986,34 @@ No purchase or plan change; no website DNS change; no password seen by the agent
 **Still to test:**
 - **E5:** platform (Supabase) email delivery and authentication through `notifications@`. It needs Supabase SMTP configured first.
 - **E6:** the real setup and reset flow on `https://taxiflow.co.za`. It awaits the secure deployment (release row 12).
+
+### 2026-10-11 03:25 SAST — Supabase custom SMTP enabled with notifications@taxiflow.co.za (Task 33, in progress)
+
+**Changed by:**
+- Claude Code (agent) filled the non-secret fields in Tebogo's signed-in Supabase dashboard (browser pane);
+- Tebogo pasted the password and clicked Save.
+
+The agent never saw the password.
+
+**Project:** `vfxftviwteypasredjgm` → Authentication → Emails → SMTP Settings.
+
+| Setting | Before | After (verified after reload) |
+|---|---|---|
+| Enable custom SMTP | off (Supabase default sender) | **on** |
+| Sender email | — | `notifications@taxiflow.co.za` |
+| Sender name | — | `TaxiFlow` |
+| Host / port | — | `cp24-jhb.za-dns.com` / `465` |
+| Minimum interval per user | — | 60 s (default) |
+| Username | — | `notifications@taxiflow.co.za` |
+| Password | — | stored (masked) |
+| Auth email rate limit | default-sender limit | 30 per hour (Supabase default for custom SMTP) |
+
+**URL Configuration** (read only, **unchanged**):
+- Site URL `https://taxiflow.apprigate.com`. This host points to shared web hosting, not the app.
+- Redirects:
+  - `https://taxiflow.apprigate.com/**`;
+  - `https://taxiflowpro-git-agent-owner-first-auth-reset-apprigate.vercel.app/**`, and the same URL without `/**`;
+  - `https://taxiflowpro.vercel.app/**`.
+- These are replaced by `https://taxiflow.co.za` and `https://taxiflow.co.za/**` only, at release row 12.
+
+**Next:** E5, a platform-generated recovery email to an account Tebogo owns.

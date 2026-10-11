@@ -6,7 +6,7 @@
 
 1. **Tebogo sends the drafted ticket** `05-build/email-dkim-hosting-ticket.md` to Absolute Hosting. Do not treat DKIM as resolved.
 2. After the host's change, send one recovery email to the external mailbox. Confirm `dkim=pass header.i=@taxiflow.co.za`, then mark checklist row 12 passed.
-3. Only then onboard the first new Owner (`11-client-delivery/first-owner-onboarding.md`).
+3. Only then onboard the two new independent businesses, one at a time, with `11-client-delivery/independent-owner-onboarding-runbook.md` (inputs and dry runs may be prepared now; no invitations before the DKIM retest passes).
 
 Closed: the grant-role mismatch (automation only; no code change); the test member (inactive, denied); the after-release backup (verified, synced).
 

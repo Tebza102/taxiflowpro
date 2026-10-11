@@ -27,13 +27,17 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 
 import {
-  COLUMN_TABLES,
-  EXPORT_SQL,
+  PRE_MIGRATION_FORMAT,
+  SCHEMA_PROBE_SQL,
   buildBusinessRestoreSql,
   buildFullRestoreSql,
   buildManifest,
+  buildPreMigrationRestoreSql,
+  columnTablesFor,
   columnsSql,
+  comparableTables,
   evaluateBackupLog,
+  exportSqlFor,
   parseAndValidateBundle,
   sameCounts,
   sha256,
@@ -115,16 +119,18 @@ const confirmHosted = async (target, action) => {
 
 const stamp = () => new Date().toISOString().replace(/[:.]/g, "-");
 const oneLine = (text) => String(text).replace(/\s+/g, " ").slice(0, 300);
-const readTargetColumns = (psql) => Object.fromEntries(COLUMN_TABLES.map((table) => [table, psql(columnsSql(table)).trim()]));
+const readTargetColumns = (psql, tables) => Object.fromEntries(tables.map((table) => [table, psql(columnsSql(table)).trim()]));
+// Which schema the database has: "pre-migration" (before release files 01-04) or "tenant".
+const probeSchema = (psql) => {
+  const schema = psql(SCHEMA_PROBE_SQL).trim();
+  if (schema !== "pre-migration" && schema !== "tenant") throw new Error(`unexpected schema probe result "${schema}".`);
+  return schema;
+};
+const exportFrom = (psql) => {
+  const text = psql(exportSqlFor(probeSchema(psql))).trim();
+  return { text, bundle: parseAndValidateBundle(text) };
+};
 const rowsHash = (rows) => sha256(rows.map((row) => stableStringify(row)).sort().join("\n"));
-const tablesOf = (bundle) => ({
-  businesses: bundle.businesses,
-  memberships: bundle.memberships,
-  snapshots: bundle.workspaces,
-  requestLog: bundle.requests,
-  authUsers: bundle.users,
-  authIdentities: bundle.identities,
-});
 
 const decryptFile = (file, passphrase) => {
   const encrypted = readFileSync(file);
@@ -157,8 +163,7 @@ const runExport = async () => {
     const passphrase = await readPassphrase({ confirm: true });
     const psql = await psqlFor(target);
 
-    const text = psql(EXPORT_SQL).trim();
-    const bundle = parseAndValidateBundle(text);
+    const { text, bundle } = exportFrom(psql);
     const plaintext = Buffer.from(text, "utf8");
     const plaintextSha256 = sha256(plaintext);
     const encrypted = encryptBackup(plaintext, passphrase);
@@ -176,8 +181,8 @@ const runExport = async () => {
     writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
     renameSync(partialFile, finalFile);
     const c = manifest.counts;
-    appendFileSync(logFile, `${new Date().toISOString()} PASS ${path.basename(finalFile)} sha256=${manifest.ciphertextSha256} businesses=${c.businesses} snapshots=${c.snapshots} memberships=${c.memberships} requestLog=${c.requestLog} authUsers=${c.authUsers}\n`);
-    console.log(`PASS backup verified: ${finalFile}`);
+    appendFileSync(logFile, `${new Date().toISOString()} PASS ${path.basename(finalFile)} format=${manifest.format} sha256=${manifest.ciphertextSha256} ${Object.entries(c).map(([key, value]) => `${key}=${value}`).join(" ")}\n`);
+    console.log(`PASS backup verified (${manifest.format}): ${finalFile}`);
     console.log(`counts ${JSON.stringify(c)}`);
     return 0;
   } catch (error) {
@@ -215,11 +220,13 @@ const runRestore = async () => {
   const passphrase = await readPassphrase({ confirm: false });
   const { bundle } = decryptFile(file, passphrase);
   const psql = await psqlFor(target);
-  const columns = readTargetColumns(psql);
-  psql(businessId ? buildBusinessRestoreSql(bundle, businessId, columns) : buildFullRestoreSql(bundle, columns));
+  const columns = readTargetColumns(psql, columnTablesFor(bundle));
+  if (businessId) psql(buildBusinessRestoreSql(bundle, businessId, columns));
+  else psql(bundle.format === PRE_MIGRATION_FORMAT ? buildPreMigrationRestoreSql(bundle, columns) : buildFullRestoreSql(bundle, columns));
 
   // Re-read the target and compare with the backup.
-  const after = parseAndValidateBundle(psql(EXPORT_SQL).trim());
+  const { bundle: after } = exportFrom(psql);
+  if (after.format !== bundle.format) throw new Error(`the restored database is ${after.format}, the backup is ${bundle.format}.`);
   let checks;
   if (businessId) {
     const pick = (b) => ({
@@ -229,7 +236,7 @@ const runRestore = async () => {
     const [want, got] = [pick(bundle), pick(after)];
     checks = Object.fromEntries(Object.keys(want).map((key) => [key, rowsHash(want[key]) === rowsHash(got[key]) ? "MATCH" : "DIFF"]));
   } else {
-    const [want, got] = [tablesOf(bundle), tablesOf(after)];
+    const [want, got] = [comparableTables(bundle), comparableTables(after)];
     checks = Object.fromEntries(Object.keys(want).map((key) => [key, rowsHash(want[key]) === rowsHash(got[key]) ? "MATCH" : "DIFF"]));
   }
   const ok = Object.values(checks).every((value) => value === "MATCH");

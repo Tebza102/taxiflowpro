@@ -59,6 +59,7 @@ export const parseAndValidateBundle = (text) => {
 
 export const validateBundle = (bundle) => {
   if (!bundle || typeof bundle !== "object") fail("not an object.");
+  if (bundle.format === PRE_MIGRATION_FORMAT) return validatePreMigrationBundle(bundle);
   if (bundle.format !== BACKUP_FORMAT) fail(`unknown format ${bundle.format}.`);
   if (bundle.end !== END_MARKER) fail("the end marker is missing.");
   for (const key of ["businesses", "memberships", "workspaces", "requests", "users", "identities"]) {
@@ -90,7 +91,26 @@ export const validateBundle = (bundle) => {
 };
 
 // Metadata only: counts, ids, versions and hashes. No emails, names or money.
-export const buildManifest = (bundle, { plaintextSha256, ciphertextSha256, target, file }) => ({
+export const buildManifest = (bundle, meta) =>
+  bundle.format === PRE_MIGRATION_FORMAT ? buildPreMigrationManifest(bundle, meta) : buildTenantManifest(bundle, meta);
+
+const buildPreMigrationManifest = (bundle, { plaintextSha256, ciphertextSha256, target, file }) => ({
+  format: PRE_MIGRATION_FORMAT,
+  target,
+  file,
+  exportedAt: bundle.exported_at,
+  plaintextSha256,
+  ciphertextSha256,
+  counts: {
+    snapshots: bundle.workspaces.length,
+    legacyRows: LEGACY_TABLES.reduce((sum, table) => sum + bundle.legacy_tables[table].length, 0),
+    authUsers: bundle.users.length,
+    authIdentities: bundle.identities.length,
+  },
+  workspaces: bundle.workspaces.map((w) => ({ key: w.workspace_key, updatedAt: w.updated_at })),
+});
+
+const buildTenantManifest = (bundle, { plaintextSha256, ciphertextSha256, target, file }) => ({
   format: BACKUP_FORMAT,
   target,
   file,
@@ -171,6 +191,7 @@ commit;
 // snapshot does not contain). Memberships and Auth are NOT touched: restoring
 // access from an old backup could re-grant access an Owner has since removed.
 export const buildBusinessRestoreSql = (bundle, businessId, columns) => {
+  if (bundle.format === PRE_MIGRATION_FORMAT) throw new Error("A one-business restore needs a backup taken after the tenant migration.");
   const workspace = bundle.workspaces.find((w) => w.business_id === businessId);
   if (!workspace) throw new Error("That business is not in the backup.");
   const requests = bundle.requests.filter((q) => q.business_id === businessId);
@@ -213,3 +234,89 @@ export const evaluateBackupLog = (text, { now = Date.now(), maxAgeHours = 26 } =
   if (ageHours > maxAgeHours) return { ok: false, reason: `the newest PASS is ${ageHours.toFixed(1)} hours old (limit ${maxAgeHours})` };
   return { ok: true, reason: `newest PASS ${ageHours.toFixed(1)} hours ago`, line: last };
 };
+
+// --- Pre-migration format (production before release files 01-04) -------------
+// Before the tenant migration, production has workspace_snapshots (no
+// business_id), eight legacy tables (empty in the live inventory) and Auth.
+// The tool probes the schema and exports the matching format.
+export const PRE_MIGRATION_FORMAT = "taxiflow-backup-premigration-v1";
+export const LEGACY_TABLES = ["fleet_profiles", "personnel_profiles", "vehicles", "banking_events", "shift_reconciliations", "expense_entries", "defect_reports", "compliance_documents"];
+export const SCHEMA_PROBE_SQL = "select case when to_regclass('public.businesses') is null then 'pre-migration' else 'tenant' end;";
+
+export const EXPORT_SQL_PRE_MIGRATION = `begin transaction isolation level repeatable read read only;
+select json_build_object(
+  'format', '${PRE_MIGRATION_FORMAT}',
+  'exported_at', now(),
+  'workspaces', (select coalesce(json_agg(json_build_object('workspace_key', w.workspace_key, 'snapshot', w.snapshot, 'updated_at', w.updated_at, 'updated_by', w.updated_by) order by w.workspace_key), '[]'::json) from public.workspace_snapshots w),
+  'legacy_tables', json_build_object(${LEGACY_TABLES.map((table) => `'${table}', (select coalesce(json_agg(to_jsonb(t)), '[]'::json) from public.${table} t)`).join(",\n    ")}),
+  'users', (select coalesce(json_agg(to_jsonb(u) order by u.id), '[]'::json) from auth.users u),
+  'identities', (select coalesce(json_agg(to_jsonb(i) order by i.id), '[]'::json) from auth.identities i),
+  'end', '${END_MARKER}'
+)::text;
+commit;
+`;
+
+export const exportSqlFor = (schema) => (schema === "pre-migration" ? EXPORT_SQL_PRE_MIGRATION : EXPORT_SQL);
+
+export const validatePreMigrationBundle = (bundle) => {
+  if (bundle.end !== END_MARKER) fail("the end marker is missing.");
+  for (const key of ["workspaces", "users", "identities"]) {
+    if (!Array.isArray(bundle[key])) fail(`${key} is missing.`);
+  }
+  if (!bundle.exported_at || Number.isNaN(Date.parse(bundle.exported_at))) fail("exported_at is missing.");
+  if (!bundle.legacy_tables || typeof bundle.legacy_tables !== "object") fail("legacy_tables is missing.");
+  for (const table of LEGACY_TABLES) {
+    if (!Array.isArray(bundle.legacy_tables[table])) fail(`legacy table ${table} is missing.`);
+  }
+  if (bundle.workspaces.length === 0) fail("there are no workspace snapshots.");
+  const users = new Set(bundle.users.map((u) => u.id));
+  for (const w of bundle.workspaces) {
+    if (!w.workspace_key) fail("a snapshot has no workspace key.");
+    if (!w.snapshot || typeof w.snapshot !== "object") fail(`snapshot ${w.workspace_key} is empty.`);
+    if (w.updated_by && !users.has(w.updated_by)) fail(`snapshot ${w.workspace_key} references a missing Auth user.`);
+  }
+  for (const i of bundle.identities) {
+    if (!users.has(i.user_id)) fail("an identity references a missing Auth user.");
+  }
+  return bundle;
+};
+
+export const columnTablesFor = (bundle) =>
+  bundle.format === PRE_MIGRATION_FORMAT ? ["auth.users", "auth.identities", ...LEGACY_TABLES.map((table) => `public.${table}`)] : COLUMN_TABLES;
+
+// Tables compared after a restore (row hashes).
+export const comparableTables = (bundle) =>
+  bundle.format === PRE_MIGRATION_FORMAT
+    ? { snapshots: bundle.workspaces, authUsers: bundle.users, authIdentities: bundle.identities, ...Object.fromEntries(LEGACY_TABLES.map((table) => [table, bundle.legacy_tables[table]])) }
+    : { businesses: bundle.businesses, memberships: bundle.memberships, snapshots: bundle.workspaces, requestLog: bundle.requests, authUsers: bundle.users, authIdentities: bundle.identities };
+
+// FULL restore of a pre-migration backup, only into an EMPTY pre-migration
+// schema (for example a new project with supabase/schema.sql applied), so the
+// release files can then be applied to the restored data. Never into a migrated
+// database, and never over existing data.
+export const buildPreMigrationRestoreSql = (bundle, columns) => `begin;
+do $guard$ begin
+  if to_regclass('public.businesses') is not null then
+    raise exception 'TARGET IS MIGRATED: a pre-migration backup only restores into a pre-migration schema';
+  end if;
+  if exists (select 1 from auth.users) or exists (select 1 from public.workspace_snapshots)${LEGACY_TABLES.map((table) => ` or exists (select 1 from public.${table})`).join("")} then
+    raise exception 'TARGET NOT EMPTY: a full restore only goes into an empty project';
+  end if;
+end $guard$;
+${insertRows("auth.users", columns["auth.users"], bundle.users)}
+${insertRows("auth.identities", columns["auth.identities"], bundle.identities)}
+${bundle.workspaces
+  .map(
+    (w) =>
+      `insert into public.workspace_snapshots (workspace_key, snapshot, updated_at, updated_by) values (${tagged(w.workspace_key, "k")}, ${tagged(JSON.stringify(w.snapshot), "snap")}::jsonb, ${tagged(w.updated_at, "t")}::timestamptz, ${w.updated_by ? `${tagged(w.updated_by, "u")}::uuid` : "null"});`,
+  )
+  .join("\n")}
+${LEGACY_TABLES.map((table) => insertRows(`public.${table}`, columns[`public.${table}`], bundle.legacy_tables[table])).join("\n")}
+do $check$ begin
+  if (select count(*) from public.workspace_snapshots) <> ${bundle.workspaces.length}
+     or (select count(*) from auth.users) <> ${bundle.users.length} then
+    raise exception 'RESTORE COUNT MISMATCH';
+  end if;
+end $check$;
+commit;
+`;

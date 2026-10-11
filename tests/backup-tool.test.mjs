@@ -3,7 +3,21 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 
-import { BACKUP_FORMAT, END_MARKER, EXPORT_SQL, buildBusinessRestoreSql, evaluateBackupLog, parseAndValidateBundle, validateBundle } from "../scripts/backup/lib/backupCore.mjs";
+import {
+  BACKUP_FORMAT,
+  END_MARKER,
+  EXPORT_SQL,
+  EXPORT_SQL_PRE_MIGRATION,
+  LEGACY_TABLES,
+  PRE_MIGRATION_FORMAT,
+  SCHEMA_PROBE_SQL,
+  buildBusinessRestoreSql,
+  buildPreMigrationRestoreSql,
+  evaluateBackupLog,
+  exportSqlFor,
+  parseAndValidateBundle,
+  validateBundle,
+} from "../scripts/backup/lib/backupCore.mjs";
 import { decryptBackup, encryptBackup } from "../scripts/backup/lib/backupCrypto.mjs";
 import { REPO_ROOT, resolveBackupTarget } from "../scripts/backup/lib/backupTarget.mjs";
 
@@ -62,6 +76,40 @@ test("a one-business restore touches only that business's snapshot and request l
   assert.match(sql, /delete from public\.finance_action_requests where business_id =/);
   assert.doesNotMatch(sql, /auth\.|business_memberships|insert into public\.businesses/);
   assert.throws(() => buildBusinessRestoreSql(bundle(), "other", {}), /not in the backup/);
+});
+
+test("pre-migration backups: schema probe, validation, and a restore guarded to an empty pre-migration schema", () => {
+  assert.match(SCHEMA_PROBE_SQL, /to_regclass\('public\.businesses'\)/);
+  assert.equal(exportSqlFor("pre-migration"), EXPORT_SQL_PRE_MIGRATION);
+  assert.equal(exportSqlFor("tenant"), EXPORT_SQL);
+  assert.match(EXPORT_SQL_PRE_MIGRATION, /^begin transaction isolation level repeatable read read only;/);
+  assert.doesNotMatch(EXPORT_SQL_PRE_MIGRATION, /public\.businesses|business_memberships|finance_action_requests|business_id/);
+  for (const table of LEGACY_TABLES) assert.ok(EXPORT_SQL_PRE_MIGRATION.includes(`public.${table}`), table);
+  const pre = () => ({
+    format: PRE_MIGRATION_FORMAT,
+    exported_at: "2026-10-11T00:00:00Z",
+    workspaces: [{ workspace_key: "taxiflow-live", snapshot: { appUsers: [] }, updated_at: "2026-10-10T00:00:00Z", updated_by: U }],
+    legacy_tables: Object.fromEntries(LEGACY_TABLES.map((table) => [table, []])),
+    users: [{ id: U }],
+    identities: [{ id: "i1", user_id: U }],
+    end: END_MARKER,
+  });
+  assert.equal(validateBundle(pre()).format, PRE_MIGRATION_FORMAT);
+  for (const [mutate, message] of [
+    [(b) => (b.workspaces = []), /no workspace snapshots/],
+    [(b) => delete b.legacy_tables.vehicles, /legacy table vehicles/],
+    [(b) => (b.workspaces[0].updated_by = "missing"), /missing Auth user/],
+    [(b) => delete b.end, /end marker/],
+  ]) {
+    const broken = pre();
+    mutate(broken);
+    assert.throws(() => validateBundle(broken), message);
+  }
+  const sql = buildPreMigrationRestoreSql(pre(), { "auth.users": "id", "auth.identities": "id,user_id" });
+  assert.match(sql, /TARGET IS MIGRATED/);
+  assert.match(sql, /TARGET NOT EMPTY/);
+  assert.doesNotMatch(sql, /business_id/);
+  assert.throws(() => buildBusinessRestoreSql(pre(), B, {}), /after the tenant migration/);
 });
 
 test("the morning check needs a recent PASS as the newest entry", () => {

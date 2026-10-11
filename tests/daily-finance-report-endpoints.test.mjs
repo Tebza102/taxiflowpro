@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import reportPdfHandler, { resolveReportPdf } from "../api/admin/daily-log/[id]/report-pdf.js";
+import reportPdfHandler, { resolveReportPdf } from "../api/admin/daily-log/report-pdf.js";
 import reportViewHandler, {
   resolveReportViewPayload,
-} from "../api/admin/daily-log/[id]/report-view.js";
+} from "../api/admin/daily-log/report-view.js";
 import { mockSnapshot } from "../src/data/mockData.js";
 import { normalizeModuleViewAccess } from "../src/lib/moduleAccessPolicy.js";
 

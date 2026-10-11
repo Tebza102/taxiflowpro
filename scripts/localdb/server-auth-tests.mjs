@@ -18,8 +18,8 @@ process.env.SUPABASE_SERVICE_ROLE_KEY = status.SERVICE_ROLE_KEY;
 delete process.env.VITE_SUPABASE_URL;
 delete process.env.VITE_SUPABASE_ANON_KEY;
 
-const { default: reportViewHandler } = await import("../../api/admin/daily-log/[id]/report-view.js");
-const { default: reportPdfHandler } = await import("../../api/admin/daily-log/[id]/report-pdf.js");
+const { default: reportViewHandler } = await import("../../api/admin/daily-log/report-view.js");
+const { default: reportPdfHandler } = await import("../../api/admin/daily-log/report-pdf.js");
 const { loadServerSnapshot } = await import("../../api/_lib/snapshotLoader.js");
 
 const results = [];

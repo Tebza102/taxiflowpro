@@ -1,6 +1,16 @@
 {
   "rewrites": [
-    { "source": "/api/admin/:path*", "destination": "/api/admin/:path*" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    {
+      "source": "/api/admin/daily-log/:id/report-view",
+      "destination": "/api/admin/daily-log/report-view?id=:id"
+    },
+    {
+      "source": "/api/admin/daily-log/:id/report-pdf",
+      "destination": "/api/admin/daily-log/report-pdf?id=:id"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
   ]
 }

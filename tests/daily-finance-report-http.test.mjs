@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 
-import reportPdfHandler from "../api/admin/daily-log/[id]/report-pdf.js";
-import reportViewHandler from "../api/admin/daily-log/[id]/report-view.js";
+import reportPdfHandler from "../api/admin/daily-log/report-pdf.js";
+import reportViewHandler from "../api/admin/daily-log/report-view.js";
 import { mockSnapshot } from "../src/data/mockData.js";
 
 // Real handlers and the real supabase-js client against a local stand-in for

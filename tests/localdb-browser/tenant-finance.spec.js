@@ -71,7 +71,7 @@ test("driver captures trip + safe expense, survives refresh, submits day checkin
   await signIn(page, "driver@example.com");
   // One business: no selector, the business is named.
   const bar = page.getByTestId("tenant-bar");
-  await expect(bar).toContainText(/TaxiFlow pilot business/i);
+  await expect(bar).toContainText(/TaxiFlow Pro/i);
   await expect(bar.getByLabel("Business")).toHaveCount(0);
 
   await captureDriverTrip(page);

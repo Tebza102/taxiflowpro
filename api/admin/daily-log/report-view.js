@@ -1,6 +1,6 @@
-import { buildDailyFinanceReportData } from "../../../_lib/dailyFinanceReport.js";
-import { assertReportAccess } from "../../../_lib/reportAccess.js";
-import { loadServerSnapshot } from "../../../_lib/snapshotLoader.js";
+import { buildDailyFinanceReportData } from "../../_lib/dailyFinanceReport.js";
+import { assertReportAccess } from "../../_lib/reportAccess.js";
+import { loadServerSnapshot } from "../../_lib/snapshotLoader.js";
 
 const sendJson = (res, statusCode, payload) => {
   res.statusCode = statusCode;

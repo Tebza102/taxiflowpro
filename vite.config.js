@@ -3,8 +3,9 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 // Dev server only: Vite does not run the Vercel functions in api/, so the two
-// report routes are mapped to their real handlers here, mirroring Vercel's
-// api/admin/daily-log/[id]/<name>.js routing. Never part of a build.
+// report routes are mapped to their real handlers here, mirroring the vercel.json
+// rewrites /api/admin/daily-log/:id/<name> -> api/admin/daily-log/<name>.js?id=:id.
+// Never part of a build.
 const reportApiDevRoutes = () => ({
   name: "taxiflow-report-api-dev",
   apply: "serve",
@@ -37,7 +38,7 @@ const reportApiDevRoutes = () => ({
 
       try {
         const handlerUrl = pathToFileURL(
-          fileURLToPath(new URL(`./api/admin/daily-log/[id]/${match[2]}.js`, import.meta.url)),
+          fileURLToPath(new URL(`./api/admin/daily-log/${match[2]}.js`, import.meta.url)),
         ).href;
         const { default: handler } = await import(handlerUrl);
         req.query = { ...Object.fromEntries(url.searchParams), id: decodeURIComponent(match[1]) };

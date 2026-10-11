@@ -1102,3 +1102,33 @@ No restore, key change, deployment deletion, migration, merge or deploy.
 **Open:**
 - **The backup passphrase equals the database password** (checked in-process; neither value printed). Re-run the backup with a separate passphrase before the window, then delete this copy.
 - An encrypted off-machine copy is not yet made.
+
+### 2026-10-11 05:50 SAST — Production keys prepared (release row 3)
+
+**Changed by:**
+- Claude Code (agent) created both Supabase keys by name in Tebogo's signed-in dashboard and never read their values;
+- Tebogo copied the values from Supabase into Vercel.
+
+No legacy key change, deploy, migration or merge.
+
+**Supabase** (`vfxftviwteypasredjgm` → API Keys):
+- Before: publishable `default`, secret `default`. Both were auto-created and are unused by TaxiFlow.
+- Added: publishable **`web_app`** and secret **`vercel_production`**.
+- `web` was rejected because names need at least 4 characters of lowercase letters, digits and underscores.
+- The legacy anon and service_role keys are unchanged and still active.
+
+**Vercel** (`taxiflowpro`, names/targets/times only):
+
+| Variable | Before | After |
+|---|---|---|
+| `SUPABASE_SERVICE_ROLE_KEY` | preview, production (legacy secret) | **production only**, Sensitive, updated 05:48 |
+| `VITE_SUPABASE_ANON_KEY` | preview, production (legacy anon) | preview, production, updated 05:48 |
+| `SUPABASE_URL`, `VITE_SUPABASE_URL`, `VITE_BACKEND_MODE` | unchanged | unchanged |
+
+- An intermediate save briefly left the secret on Preview and the browser key off Preview. Both were corrected and re-verified. No build ran in between.
+
+**Not verifiable by the agent:** the values of Sensitive variables. They are proven at row 10, when the skip-domain deployment signs in with the new keys.
+
+**Still holding the legacy secret:** the 4 existing Preview deployments, until row 6 (legacy keys off) and row 11 (delete).
+
+**Later clean-up:** the unused `default` secret key can be deleted after go-live.

@@ -1017,3 +1017,26 @@ The agent never saw the password.
 - These are replaced by `https://taxiflow.co.za` and `https://taxiflow.co.za/**` only, at release row 12.
 
 **Next:** E5, a platform-generated recovery email to an account Tebogo owns.
+
+### 2026-10-11 03:40 SAST — E5 platform SMTP delivery passed; external authentication still open (Task 33)
+
+**E5:** Supabase "Send password recovery" to `owner@apprigate.com` (Tebogo's account).
+- Received from **TaxiFlow `notifications@taxiflow.co.za`** (Tebogo).
+- cPanel Track Delivery: 03:27:03 and 03:30:03 SAST, sender `notifications@taxiflow.co.za`.
+  - Authenticated as `dovecot_plain`, from `52.210.122.178` (AWS eu-west-1, Supabase).
+  - Message ids `1xFiLc-0000000CaZU-3nTn` and `1xFiOv-0000000CcIY-0RUD`.
+- Tebogo's headers confirm authenticated TLS SMTP from the Supabase project.
+- **Result: SMTP delivery PASS.**
+
+**Not verified:**
+- **External authentication of platform mail:** `apprigate.com` mail is on the same cPanel server, so both messages were delivered locally (`dovecot_virtual_delivery`). They never went through the relay or an external SPF/DKIM/DMARC check.
+- **End-to-end recovery.**
+
+Both move to release row 12 (E6, external Gmail).
+
+**Recovery link:**
+- Tebogo shared it in chat. It is **not stored here and must not be used.**
+- Email links expire after 3600 s (Auth setting, read only), so the 03:30 link expires at about 04:30 SAST.
+- The Site URL currently points to `taxiflow.apprigate.com`, which does not serve the app.
+
+**Plan change:** the Supabase URL update moves to new row **10a**, before promotion and onboarding. Row 12 is now the external E6 test before onboarding.

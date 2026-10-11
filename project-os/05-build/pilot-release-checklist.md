@@ -35,8 +35,9 @@ Every row needs Tebogo's authorization for the window. A "stop" leaves the maint
 | 8 | Access check | Run the `hosted-rehearsal-tests` checks as SQL; API calls with the new publishable key | no browser access to the 10 relations; 5 users mapped, 1 Owner | any browser access |
 | 9 | **Deployment** | `vercel deploy --prod --skip-domain` of the reviewed SHA | build OK; `/api/business/*` returns 401 without a token | build fails or returns 404 |
 | 10 | **Smoke tests** | On that URL: Owner sign-in, workspace, one finance action, Business access, report preview and PDF, `/api/admin/auth-users` returns 410 | all pass with the new keys | any fail: stay in maintenance; fix forward |
+| 10a | **Auth URLs (before promotion)** | Supabase → Authentication → URL Configuration: Site URL `https://taxiflow.co.za`; replace the redirect list with **`https://taxiflow.co.za/**` only**. Remove `taxiflow.apprigate.com`, the `taxiflowpro-git-…` Preview URLs and `taxiflowpro.vercel.app`. | saved; links now point to `taxiflow.co.za` (maintenance until row 11) | — |
 | 11 | Promote | `vercel promote <deployment>`; delete or protect the old production and Preview deployments | the tenant app is live on `https://taxiflow.co.za`; no legacy deployment is public | promote fails: maintenance stays |
-| 12 | Email | Auth **Site URL `https://taxiflow.co.za`**; redirect allow-list **`https://taxiflow.co.za/**` only** (remove Preview and other hosts); custom SMTP (X2); "Forgot password?" for a test inbox | the email arrives; the link opens `https://taxiflow.co.za/` and the password can be set | not delivered, or the link points elsewhere: hold onboarding |
+| 12 | Email (E6) | After promotion and **before onboarding**: send a password-reset / setup email to an **external** mailbox (Gmail) | arrives from "TaxiFlow" `notifications@taxiflow.co.za`; Gmail shows SPF, DKIM (`taxiflow.co.za`) and DMARC PASS; the link opens `https://taxiflow.co.za/` and the password can be set | not delivered, failing authentication, or a wrong landing page: hold onboarding |
 | 13 | Close-out | First post-release backup (section 4 export, verify and check); record the SHA and evidence (no secrets) | PASS; `check` says OK | not PASS: back up again before onboarding |
 
 ## 2. Secure recovery (never weaken access)
@@ -115,7 +116,7 @@ Replaces the earlier `apprigate.com` sender plan (2026-10-10, Tebogo's instructi
    - host `cp24-jhb.za-dns.com`, port `465`, username `notifications@taxiflow.co.za`;
    - password typed by Tebogo;
    - keep the default rate limit (30 per hour).
-8. **URL configuration:** this changes **at release row 12 only** (after the tenant build is on `taxiflow.co.za`), so setup links land on the compatible app:
+8. **URL configuration:** this changes **at release row 10a** (after the smoke tests pass, before promotion and onboarding), so setup links land on the compatible app:
    - Site URL `https://taxiflow.co.za`;
    - redirect allow-list `https://taxiflow.co.za/**` only.
    - Until then, the existing URL settings are left unchanged.
@@ -128,8 +129,8 @@ Replaces the earlier `apprigate.com` sender plan (2026-10-10, Tebogo's instructi
 | E2 | Gmail "Show original" on the E1 message | after E1 | **SPF pass, DKIM pass `d=taxiflow.co.za`, DMARC pass** (alignment) |
 | E3 | external → support; reply from support | after step 6 | both directions delivered |
 | E4 | external → notifications | after step 4 | arrives in support (forwarder) |
-| E5 | Supabase "Send password recovery" to a controlled account Tebogo owns (dashboard → Authentication → Users). **Do not click the link** before row 12. | after step 7 | from "TaxiFlow <notifications@taxiflow.co.za>"; SPF, DKIM and DMARC pass; delivered to the inbox |
-| E6 | Real setup email (operator onboarding) and password reset, end to end on `https://taxiflow.co.za` | **awaits the secure deployment (row 12)** | link opens `https://taxiflow.co.za/`, and the password is set |
+| E5 | Supabase "Send password recovery" to a controlled account Tebogo owns | **Done 2026-10-11:** authenticated TLS SMTP from Supabase delivered (see log). External authentication is **not** covered, because the recipient is on the same server. | **SMTP delivery PASS.** External SPF/DKIM/DMARC for platform mail is verified at row 12 (E6). |
+| E6 | Platform email to an **external** mailbox, plus the real setup/reset flow end to end on `https://taxiflow.co.za` | **awaits the secure deployment (rows 10a and 12)** | external SPF, DKIM and DMARC PASS; the link opens `https://taxiflow.co.za/`, and the password is set |
 
 ## 4. Daily encrypted backup (operator)
 

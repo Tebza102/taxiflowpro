@@ -1,14 +1,18 @@
 # Next Action
 
-## Immediate Next Step (updated 2026-10-11 18:00 SAST, after stabilisation)
+## Immediate Next Step (updated 2026-10-11, stabilisation CLOSED)
 
-**Existing users can use the app today. Onboarding new Owners stays paused.**
+**Stabilisation is closed. Existing users can use the app today. The single outstanding blocker for onboarding new Owners is the DKIM hosting ticket.** No more app changes or repeat tests for this task.
 
 1. **Tebogo sends the drafted ticket** `05-build/email-dkim-hosting-ticket.md` to Absolute Hosting. Do not treat DKIM as resolved.
 2. After the host's change, send one recovery email to the external mailbox. Confirm `dkim=pass header.i=@taxiflow.co.za`, then mark checklist row 12 passed.
 3. Only then onboard the first new Owner (`11-client-delivery/first-owner-onboarding.md`).
 
 Closed: the grant-role mismatch (automation only; no code change); the test member (inactive, denied); the after-release backup (verified, synced).
+
+Unused stash (keep; do not drop or apply): `stash@{0}` (`bd2b25a5d48b34fdf557bacc04b8a9793d8da0f1`, "WIP on agent/tenant-db-foundation: e636df3 …"). It holds the candidate FormData grant-role change to `src/components/TenantAccessPanel.jsx`, not needed because normal selection saves correctly.
+
+**Next week (separate task):** the operator dashboard.
 
 Later, not now: branded email templates; the layout review; Chrome saved entries; signing out the inactive test account's leftover session (harmless: no data access).
 

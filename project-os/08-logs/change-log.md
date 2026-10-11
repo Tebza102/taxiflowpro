@@ -1369,3 +1369,11 @@ Recorded for later review (out of scope): **the layout looks different from the 
   - `apprigate@gmail.com` membership `active=false` (since 14:18:40 UTC); active memberships 5; Owners 1.
   - One Auth session remains. Acting as that user in a rolled-back read-only transaction: 0 businesses and 0 memberships visible; no snapshot privilege. The API also refuses (`tenantAuth` returns 403 without an active membership).
 - Backup `…T15-15-11-698Z`: Drive for Desktop (the account holding both files) reported `active_uploads: 0, operation_queue_size: 0` at 15:51 UTC. The Drive connector here is a different Google account and the browser pane cannot sign in to Google, so this is local sync evidence, not a server listing.
+
+### 2026-10-11 — Release stabilisation CLOSED
+
+- **No app changes and no deploy.** Live code stays `e59417a` (`dpl_FruSfHfKnvUv8Gv367g6wzeduEpv`).
+- **Single outstanding blocker for onboarding new Owners:** the DKIM hosting ticket (`05-build/email-dkim-hosting-ticket.md`, draft, Tebogo sends it).
+- **Unused stash preserved:** `stash@{0}` (`bd2b25a5d48b34fdf557bacc04b8a9793d8da0f1`, "WIP on agent/tenant-db-foundation: e636df3 …"), the candidate FormData grant-role change to `TenantAccessPanel.jsx`. Do not drop or apply it without a new decision.
+- **E1 raw headers:** none were found in the transcripts on this machine; the ticket cites the E1 Exim id and the Gmail pass result.
+- **Next week, separate task:** the operator dashboard.

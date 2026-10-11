@@ -4,7 +4,7 @@
 
 TaxiFlow Pro is currently in a production-hardening release phase on draft PR #2. The feature branch has replaced premature client-side success reporting for live Supabase mutations with confirmed persistence patterns, hardened Owner-first authentication and user lifecycle handling, standardised the live workspace contract, added password recovery, and preserved the existing finance workflow. Application logic is already substantially implemented; the remaining work is release validation and controlled rollout, not product redesign.
 
-## Release state (2026-10-11 18:00 SAST, after stabilisation): secure tenant app LIVE for existing users; new-Owner onboarding ON HOLD (DKIM)
+## Release state (2026-10-11, stabilisation closed): secure tenant app LIVE for existing users; new-Owner onboarding ON HOLD (DKIM)
 
 The secure tenant release is live on `https://taxiflow.co.za`. Rows 1–11 and 13 PASS. Row 12 works, but one email criterion fails (DKIM), so **onboarding new Owners is on hold** until the hosting ticket (`05-build/email-dkim-hosting-ticket.md`) is resolved and DKIM passes on a repeat test.
 
@@ -21,7 +21,9 @@ The secure tenant release is live on `https://taxiflow.co.za`. Rows 1–11 and 1
 
 **Open findings:**
 1. Grant-access role: **closed, no code change.** Normal selection (pointer and keyboard) saves Admin, Manager and Driver exactly, persists after reload, and gives the matching server permissions (`tests/localdb-browser/tenant-access-roles.spec.js`, 1/1). The row 12 mismatch came only from browser automation that changed the dropdown without a change event.
-2. DKIM / Spam (above): blocks new-Owner onboarding.
+2. DKIM / Spam (above): **the single outstanding blocker** for new-Owner onboarding.
+
+Unused stash kept on purpose: `stash@{0}` (`bd2b25a5d48b34fdf557bacc04b8a9793d8da0f1`, "WIP on agent/tenant-db-foundation: e636df3 …"), the candidate grant-role change (not applied, not deployed).
 3. The layout differs from the legacy app; no functional problem.
 4. Chrome autofill puts a random value in the email field (Tebogo's saved entries).
 

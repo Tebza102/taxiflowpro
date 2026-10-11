@@ -46,5 +46,6 @@ TaxiFlow (cPanel account taxiflowco)
 ---
 
 Internal notes (do not send):
+- **E1 raw headers:** Tebogo reports they were supplied in chat, but no E1 header block was found in the session transcripts on this machine (only the failing message's headers). The ticket therefore cites the E1 Exim id and the Gmail pass result. If the raw E1 block is located, add its `Authentication-Results` and `DKIM-Signature h=` lines under "Passing message"; do not ask Tebogo to resend it.
 - **Evidence sources:** the failing message's headers (Gmail "Show original", pasted by Tebogo; body and link excluded); E1 Exim id from cPanel Track Delivery; the E1 pass is Tebogo's Gmail check (raw E1 headers were not recorded).
 - **After the host's reply:** send one recovery email to the external mailbox and confirm `dkim=pass header.i=@taxiflow.co.za`. Only then mark checklist row 12 DKIM as passed.

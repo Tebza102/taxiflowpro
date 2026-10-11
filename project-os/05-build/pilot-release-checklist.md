@@ -24,7 +24,7 @@ Every row needs Tebogo's authorization for the window. A "stop" leaves the maint
 |---|---|---|---|---|
 | 1 | Local | Reviewed SHA: `npm run build`; unit tests; `node scripts/localdb/setup.mjs hosted` then `node scripts/localdb/hosted-rehearsal-tests.mjs` | build OK; all pass | any fail |
 | 2 | **Backup (connection proof)** | Read-only pre-flight (`hosted-inventory.md` queries); then the section 4 **export** and **verify** against production. This is the first hosted run; it proves the pooler, TLS and Docker path before the window. | inventory unchanged; `PASS backup verified`, then `PASS decrypts` | a difference, or anything but PASS: stop, and do not open the window |
-| 3 | Keys (prep) | Create the publishable `web` and secret `vercel-production` keys; set the Production variables (`release-plan.md` section 6); no secret in Preview or Development | saved; no build yet | — |
+| 3 | Keys (prep) | In Supabase, create the publishable key `web` and the secret key `vercel-production`; the legacy keys keep working. In Vercel → `taxiflowpro` → Environment Variables (Production): `VITE_SUPABASE_ANON_KEY` = `web`; `SUPABASE_SERVICE_ROLE_KEY` = `vercel-production` (Sensitive, **Production only**); `VITE_SUPABASE_URL` and `SUPABASE_URL` = `https://vfxftviwteypasredjgm.supabase.co`; `VITE_BACKEND_MODE` = `live`. **Remove `SUPABASE_SERVICE_ROLE_KEY` from the Preview target.** | saved; no build yet. The 4 existing Preview deployments keep the legacy secret until row 6 or row 11. | — |
 | 4 | **Maintenance (prepare)** | (a) Vercel → `taxiflowpro` → Settings → Environments/Git: turn **off** "Auto-assign custom production domains" (currently on), so no build reaches `taxiflow.co.za` without `vercel promote`. (b) Deploy `deploy/maintenance` as a production deployment **without domains** (section 6). (c) Merge the reviewed SHA to `main`. | a Ready maintenance deployment URL showing the maintenance page; the `main` build does **not** take the domains | a build takes the domains, or maintenance does not render |
 | 5 | Window opens | `vercel promote <maintenance-url> --scope apprigate` | `https://taxiflow.co.za` and `taxiflowpro.vercel.app` show maintenance; `/api/*` returns 503 | promote fails: stop (legacy stays) |
 | 5a | **Domain check** | DNS is already live, so only verify, with the section 5 checks | apex: maintenance over valid HTTPS; `www` 308 to the apex; `http` 308 to `https` | not maintenance: stop and re-promote maintenance |
@@ -36,7 +36,7 @@ Every row needs Tebogo's authorization for the window. A "stop" leaves the maint
 | 9 | **Deployment** | `vercel deploy --prod --skip-domain` of the reviewed SHA | build OK; `/api/business/*` returns 401 without a token | build fails or returns 404 |
 | 10 | **Smoke tests** | On that URL: Owner sign-in, workspace, one finance action, Business access, report preview and PDF, `/api/admin/auth-users` returns 410 | all pass with the new keys | any fail: stay in maintenance; fix forward |
 | 10a | **Auth URLs (before promotion)** | Supabase → Authentication → URL Configuration: Site URL `https://taxiflow.co.za`; replace the redirect list with **`https://taxiflow.co.za/**` only**. Remove `taxiflow.apprigate.com`, the `taxiflowpro-git-…` Preview URLs and `taxiflowpro.vercel.app`. | saved; links now point to `taxiflow.co.za` (maintenance until row 11) | — |
-| 11 | Promote | `vercel promote <deployment>`; delete or protect the old production and Preview deployments | the tenant app is live on `https://taxiflow.co.za`; no legacy deployment is public | promote fails: maintenance stays |
+| 11 | Promote | `vercel promote <deployment>`; **delete the 4 Preview deployments** (branch `agent/owner-first-auth-reset`, built with the legacy secret) and the old production deployments; **revoke the Deployment Protection bypass secret** used for UAT | the tenant app is live on `https://taxiflow.co.za`; no legacy deployment is public; no bypass secret is active | promote fails: maintenance stays |
 | 12 | Email (E6) | After promotion and **before onboarding**: send a password-reset / setup email to an **external** mailbox (Gmail) | arrives from "TaxiFlow" `notifications@taxiflow.co.za`; Gmail shows SPF, DKIM (`taxiflow.co.za`) and DMARC PASS; the link opens `https://taxiflow.co.za/` and the password can be set | not delivered, failing authentication, or a wrong landing page: hold onboarding |
 | 13 | Close-out | First post-release backup (section 4 export, verify and check); record the SHA and evidence (no secrets) | PASS; `check` says OK | not PASS: back up again before onboarding |
 
@@ -147,6 +147,15 @@ Replaces the earlier `apprigate.com` sender plan (2026-10-10, Tebogo's instructi
   - Any failure (database error, incomplete output, encryption or verification failure) removes the partial file, appends `FAIL <reason>` and exits 1.
 - **Manifest:** counts, business ids, snapshot versions and hashes only. No emails, names or money.
 - **Repository guard:** output folders and passphrase or env files inside the repository are refused. `.gitignore` also excludes backup files.
+
+**Two formats (chosen automatically by a schema probe):**
+- `taxiflow-backup-premigration-v1`: production **before** release files 01–04 (rows 2 and 6a). It holds `workspace_snapshots`, the 8 legacy tables, and Auth users and identities.
+  - Restore is only into an **empty pre-migration** schema; one-business restore is refused.
+  - Proof: `node scripts/localdb/backup-premigration-tests.mjs` after `setup.mjs hosted-pre`, 13/13 (2026-10-11). Release files 01–04 apply to the restored data: all snapshots mapped, an active Owner exists.
+  - The legacy tables were empty in the fixtures (as in the live inventory), so restoring non-empty legacy rows is not exercised.
+- `taxiflow-backup-v1`: after the migration (the tenant format; proof `backup-tests.mjs`).
+
+**Database-password dependencies** (checked 2026-10-11): none in the hosted app. No Vercel variable or integration, and no CI. Only `backup.env` uses it. Do not reset it unless it is unknown.
 
 **Commands** (the hosted commands are not yet run; the local equivalents are tested)
 

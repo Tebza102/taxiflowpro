@@ -1040,3 +1040,31 @@ Both move to release row 12 (E6, external Gmail).
 - The Site URL currently points to `taxiflow.apprigate.com`, which does not serve the app.
 
 **Plan change:** the Supabase URL update moves to new row **10a**, before promotion and onboarding. Row 12 is now the external E6 test before onboarding.
+
+### 2026-10-11 04:20 SAST — Pre-migration backup format; backup.env prepared; Preview secret findings (Task 34)
+
+**Changed by:** Claude Code (agent). Local code, tests and docs, plus a local file outside the repo. Read-only checks: Supabase Connect dialog (host only), Vercel API (env names, Preview deployments, protection). No production connection, key change, deploy or release step.
+
+**Defect found and fixed:**
+- The backup export expected the tenant tables, which production does not have before release files 01–04. It would have FAILed at rows 2 and 6a.
+- Added the `taxiflow-backup-premigration-v1` format, chosen by a schema probe. It covers `workspace_snapshots`, the 8 legacy tables, and Auth.
+- Restore only into an empty pre-migration schema; one-business restore is refused.
+
+**Tests:**
+- `backup-premigration-tests.mjs` 13/13 (after `setup.mjs hosted-pre`). The restore matches all tables and all accounts sign in. Release files 01–04 then apply to the restored data: 0 unmapped snapshots, 1 active Owner. The tenant export passes after migration.
+- `backup-tests.mjs` 35/35 (after reset; no regression).
+- Unit tests 334/334.
+
+**backup.env:**
+- `C:\Users\appri\taxiflow-recovery\backup.env` created with the Session pooler details: host `aws-1-eu-west-1.pooler.supabase.com`, port 5432, user `postgres.vfxftviwteypasredjgm`, db `postgres`.
+- The password line is empty for Tebogo to fill in.
+- The folder and file are restricted to the user and SYSTEM (another local group's read access was removed from 89 files).
+- Offline validation: NOT VALID until the password is added (expected).
+
+**Database-password dependencies:** none in the hosted app (no Vercel variable or integration, no CI). Do not reset the password unless it is unknown.
+
+**Preview secret:**
+- **Not removed.** `SUPABASE_SERVICE_ROLE_KEY` targets Preview and Production.
+- **4 Preview deployments** (branch `agent/owner-first-auth-reset`, 2026-08-16 to 2026-10-09) were built with the legacy secret and keep it regardless of later variable changes.
+- Deployment Protection covers all URLs except custom domains, **but a protection-bypass secret is configured**.
+- Fix: row 3 (remove from Preview), row 6 (deactivate the legacy key), row 11 (delete the Previews, revoke the bypass).

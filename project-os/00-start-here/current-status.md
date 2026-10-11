@@ -33,6 +33,15 @@ Recovery checkpoints (outside Git, no env files): `C:\Users\appri\taxiflow-recov
 - Production remains on `008ce8e` (`main`).
 - The Preview's Supabase project is still not independently confirmed by the agent; the UAT runner now captures and compares it.
 
+### First production backup PASS (2026-10-11 05:26 SAST)
+
+- Row 2 connection proof: **PASS**.
+  - Pre-migration format; 1 snapshot, 5 Auth users, 5 identities, 0 legacy rows.
+  - File `taxiflow-vfxftviwteypasredjgm-2026-10-11T03-24-06-317Z.tfbk`; verify PASS; check OK.
+- **Before the window:** re-run with a backup passphrase that differs from the database password, and make the off-machine copy.
+- Email: E1–E4 PASS, E5 delivery PASS; E6 at rows 10a and 12.
+- Production keys (row 3) are next.
+
 ### Feature freeze: release sequence only (2026-10-11)
 
 **No new features.** Only the release sequence in `05-build/pilot-release-checklist.md` remains, plus fixes for defects it exposes:

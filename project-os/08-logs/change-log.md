@@ -1068,3 +1068,37 @@ Both move to release row 12 (E6, external Gmail).
 - **4 Preview deployments** (branch `agent/owner-first-auth-reset`, 2026-08-16 to 2026-10-09) were built with the legacy secret and keep it regardless of later variable changes.
 - Deployment Protection covers all URLs except custom domains, **but a protection-bypass secret is configured**.
 - Fix: row 3 (remove from Preview), row 6 (deactivate the legacy key), row 11 (delete the Previews, revoke the bypass).
+
+### 2026-10-11 05:26 SAST — First production backup: PASS (release row 2, connection proof; Task 35)
+
+**Authorised by:** Tebogo (read-only export of `vfxftviwteypasredjgm`). Run by Tebogo in the Terminal panel; he typed the project ref, and the passphrase came from a temporary file that the run script deleted.
+
+No restore, key change, deployment deletion, migration, merge or deploy.
+
+**Result:**
+- Export: **PASS** (format `taxiflow-backup-premigration-v1`, schema probe = pre-migration).
+- Verify: **PASS** (decrypts, complete, consistent).
+- Morning check: **OK**.
+
+| Item | Value |
+|---|---|
+| File | `C:\Users\appri\taxiflow-recovery\backups\taxiflow-vfxftviwteypasredjgm-2026-10-11T03-24-06-317Z.tfbk` (216,093 bytes) |
+| Ciphertext SHA-256 | `03f34949210b91c15d83a6a453b4771d56423ebf68bb7c219588a809ea8aca0c` |
+| Exported at | 2026-10-11 03:25:40 UTC (one read-only REPEATABLE READ transaction) |
+| Counts | snapshots 1 (`taxiflow-live`, last updated 2026-10-10 14:21:55 UTC); legacy rows 0; Auth users 5; identities 5 |
+| Matches the read-only inventory | yes (1 workspace, 5 users, legacy tables empty) |
+
+**Connection proven:** Docker `psql` → TLS → Session pooler `aws-1-eu-west-1.pooler.supabase.com:5432` as `postgres.vfxftviwteypasredjgm`.
+
+**Attempts before PASS** (all stopped before any data was read):
+1. Confirmation mismatch. A secret-looking value was typed at the ref prompt and was visible in terminal tab "production backup". **Tebogo should change that password wherever it is used.**
+2. Passphrases did not match.
+3. Passphrase shorter than 16 characters (hidden paste failed). Switched to a temporary passphrase file in the protected folder, deleted by the script in every case.
+4–5. Database password rejected. **Tebogo reset the database password**; earlier dependency check: no app, Vercel or CI use. The new password was then saved in `backup.env`.
+6. PASS.
+
+**Fix during the run:** passphrase files now ignore an editor byte-order mark and line breaks (`0c2e1db`).
+
+**Open:**
+- **The backup passphrase equals the database password** (checked in-process; neither value printed). Re-run the backup with a separate passphrase before the window, then delete this copy.
+- An encrypted off-machine copy is not yet made.

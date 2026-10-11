@@ -1166,3 +1166,31 @@ No legacy key change, deploy, migration or merge.
   - SHA-256 of both copies matches the originals.
   - The `.tfbk` hash matches the manifest (`8bada899…`).
   - The file is encrypted; the passphrase is only in Tebogo's password manager.
+
+### 2026-10-11 — RELEASE WINDOW OPEN (rows 1–6; Task 36, in progress)
+
+**Authorised by Tebogo:** release steps 4–13 on `vfxftviwteypasredjgm` / Vercel `taxiflowpro`.
+
+**Preconditions confirmed by Tebogo:**
+- the 5 existing users were notified;
+- the backup `…T05-08-06-803Z` and its manifest are uploaded in Google Drive (apprigate@gmail.com);
+- existing business name: **"TaxiFlow Pro"**.
+
+**Reviewed release commit:** `3443c91d5f41e88fab866a82658f3b2cf5bb979d`.
+- Release file 01 rebuilt with the name "TaxiFlow Pro" (name line only).
+- Added `scripts/hosted/apply-release.mjs`.
+
+| Row | Action | Evidence | Result |
+|---|---|---|---|
+| 1 | Local checks at the reviewed commit | build OK; unit 334/334; sync guards pass; hosted rehearsal 22/22 (business name "TaxiFlow Pro"); apply-release on the exact pre-migration copy: 01–04 applied, 6/6 checks PASS, re-run skips all four files | **PASS** |
+| 2 | Backup connection proof | earlier: `…T05-08-06-803Z` PASS | **PASS** |
+| 4a | Vercel `autoAssignCustomDomains` | true → **false** | **DONE** |
+| 4b | Maintenance deployment, no domains | `taxiflowpro-cmlp6fmww-apprigate.vercel.app` (`dpl_FHXMuDf19iELaFMadeFdPsgGQ2r3`): / and deep links 200 maintenance; /api/* 503 JSON; /sw.js is the self-removing worker; the legacy asset is not served | **PASS** |
+| 4c | Push and fast-forward `main` | **blocked by the agent permission policy; Tebogo runs it** | pending |
+| 5 | `vercel promote` maintenance | taxiflow.co.za and taxiflowpro.vercel.app serve maintenance; /api 503 | **PASS** |
+| 5a | Domain checks | HTTPS valid for taxiflow.co.za; www 308 → apex; http 308 → https | **PASS** |
+| 6 | Supabase "Disable JWT-based API keys" | legacy anon: before 200 (auth) → after **401** on rest/v1 (workspace_snapshots, fleet_profiles) and auth/v1 (after about 1 minute of gateway propagation). Storage bucket list still 200 (Supabase keeps legacy keys valid as JWTs there; TaxiFlow uses no Storage). service_role disabled in the same action. | **PASS** |
+
+**Findings during the window:**
+- **Two legacy redeploys:** at 05:46 and 05:48 SAST, Vercel "Redeploy" after the variable edits created `taxiflowpro-qiu4f5l2y` and `taxiflowpro-96cvjgq39`. These are legacy `008ce8e` builds **with the NEW keys** (publishable `web_app`, secret `vercel_production`). They were auto-assigned to taxiflow.co.za at 05:49, before row 4a. Since row 5 they are off the domains, but they still hold the new secret. **They must be deleted before the migration** (Tebogo).
+- **Default secret key:** `.env.uat.local` holds an `sb_` secret key (most likely the auto-created `default` secret), which still works. Delete that key after the release; TaxiFlow does not use it.

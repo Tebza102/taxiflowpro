@@ -1194,3 +1194,25 @@ No legacy key change, deploy, migration or merge.
 **Findings during the window:**
 - **Two legacy redeploys:** at 05:46 and 05:48 SAST, Vercel "Redeploy" after the variable edits created `taxiflowpro-qiu4f5l2y` and `taxiflowpro-96cvjgq39`. These are legacy `008ce8e` builds **with the NEW keys** (publishable `web_app`, secret `vercel_production`). They were auto-assigned to taxiflow.co.za at 05:49, before row 4a. Since row 5 they are off the domains, but they still hold the new secret. **They must be deleted before the migration** (Tebogo).
 - **Default secret key:** `.env.uat.local` holds an `sb_` secret key (most likely the auto-created `default` secret), which still works. Delete that key after the release; TaxiFlow does not use it.
+
+### 2026-10-11 — Pre-migration access closure (release window, continued)
+
+**Identified:** the `sb_` key in `.env.uat.local` is Supabase secret key **`default`**.
+- Matched by SHA-256 of its displayed 5-character prefix (`afa483b2…`); no value was displayed.
+- The key ID is not shown in the dashboard UI; it is identified by name, type and prefix hash.
+- Dependencies: `.env.uat.local` (old UAT tooling) and most likely the older Vercel deployments. Nothing current uses it.
+
+**Revoked:** secret key `default` (Supabase "Successfully deleted secret key").
+- After: `default` → 401 on rest/v1/workspace_snapshots, auth/v1/admin/users and rest/v1/.
+- Remaining secret keys: `vercel_production` only.
+
+**Verified refused (tested in the dashboard page, status codes only):**
+- legacy `service_role` → 401 on rest/v1/workspace_snapshots, rest/v1/fleet_profiles and auth/v1/admin/users;
+- legacy anon → 401 on the same three.
+
+**Still open before migration:**
+- `origin/main` is still `008ce8e`: the push and merge are pending (Tebogo).
+- The legacy redeploys `taxiflowpro-qiu4f5l2y` and `taxiflowpro-96cvjgq39` still exist with the valid `vercel_production` secret: delete pending (Tebogo).
+- Final backup: pending, after those two are gone.
+
+`taxiflow.co.za` still serves maintenance (re-checked).

@@ -1265,3 +1265,35 @@ No legacy key change, deploy, migration or merge.
   - new `tests/vercel-routing.test.mjs`.
   - Unit tests 336/336, build OK.
   - Hosted verification is pending after Tebogo pushes.
+
+### 2026-10-11 — Release window: rows 9–11 (secure app LIVE on taxiflow.co.za)
+
+**Report-routing fix live:**
+- Tebogo pushed with `push-fix.ps1`; `origin/main` = `e59417a96b6df23b8d0bc0dfe08c03971e9f5da1` (code = `288e3f2`).
+- Build `taxiflowpro-jng5n1ced` (`dpl_FruSfHfKnvUv8Gv367g6wzeduEpv`).
+- Report-view and report-pdf now return 401 JSON from the functions without a token (previously index.html).
+- Business routes return 401; legacy admin routes return 410.
+
+**Row 10, signed-in smoke test** (Tebogo, `owner@apprigate.com`, on the deployment URL) — **all PASS:**
+1. TaxiFlow Pro with existing data;
+2. survives a refresh;
+3. Business access lists 5 members;
+4. report preview and PDF work.
+
+Recorded for later review (out of scope): **the layout looks different from the legacy app; no functional problem.**
+
+**Row 10a, Supabase URL configuration:**
+- Site URL `https://taxiflow.apprigate.com` → `https://taxiflow.co.za`.
+- Redirect list: removed `taxiflow.apprigate.com/**`, both `taxiflowpro-git-agent-owner-first-auth-reset-apprigate.vercel.app` entries and `taxiflowpro.vercel.app/**`; added `https://taxiflow.co.za/**`, which is now the only entry (verified after reload).
+
+**Row 11, promote:** `vercel promote dpl_FruSfHfKnvUv8Gv367g6wzeduEpv`.
+- taxiflow.co.za and taxiflowpro.vercel.app serve the tenant build (`index-K8ghKdHJ.js`).
+- /api/business/workspace and report-view return 401; /api/admin/auth-users returns 410.
+- www 308 → apex; http 308 → https.
+- Alias taxiflow.co.za → `dpl_FruSfHfKnvUv8Gv367g6wzeduEpv`.
+
+**Row 11, clean-up** (`release-cleanup.ps1`; dry run PASS):
+- delete 9 deployments by exact ID: 3 legacy production, 4 legacy previews, the superseded tenant build `7aibja2g9` (report bug, production secret) and the superseded tenant preview `75b02lnxh`;
+- keep `jng5n1ced` (live), `cmlp6fmww` (maintenance fallback) and `301dw9v3b` (current branch preview, no secret);
+- revoke the Deployment Protection bypass secret.
+- Run by Tebogo: pending.

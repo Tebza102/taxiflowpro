@@ -937,3 +937,39 @@ Prepared. Installation is a human step.
 - Site URL and redirects at row 12.
 
 **Files:** `project-os/05-build/pilot-release-checklist.md` (X2, section 3 replaced, section 5 note), current-status, next-action.
+
+### 2026-10-11 02:58 SAST — taxiflow.co.za mailboxes, forwarder and SPF fix (Task 33, in progress)
+
+**Changed by:**
+- Claude Code (agent), in Tebogo's signed-in cPanel session for account `taxiflowco` (browser pane);
+- Tebogo typed both mailbox passwords and clicked Create.
+
+No purchase or plan change; no website DNS change; no password seen by the agent.
+
+**Plan limits** (read before any change):
+- Email accounts 0 / ∞; Forwarders 0 / ∞; Mailing lists 0 / 75;
+- Disk 1.39 MB / 4.88 GB (shared by mail and files); Bandwidth 1 TB.
+- No charge was shown.
+
+**Actual changes:**
+
+| # | Change | Before | After |
+|---|---|---|---|
+| 1 | DKIM signing for `taxiflow.co.za` | inactive (despite a valid key) | **enabled automatically by cPanel** when Email Deliverability was opened (the cPanel notice says so) |
+| 2 | Mailbox `support@taxiflow.co.za` | none | created, unrestricted, 250 MB |
+| 3 | Mailbox `notifications@taxiflow.co.za` | none | created, unrestricted, 250 MB |
+| 4 | Forwarder | none | `notifications@taxiflow.co.za` → copy to `support@taxiflow.co.za` |
+| 5 | SPF TXT `taxiflow.co.za` (the single SPF record, edited in place) | `v=spf1 +a +mx +ip4:164.160.91.17 include:spf.zamailgate.com ~all` | `v=spf1 +mx +ip4:164.160.91.17 include:spf.zamailgate.com ~all` |
+| — | Zone serial | 2026092803 | 2026101100 |
+
+- 28 zone records before and after the change.
+- A @, CNAME `www`, MX, mail A, DKIM and DMARC are unchanged (verified at ns3 and ns5).
+
+**cPanel Email Deliverability:** DKIM VALID, SPF VALID, DMARC VALID, PTR VALID (HELO `cp24-jhb.za-dns.com`).
+
+**Outbound path:** authenticated submission (`dovecot_login`), then smarthost `delivery.antispam.co.za` (148.251.146.168), which is inside `include:spf.zamailgate.com` (148.251.146.160/27).
+
+**Test E1:**
+- support → apprigate@gmail.com, 02:54:02, id `1xFhpj-0000000CFIh-3vXH`.
+- The relay reported "delivered successfully".
+- **Gmail inbox delivery and the SPF/DKIM/DMARC results are pending Tebogo's check.**

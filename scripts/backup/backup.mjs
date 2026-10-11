@@ -95,7 +95,8 @@ const promptHidden = (question) =>
 const readPassphrase = async ({ confirm }) => {
   const file = option("passphrase-file");
   if (file) {
-    const passphrase = readFileSync(assertOutsideRepo(file, "--passphrase-file"), "utf8").replace(/\r?\n$/, "");
+    // Editors such as Notepad may add a byte-order mark and line breaks; neither is part of the passphrase.
+    const passphrase = readFileSync(assertOutsideRepo(file, "--passphrase-file"), "utf8").replace(/^﻿/, "").replace(/[\r\n]+$/, "");
     assertPassphrase(passphrase);
     return passphrase;
   }

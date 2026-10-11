@@ -1216,3 +1216,52 @@ No legacy key change, deploy, migration or merge.
 - Final backup: pending, after those two are gone.
 
 `taxiflow.co.za` still serves maintenance (re-checked).
+
+### 2026-10-11 — Release window: rows 4c, 6b, 6a, 7, 8 done; report routing defect found (rows 9–10)
+
+**Row 4c and the resume script** (`C:\Users\appri\taxiflow-recovery\release-resume.ps1`, run by Tebogo; its dry run was tested by the agent):
+- deleted `taxiflowpro-qiu4f5l2y` (`dpl_B1LwD8PWRL1SrLtC9CXyd5p3rwwp`) and `taxiflowpro-96cvjgq39` (`dpl_7qQ4A4a1vAJZC7QwR7mhnwvGBDXp`) by exact ID. Both legacy 008ce8e builds held the new secret and no live aliases; both verified gone.
+- `origin/main` fast-forwarded to `51c472ca406e1abb3bd45a142fd675ac02b2005f`. The reviewed code `3443c91` is identical (later commits are Project OS only).
+- The `main` build `taxiflowpro-7aibja2g9` (`dpl_3VoKcaB1unkTgs19MXPrQg8xt13L`) is READY and **not assigned** (auto-assign off).
+
+**Row 6a, final pre-migration backup:**
+- **PASS**: `taxiflow-vfxftviwteypasredjgm-2026-10-11T07-38-37-806Z.tfbk`, SHA-256 `390a7d12662a33c5dfdfbe1636dc16a26dce801c918aa926f1054bf77229c7e4`.
+- Counts: snapshots 1, legacy rows 0, Auth users 5, identities 5. Verify PASS; check OK.
+- Copied to `G:\My Drive\TaxiFlow backups\` (SHA-256 matches). Tebogo confirms the cloud upload in drive.google.com. The earlier `…T05-08-06-803Z` backup is kept.
+
+**Row 7, migration** (`scripts/hosted/apply-release.mjs`, typed confirmation by Tebogo; a first attempt with a typo was refused and applied nothing):
+
+| File | Result |
+|---|---|
+| 01 tenant foundation | APPLIED, 9.6 s |
+| 02 finance actions | APPLIED, 6.0 s |
+| 03 pilot onboarding | APPLIED, 4.5 s |
+| 04 assign initial owner | APPLIED, 3.1 s |
+
+**Post-checks: all PASS.**
+- businesses 1 ("TaxiFlow Pro"); snapshots 1, all mapped; active memberships 5; active Owners 1;
+- no policies on `workspace_snapshots`;
+- browser grants exactly authenticated SELECT on `businesses` and `business_memberships`;
+- RLS on every public table;
+- no browser-executable public function.
+
+**Row 7a:** an active Owner exists, so `assign-initial-owner` was **not run**.
+
+**Row 8, access** (publishable `web_app` key, no sign-in):
+- `workspace_snapshots`, `businesses`, `business_memberships`, `finance_action_requests`, `fleet_profiles`, `vehicles` and `banking_events` all return **401 / 42501**.
+- The RPCs `commit_finance_action`, `create_business_with_owner`, `apply_membership_change` and `assign_initial_owner` return **404 PGRST202** (not exposed to the browser).
+- The tenant bundle contains the publishable key only (no `sb_secret`, no legacy JWT).
+
+**Rows 9–10, smoke tests on `taxiflowpro-7aibja2g9`** (bypass header; no domain):
+- `/` and deep links return 200 (app).
+- `/api/business/workspace`, `/memberships` and `/members` return 401 without a token (the functions run).
+- `/api/admin/auth-users` and `bootstrap-workspace` return 410.
+- **DEFECT:** `/api/admin/daily-log/<id>/report-view` and `/report-pdf` return **200 index.html**. The SPA catch-all rewrite takes precedence over the dynamic `api/admin/daily-log/[id]/*.js` functions on Vercel. Locally, the Vite dev middleware imitated dynamic routing, which hid this.
+- **Fix forward (maintenance kept up):**
+  - handlers moved to static `api/admin/daily-log/report-view.js` and `report-pdf.js`;
+  - explicit rewrites `/api/admin/daily-log/:id/<name>` → `/api/admin/daily-log/<name>?id=:id`;
+  - the catch-all now excludes `/api/`;
+  - the dev middleware, test imports and `server-auth-tests` were updated;
+  - new `tests/vercel-routing.test.mjs`.
+  - Unit tests 336/336, build OK.
+  - Hosted verification is pending after Tebogo pushes.

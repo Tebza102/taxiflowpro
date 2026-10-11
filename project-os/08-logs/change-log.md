@@ -1132,3 +1132,29 @@ No legacy key change, deploy, migration or merge.
 **Still holding the legacy secret:** the 4 existing Preview deployments, until row 6 (legacy keys off) and row 11 (delete).
 
 **Later clean-up:** the unused `default` secret key can be deleted after go-live.
+
+### 2026-10-11 07:11 SAST — Production backup re-run with a separate passphrase: PASS
+
+**Authorised by:** Tebogo (read-only export of `vfxftviwteypasredjgm`; he typed the project ref).
+
+**Passphrase:**
+- Generated locally (24 characters, letters and digits) without being displayed.
+- Placed on the clipboard for Tebogo to save in Google Password Manager (entry `backup-passphrase` on `https://taxiflow.co.za`).
+- Checked in-process to **differ from the database password**.
+- The temporary file was deleted by the run script.
+
+**Result:**
+- Export **PASS** (`taxiflow-backup-premigration-v1`).
+- Verify **PASS**.
+- Check **OK**.
+
+| Item | Value |
+|---|---|
+| File | `taxiflow-vfxftviwteypasredjgm-2026-10-11T05-08-06-803Z.tfbk` (216,093 bytes) |
+| Ciphertext SHA-256 | `8bada8992ee33e60e09ea90a08dd1faa7d601922997ee7fd1c7db6e038baead4` |
+| Exported at | 2026-10-11 05:11:06 UTC |
+| Counts | snapshots 1, legacy rows 0, Auth users 5, identities 5 (same as the first run) |
+
+**To remove:** the earlier backup `…T03-24-06-317Z.tfbk` and its manifest. It was encrypted with the database password. Tebogo deletes it himself; the agent does not permanently delete data.
+
+**Still open:** an encrypted off-machine copy of the new backup.

@@ -973,3 +973,16 @@ No purchase or plan change; no website DNS change; no password seen by the agent
 - support → apprigate@gmail.com, 02:54:02, id `1xFhpj-0000000CFIh-3vXH`.
 - The relay reported "delivered successfully".
 - **Gmail inbox delivery and the SPF/DKIM/DMARC results are pending Tebogo's check.**
+
+### 2026-10-11 03:12 SAST — Mail tests E1–E4 passed (Task 33, in progress)
+
+| # | Test | Evidence | Result |
+|---|---|---|---|
+| E1 | support → Gmail (external send) | relay `delivery.antispam.co.za` delivered (id `1xFhpj-0000000CFIh-3vXH`); Tebogo confirmed receipt in Gmail | **PASS** |
+| E2 | Authentication at Gmail ("Show original") | Tebogo: SPF PASS, DKIM PASS for `taxiflow.co.za`, DMARC PASS | **PASS** (aligned) |
+| E3 | Gmail → support (external receive via MX) | "Re: TaxiFlow mail test E1" in support at 02:59 (seen by the agent in webmail) | **PASS** |
+| E4 | message to `notifications@` copied to support | "TaxiFlow mail test E4" in support at 03:10 (agent, webmail; sent support → notifications) | **PASS** (forwarder rule) |
+
+**Still to test:**
+- **E5:** platform (Supabase) email delivery and authentication through `notifications@`. It needs Supabase SMTP configured first.
+- **E6:** the real setup and reset flow on `https://taxiflow.co.za`. It awaits the secure deployment (release row 12).

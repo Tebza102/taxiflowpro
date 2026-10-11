@@ -1333,3 +1333,14 @@ Recorded for later review (out of scope): **the layout looks different from the 
 4. **Chrome autofill:** a saved Chrome entry autofills a random value into the taxiflow.co.za **email** field; Tebogo to review the saved entries.
 
 `.env.uat.local`: removed the two revoked lines (`VERCEL_AUTOMATION_BYPASS_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`); no values were printed.
+
+### 2026-10-11 — Row 13: after-release backup PASS; release closed out
+
+- **After-release backup** (`C:\Users\appri\taxiflow-recovery\after-release-backup.ps1`; Tebogo typed the passphrase at the hidden prompts, so it was never in a file, the clipboard or chat):
+  - Step 1: the same passphrase opens the final pre-migration backup `…T07-38-37-806Z` (verify PASS).
+  - Export: `taxiflow-vfxftviwteypasredjgm-2026-10-11T15-15-11-698Z.tfbk`, format `taxiflow-backup-v1` (tenant), exported at 15:16:19 UTC, SHA-256 `7ce304fb6729ad715006236808f32ea416504193454a0bc034116da4f142aad2`.
+  - Counts: businesses 1, memberships 6 (5 active plus the inactive test member), snapshots 1, request log 0, Auth users 6, identities 6.
+  - Verify PASS; check OK.
+  - Copied with its manifest to `G:\My Drive\TaxiFlow backups\`; SHA-256 matches for both files. Tebogo to confirm the cloud upload.
+- **Release result:** rows 1–11 and 13 PASS. Row 12 works (delivery, landing page, password set) but **DKIM `taxiflow.co.za` fails** and mail lands in Spam. Under the row 12 rule, onboarding is **held** pending Tebogo's decision (see `next-action.md`).
+- Live: `e59417a` as `dpl_FruSfHfKnvUv8Gv367g6wzeduEpv` on `taxiflow.co.za`.

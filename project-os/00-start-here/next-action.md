@@ -1,5 +1,18 @@
 # Next Action
 
+## Immediate Next Step (updated 2026-10-11 17:30 SAST, after release row 13)
+
+The release is live and backed up. Before onboarding real pilot Owners:
+
+1. **Tebogo decides on the email DKIM failure** (row 12 criterion). The options are:
+   - **(recommended)** open a ticket with Absolute Hosting: the outbound relay (`delivery.antispam.co.za` / `out.zamailgate.com`) adds a `Message-ID` after cPanel DKIM signing, so the `taxiflow.co.za` signature fails. Ask them to stop that, or to sign after relaying. Then repeat one recovery email and check that DKIM passes;
+   - or accept the risk for the pilot (SPF and DMARC pass) and tell each Owner to check Spam and mark "Not spam".
+2. **Review the grant-access role defect** (Manager shown, Admin recorded) before any Owner grants access to staff. This is a separate task: reproduce it locally, fix it, and release it through the normal gates.
+3. Tebogo confirms in drive.google.com that `…T15-15-11-698Z.tfbk` and its manifest have uploaded.
+4. Then onboard the first pilot Owner (`11-client-delivery/first-owner-onboarding.md`).
+
+Later, not release scope: branded Supabase email templates; the layout review; Chrome saved-entry clean-up.
+
 ## Immediate Next Step (updated 2026-10-10 23:35 SAST, Task 32)
 
 **Email on `taxiflow.co.za`** (checklist section 3). Tebogo:

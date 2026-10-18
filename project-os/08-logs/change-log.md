@@ -1509,3 +1509,13 @@ What `platform-admin-tests.mjs` covers:
 - www moved from `taxiflowpro` (308 redirect) to `taxiflow-website`. HTTPS, assets, the mobile menu, Log in and the planner were verified live.
 - The app is unchanged. PR #4 is open.
 - Rollback: `05-build/public-website.md`.
+
+### 2026-10-18 — Platform admin released to production (PR #3)
+
+- **Pre-release backup:** PASS (`f04778a7…`, off-machine hashes match).
+- **File 05:** applied; checks PASS.
+- **Grant:** `apprigate@gmail.com`.
+- **Merge:** PR #3 merged as `af3e5ad`. The build `dy1a1k761` was verified (sign-in renders; platform and memberships 401 without a token), then promoted at 16:20 SAST.
+- **Unchanged:** data (membership and snapshot fingerprints) and www.
+- **After-release backup:** PASS (`62345aea…`, off-machine hashes match).
+- **Signed-in checks:** still pending; the pane had no session.

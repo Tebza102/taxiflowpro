@@ -1,5 +1,28 @@
 # Current Status
 
+## Platform admin RELEASED to production (2026-10-18 16:20 SAST)
+
+- **Deployed:** commit `af3e5ad` (merge of PR #3; code identical to the reviewed `6b0b249`). Deployment `dpl_2P2aUep4zsvNYk2LirS4qecRHX3s` (`taxiflowpro-dy1a1k761`), promoted to `taxiflow.co.za` at 16:20:44–16:20:55; bundle `index-2xzkC0xd.js`.
+- **Database:**
+  - release file 05 applied (01–04 skipped); all post-checks PASS;
+  - `platform_admins`: RLS on and forced, no policies, grants only to the owner (postgres) and `service_role` SELECT;
+  - exactly one grant: `apprigate@gmail.com`, active, operator. It is still Admin in Tenant 1.
+- **Data unchanged:**
+  - 1 business (TaxiFlow Pro); 6 Auth users;
+  - membership fingerprint `85596e42…` before and after;
+  - snapshot `0ce5840c…@2026-10-11 19:18:19 UTC` before and after.
+- **Backups:**
+  - pre-release `…2026-10-18T13-59-37-485Z.tfbk` (SHA-256 `f04778a7…`) and after-release `…2026-10-18T14-30-08-777Z.tfbk` (`62345aea…`);
+  - export, verify and check PASS for both; copies in `G:My DriveTaxiFlow backups`, hashes match. The cloud upload by Drive for Desktop has not been confirmed.
+- **Live checks (unauthenticated):**
+  - sign-in renders;
+  - `/api/platform/businesses` returns 401 with no token (GET and POST) and with a garbage token, with `no-store`;
+  - `/api/business/memberships` returns 401; `sw.js` 200;
+  - www is unchanged (same `index.html` hash).
+- **NOT YET VERIFIED:** the signed-in checks (Companies list, Tenant 1 role and data, Admin restrictions). Tebogo's 16:26 SAST sign-in was not in the agent's browser pane, which had no session.
+- **Rollback:** `vercel promote https://taxiflowpro-jng5n1ced-apprigate.vercel.app --scope apprigate` (file 05 is additive). Revoke the capability with `update public.platform_admins set active = false` or the file-05 rollback. For data, restore the pre-release backup.
+
+
 ## Public website on www (2026-10-18): RELEASED 15:53 SAST
 
 - **Live:** `https://www.taxiflow.co.za`. Commit `c55b990`; deployment `dpl_CY4Rbhm3LGfcAwZwSDQoogA5TRYd` (files identical to the reviewed Preview `dpl_5HJ3YjCEDmMS4YmqrTmgRV5Tnrhc`).

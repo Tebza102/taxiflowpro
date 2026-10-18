@@ -1,5 +1,16 @@
 # Next Action
 
+## Platform admin live (2026-10-18): finish the signed-in checks
+
+1. Sign in as `apprigate@gmail.com` **inside the agent's browser pane**. The agent then checks, read-only and with no company created:
+   - Companies lists Tenant 1: TaxiFlow Pro;
+   - the Tenant 1 role is still Admin and the data loads;
+   - Admin still cannot grant access;
+   - a non-member business is refused.
+2. Confirm that Drive for Desktop has uploaded both 2026-10-18 backups.
+3. **No real Owner invitations** until DKIM passes (send `05-build/email-dkim-hosting-ticket.md`, then retest).
+
+
 ## Public website (2026-10-18): live on www; remaining items
 
 - Content decisions: the preview strip, the "Website prototype" footer, pricing and privacy wording.

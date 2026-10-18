@@ -71,3 +71,27 @@ The first CLI deploy of the new project was recorded as that project's *Producti
 - pricing wording, privacy information;
 - the enquiry destination (see the CTA flag);
 - independent logo files (optional).
+
+## RELEASED 2026-10-18 15:53 SAST (Tebogo authorized the website release only)
+
+- **Live:** `https://www.taxiflow.co.za`.
+- **Commit:** `c55b990` (website content; PR https://github.com/Tebza102/taxiflowpro/pull/4, not merged).
+- **Reviewed Preview:** `dpl_5HJ3YjCEDmMS4YmqrTmgRV5Tnrhc` (`dt6j6b4zd`). Its 18 files match `c55b990` by SHA-1, with 0 mismatches.
+- **Production deployment:** `dpl_CY4Rbhm3LGfcAwZwSDQoogA5TRYd` (`taxiflow-website-hw4g3lgcy-apprigate.vercel.app`), created by `vercel promote` of the reviewed Preview. Promoting a Preview creates a new deployment, so its files were re-verified: 18 match `c55b990`, 0 mismatches. The live `index.html` SHA-1 equals the committed file.
+- **Access before the move:** every project deployment URL (`dt6j6b4zd`, `p29sq1g3e`, `hw4g3lgcy`) and the team alias `taxiflow-website-apprigate.vercel.app` return 302 to Vercel login for `/`, `/index.html` and an asset. `taxiflow-website.vercel.app` returns 404; it was re-added by the promote and removed again. www is the only public host.
+- **Move:** 15:53:28 DELETE `www.taxiflow.co.za` from `taxiflowpro`; 15:53:37 added to `taxiflow-website` (verified). No DNS change; about 9 s gap.
+- **Live checks:**
+  - HTTPS with a Let's Encrypt certificate for `www.taxiflow.co.za` (valid until 2027-01-08); `http` redirects 308 to `https`;
+  - HTML, CSS, JS, images, favicon and fonts all 200;
+  - 375 px: no overflow; the menu shows Log in (293×51); the planner opens, its brief says no enquiry was sent, the download status is honest, and the download makes no network request;
+  - 1440 px: Log in visible; the click lands on `https://taxiflow.co.za/` Sign in + Forgot password; no service worker on www.
+- **App unchanged:**
+  - `taxiflowpro` production is still `jng5n1ced`, with domains `taxiflow.co.za`, `taxiflow.apprigate.com` and `taxiflowpro.vercel.app`;
+  - same asset bundle `index-K8ghKdHJ.js`; `sw.js` 200, scope `https://taxiflow.co.za/`; manifest `start_url`/`scope` `/`;
+  - `/api/business/memberships` without a token returns 401.
+- **Rollback** (restores www's previous redirect):
+  1. `vercel api "/v9/projects/taxiflow-website/domains/www.taxiflow.co.za?teamId=team_Kp55is5BgPnNjwWlgCDb4SYB" -X DELETE --dangerously-skip-permissions`
+  2. `vercel api "/v10/projects/taxiflowpro/domains?teamId=team_Kp55is5BgPnNjwWlgCDb4SYB" -X POST --input www-restore.json`, where the file contains `{"name":"www.taxiflow.co.za","redirect":"taxiflow.co.za","redirectStatusCode":308}`
+  3. Check that `https://www.taxiflow.co.za/` returns 308 to `https://taxiflow.co.za/`.
+- **Note:** a future `vercel deploy --prod` in `taxiflow-website` re-adds the public `taxiflow-website.vercel.app` alias; remove it afterwards.
+- **Still open:** the planner does not capture enquiries; there are content decisions (the preview strip, "Website prototype" footer, pricing, privacy); PR #4 is not merged.

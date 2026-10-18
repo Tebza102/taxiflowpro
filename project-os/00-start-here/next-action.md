@@ -1,6 +1,12 @@
 # Next Action
 
-## Public website (2026-10-18): Tebogo reviews the Preview, then authorizes the www move
+## Public website (2026-10-18): live on www; remaining items
+
+- Content decisions: the preview strip, the "Website prototype" footer, pricing and privacy wording.
+- An enquiry destination, before the planner can capture leads.
+- Review and merge PR #4 (merging does not change www; the site is deployed from the `taxiflow-website` project).
+
+### Before the release (history)
 
 1. Review `https://taxiflow-website-dt6j6b4zd-apprigate.vercel.app` on desktop and phone.
 2. Decide the content items: the preview strip, the "Website prototype" footer, pricing, privacy, and the enquiry destination.

@@ -1,6 +1,14 @@
 # Current Status
 
-## Public website on www (2026-10-18): Preview built for visual review; www NOT reassigned
+## Public website on www (2026-10-18): RELEASED 15:53 SAST
+
+- **Live:** `https://www.taxiflow.co.za`. Commit `c55b990`; deployment `dpl_CY4Rbhm3LGfcAwZwSDQoogA5TRYd` (files identical to the reviewed Preview `dpl_5HJ3YjCEDmMS4YmqrTmgRV5Tnrhc`).
+- **Website PR:** https://github.com/Tebza102/taxiflowpro/pull/4 (not merged).
+- **App** `taxiflow.co.za`: unchanged (`jng5n1ced`).
+- Verification and rollback: `05-build/public-website.md` on `agent/public-website`.
+- The platform-admin release is still under its review gate (PR #3, file 05 not applied).
+
+### Before the release (history)
 
 - **Branch:** `agent/public-website` (from `origin/main`): `30636b5` (export, unchanged), `c55b990` (Log in link, tests, config), `fa732cf` (docs). Local; not pushed.
 - **Hosting:** new Vercel project `taxiflow-website` (not Git-connected).

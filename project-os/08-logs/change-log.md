@@ -1501,3 +1501,11 @@ What `platform-admin-tests.mjs` covers:
 - **Incident:** the first deploy was recorded as project-Production with a public `taxiflow-website.vercel.app` alias. Alias removed.
 - No domain, DNS, app, Auth or database change.
 - Tests: Node 9/9, browser smoke 30/30, app build passes.
+
+### 2026-10-18 15:53 SAST — Public website released on www.taxiflow.co.za
+
+- Released commit `c55b990` as deployment `dpl_CY4Rbhm3LGfcAwZwSDQoogA5TRYd` (promoted from the reviewed Preview; 18/18 files identical by SHA-1).
+- All other project URLs are protected (302); `taxiflow-website.vercel.app` returns 404.
+- www moved from `taxiflowpro` (308 redirect) to `taxiflow-website`. HTTPS, assets, the mobile menu, Log in and the planner were verified live.
+- The app is unchanged. PR #4 is open.
+- Rollback: `05-build/public-website.md`.

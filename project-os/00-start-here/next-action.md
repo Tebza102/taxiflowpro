@@ -1,5 +1,65 @@
 # Next Action
 
+## Public website (2026-10-18): live on www; remaining items
+
+- Content decisions: the preview strip, the "Website prototype" footer, pricing and privacy wording.
+- An enquiry destination, before the planner can capture leads.
+- Review and merge PR #4 (merging does not change www; the site is deployed from the `taxiflow-website` project).
+
+### Before the release (history)
+
+1. Review `https://taxiflow-website-dt6j6b4zd-apprigate.vercel.app` on desktop and phone.
+2. Decide the content items: the preview strip, the "Website prototype" footer, pricing, privacy, and the enquiry destination.
+3. Authorize: push the branch; `vercel deploy --prod` for `taxiflow-website`; move `www.taxiflow.co.za` from `taxiflowpro` (redirect) to `taxiflow-website`.
+
+Steps and rollback: `05-build/public-website.md` on `agent/public-website`.
+
+## Platform admin release (2026-10-18): review, then a controlled production release
+
+The branch `agent/platform-admin-onboarding` is built and locally tested. Nothing is deployed.
+
+1. ~~Confirm the platform admin and push~~: done. `apprigate@gmail.com` is confirmed; the draft PR is https://github.com/Tebza102/taxiflowpro/pull/3; the Preview is `taxiflowpro-kd3l04xjy`.
+2. **Review PR #3.** Then, on authorization, follow `05-build/platform-admin-release.md`:
+   - backup (Tebogo types the passphrase);
+   - file 05;
+   - grant;
+   - merge;
+   - promote;
+   - live checks;
+   - after-release backup.
+3. **Onboarding real companies** waits for DKIM to pass (send `05-build/email-dkim-hosting-ticket.md`). Set-up data still goes through `load-business-data.mjs`.
+
+Rollback: re-promote `jng5n1ced`; file 05 is additive.
+
+## Public website (2026-10-18): decisions needed before implementation
+
+See `05-build/public-website-assessment.md`. Tebogo needs to decide:
+1. **Hosting:** (a) a separate static project on `www.taxiflow.co.za` (recommended), or (b) a path in the app.
+2. **Login link placement:** header plus footer, linking to `https://taxiflow.co.za/`.
+3. **Pre-launch content:** the preview strip, pricing wording, privacy information and the enquiry destination.
+
+Then implement on a new branch, without touching the app or backend.
+
+## Frontend prototype integration next action (2026-10-12; superseded 2026-10-18)
+
+Provide access to the approved reference by signing in to the browser pane, or provide the exported prototype files/local folder. Then inspect desktop/mobile screens, map public versus authenticated screens to existing routes and tenant gateway, and implement only the approved presentation changes on `codex/frontend-prototype-integration`. Preserve auth, membership-derived roles, business isolation, snapshot versions, stable retry IDs, conflicts, finance/report flows and the unused stash. Validate against the existing local synthetic backend. No push, merge or deployment authorized. Existing DKIM onboarding hold remains separate and unchanged.
+
+## Immediate Next Step (updated 2026-10-11, stabilisation CLOSED)
+
+**Stabilisation is closed. Existing users can use the app today. The single outstanding blocker for onboarding new Owners is the DKIM hosting ticket.** No more app changes or repeat tests for this task.
+
+1. **Tebogo sends the drafted ticket** `05-build/email-dkim-hosting-ticket.md` to Absolute Hosting. Do not treat DKIM as resolved.
+2. After the host's change, send one recovery email to the external mailbox. Confirm `dkim=pass header.i=@taxiflow.co.za`, then mark checklist row 12 passed.
+3. Only then onboard the two new independent businesses, one at a time, with `11-client-delivery/independent-owner-onboarding-runbook.md` (inputs and dry runs may be prepared now; no invitations before the DKIM retest passes).
+
+Closed: the grant-role mismatch (automation only; no code change); the test member (inactive, denied); the after-release backup (verified, synced).
+
+Unused stash (keep; do not drop or apply): `stash@{0}` (`bd2b25a5d48b34fdf557bacc04b8a9793d8da0f1`, "WIP on agent/tenant-db-foundation: e636df3 …"). It holds the candidate FormData grant-role change to `src/components/TenantAccessPanel.jsx`, not needed because normal selection saves correctly.
+
+**Next week (separate task):** the operator dashboard.
+
+Later, not now: branded email templates; the layout review; Chrome saved entries; signing out the inactive test account's leftover session (harmless: no data access).
+
 ## Immediate Next Step (updated 2026-10-10 23:35 SAST, Task 32)
 
 **Email on `taxiflow.co.za`** (checklist section 3). Tebogo:

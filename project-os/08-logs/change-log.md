@@ -1265,3 +1265,247 @@ No legacy key change, deploy, migration or merge.
   - new `tests/vercel-routing.test.mjs`.
   - Unit tests 336/336, build OK.
   - Hosted verification is pending after Tebogo pushes.
+
+### 2026-10-11 — Release window: rows 9–11 (secure app LIVE on taxiflow.co.za)
+
+**Report-routing fix live:**
+- Tebogo pushed with `push-fix.ps1`; `origin/main` = `e59417a96b6df23b8d0bc0dfe08c03971e9f5da1` (code = `288e3f2`).
+- Build `taxiflowpro-jng5n1ced` (`dpl_FruSfHfKnvUv8Gv367g6wzeduEpv`).
+- Report-view and report-pdf now return 401 JSON from the functions without a token (previously index.html).
+- Business routes return 401; legacy admin routes return 410.
+
+**Row 10, signed-in smoke test** (Tebogo, `owner@apprigate.com`, on the deployment URL) — **all PASS:**
+1. TaxiFlow Pro with existing data;
+2. survives a refresh;
+3. Business access lists 5 members;
+4. report preview and PDF work.
+
+Recorded for later review (out of scope): **the layout looks different from the legacy app; no functional problem.**
+
+**Row 10a, Supabase URL configuration:**
+- Site URL `https://taxiflow.apprigate.com` → `https://taxiflow.co.za`.
+- Redirect list: removed `taxiflow.apprigate.com/**`, both `taxiflowpro-git-agent-owner-first-auth-reset-apprigate.vercel.app` entries and `taxiflowpro.vercel.app/**`; added `https://taxiflow.co.za/**`, which is now the only entry (verified after reload).
+
+**Row 11, promote:** `vercel promote dpl_FruSfHfKnvUv8Gv367g6wzeduEpv`.
+- taxiflow.co.za and taxiflowpro.vercel.app serve the tenant build (`index-K8ghKdHJ.js`).
+- /api/business/workspace and report-view return 401; /api/admin/auth-users returns 410.
+- www 308 → apex; http 308 → https.
+- Alias taxiflow.co.za → `dpl_FruSfHfKnvUv8Gv367g6wzeduEpv`.
+
+**Row 11, clean-up** (`release-cleanup.ps1`; dry run PASS):
+- delete 9 deployments by exact ID: 3 legacy production, 4 legacy previews, the superseded tenant build `7aibja2g9` (report bug, production secret) and the superseded tenant preview `75b02lnxh`;
+- keep `jng5n1ced` (live), `cmlp6fmww` (maintenance fallback) and `301dw9v3b` (current branch preview, no secret);
+- revoke the Deployment Protection bypass secret.
+- Run by Tebogo: pending.
+
+### 2026-10-11 — Row 11 clean-up done (verified)
+
+- **Deployments remaining:** `jng5n1ced` (live, `dpl_FruSfHfKnvUv8Gv367g6wzeduEpv`), `cmlp6fmww` (maintenance fallback), `301dw9v3b` (branch preview, no secret). All other deployments were deleted.
+- **Protection bypass secrets configured: 0** (revoked).
+- taxiflow.co.za still serves the tenant build.
+- **Pending (Tebogo):** remove the dead `VERCEL_AUTOMATION_BYPASS_SECRET` and `SUPABASE_SERVICE_ROLE_KEY` lines from `.env.uat.local`.
+
+### 2026-10-11 — Row 12: external email and full password reset — functional PASS; DKIM finding
+
+**Method:**
+- Owner (`owner@apprigate.com`) granted temporary access to `apprigate@gmail.com` ("Gmail test") in Business access on taxiflow.co.za (built-in browser).
+- Tebogo opened each link in a separate incognito session and set the passwords privately.
+
+**Results:**
+- **Setup email:** sent by Supabase as `notifications@taxiflow.co.za` (authenticated, from 52.210.122.178) via relay `delivery.antispam.co.za` (cPanel Track Delivery 15:43:15, accepted). Delivered to Gmail **Spam**. The link opened `https://taxiflow.co.za/`; the password was set.
+- **Recovery email** (Forgot password? on taxiflow.co.za): delivered to Gmail **Spam**, subject "Reset Your Password", From "TaxiFlow" <notifications@taxiflow.co.za>. Link `redirect_to=https://taxiflow.co.za`; the reset worked. The one-time token was used and is not recorded here.
+- **Gmail authentication:**
+  - **SPF pass** (164.160.88.223 za-outgoing-13-6.antispam.co.za);
+  - **DMARC pass** (p=none, via SPF alignment);
+  - **DKIM `taxiflow.co.za` FAIL**: the outbound relay adds a `Message-ID` header after the cPanel signature (Supabase sends none; the signature covers Message-ID);
+  - DKIM `out.zamailgate.com` pass (relay, not aligned).
+- **Removal:** the Owner removed access ("Access removed for apprigate@gmail.com.").
+  - DB read-only check: membership `active=false` at 14:18:40 UTC; active memberships 5; active Owners 1.
+  - The membership list did not refresh immediately in the UI (cosmetic; logged).
+
+**Findings for later review** (no change in this release):
+1. **Grant-access role:** the dropdown showed Manager, but the grant recorded **Admin** (selection via keyboard in the built-in browser). Check that the role sent always matches the role displayed.
+2. **Platform email DKIM / Spam:**
+   - ask Absolute Hosting to stop the relay modifying headers after signing, or to sign taxiflow.co.za after relaying;
+   - brand the Supabase email templates;
+   - meanwhile, tell Owners to check Spam and mark "Not spam".
+3. **Layout:** looks different from the legacy app; no functional problem (Tebogo).
+4. **Chrome autofill:** a saved Chrome entry autofills a random value into the taxiflow.co.za **email** field; Tebogo to review the saved entries.
+
+`.env.uat.local`: removed the two revoked lines (`VERCEL_AUTOMATION_BYPASS_SECRET`, `SUPABASE_SERVICE_ROLE_KEY`); no values were printed.
+
+### 2026-10-11 — Row 13: after-release backup PASS; release closed out
+
+- **After-release backup** (`C:\Users\appri\taxiflow-recovery\after-release-backup.ps1`; Tebogo typed the passphrase at the hidden prompts, so it was never in a file, the clipboard or chat):
+  - Step 1: the same passphrase opens the final pre-migration backup `…T07-38-37-806Z` (verify PASS).
+  - Export: `taxiflow-vfxftviwteypasredjgm-2026-10-11T15-15-11-698Z.tfbk`, format `taxiflow-backup-v1` (tenant), exported at 15:16:19 UTC, SHA-256 `7ce304fb6729ad715006236808f32ea416504193454a0bc034116da4f142aad2`.
+  - Counts: businesses 1, memberships 6 (5 active plus the inactive test member), snapshots 1, request log 0, Auth users 6, identities 6.
+  - Verify PASS; check OK.
+  - Copied with its manifest to `G:\My Drive\TaxiFlow backups\`; SHA-256 matches for both files. Tebogo to confirm the cloud upload.
+- **Release result:** rows 1–11 and 13 PASS. Row 12 works (delivery, landing page, password set) but **DKIM `taxiflow.co.za` fails** and mail lands in Spam. Under the row 12 rule, onboarding is **held** pending Tebogo's decision (see `next-action.md`).
+- Live: `e59417a` as `dpl_FruSfHfKnvUv8Gv367g6wzeduEpv` on `taxiflow.co.za`.
+
+### 2026-10-11 — Release stabilisation: role check closed (no code change), DKIM ticket drafted, test member and backup confirmed
+
+**1. Business access role mismatch**
+- Server path: `members.js` → `parseRole` → `apply_membership_change` passes the role through unchanged and accepts only Admin, Manager or Driver.
+- New `tests/localdb-browser/tenant-access-roles.spec.js`, on a fresh `setup.mjs hosted` stack (synthetic `@example.com` users).
+- **Run on the unchanged code** (the earlier spec version also had an automation case):
+  - Manager, Admin and Driver chosen with `selectOption` saved exactly, and so did Manager chosen with the keyboard (focus, ArrowDown);
+  - only the automation case (dropdown value set with no change event) saved **Admin**, reproducing row 12. The success message correctly reported the saved role.
+- **Cause:** the row 12 grant was made by browser automation, whose click did not register; the keyboard path then moved the visible value without the change event reaching React. A person's selection does not do this. **No code fix and no deploy.** The candidate FormData fix is kept in `git stash` only.
+- **Final spec (normal paths only): 1/1 PASS.** Each role saves exactly, persists after reload, and gets the matching server permissions:
+  - Manager: workspace role Manager, no member list, cash-up verify allowed;
+  - Admin: member list allowed, verify denied;
+  - Driver: both denied.
+
+**2. DKIM:** sanitised ticket drafted in `05-build/email-dkim-hosting-ticket.md`; **not sent**.
+- Proven: the cPanel `d=taxiflow.co.za` signature includes Message-ID in `h=`; the only Message-ID, `E1xFuKB-002bmI-N8@server13.antispam.co.za`, matches the relay's queue id; Gmail `dkim=fail` (taxiflow.co.za), `dkim=pass` (out.zamailgate.com), SPF and DMARC pass.
+- Passing E1 (webmail, id `1xFhpj-0000000CFIh-3vXH`, Tebogo's Gmail check) is cited; no raw E1 headers were ever recorded.
+- **Hypothesis (unconfirmed):** the relay's added Message-ID breaks the signature. Onboarding new Owners stays paused.
+
+**3. Test member and backup**
+- Production read-only:
+  - `apprigate@gmail.com` membership `active=false` (since 14:18:40 UTC); active memberships 5; Owners 1.
+  - One Auth session remains. Acting as that user in a rolled-back read-only transaction: 0 businesses and 0 memberships visible; no snapshot privilege. The API also refuses (`tenantAuth` returns 403 without an active membership).
+- Backup `…T15-15-11-698Z`: Drive for Desktop (the account holding both files) reported `active_uploads: 0, operation_queue_size: 0` at 15:51 UTC. The Drive connector here is a different Google account and the browser pane cannot sign in to Google, so this is local sync evidence, not a server listing.
+
+### 2026-10-11 — Release stabilisation CLOSED
+
+- **No app changes and no deploy.** Live code stays `e59417a` (`dpl_FruSfHfKnvUv8Gv367g6wzeduEpv`).
+- **Single outstanding blocker for onboarding new Owners:** the DKIM hosting ticket (`05-build/email-dkim-hosting-ticket.md`, draft, Tebogo sends it).
+- **Unused stash preserved:** `stash@{0}` (`bd2b25a5d48b34fdf557bacc04b8a9793d8da0f1`, "WIP on agent/tenant-db-foundation: e636df3 …"), the candidate FormData grant-role change to `TenantAccessPanel.jsx`. Do not drop or apply it without a new decision.
+- **E1 raw headers:** none were found in the transcripts on this machine; the ticket cites the E1 Exim id and the Gmail pass result.
+- **Next week, separate task:** the operator dashboard.
+
+### 2026-10-12 — Frontend prototype integration preflight; reference access blocked
+
+Created codex/frontend-prototype-integration from a85bde6, the current release lineage plus later documentation. Initial worktree clean; origin/main e59417a; local main 008ce8e. Unused stash bd2b25a preserved. Published prototype requires OpenAI sign-in; no accessible design or exported source yet. No application edits or tests; no external changes, push, merge or deployment. Next: user signs in to reference or supplies exported files, then desktop/mobile inspection and scoped synthetic-backend integration.
+
+### 2026-10-18 — Platform admin and multi-company onboarding: built and tested locally; not deployed
+
+Branch `agent/platform-admin-onboarding` (from `a85bde6`), local commits; not pushed.
+
+**Discovery (read-only):**
+- Production is `jng5n1ced` = `e59417a`.
+- Supabase has 1 business (TaxiFlow Pro, `…00a`) and 6 active memberships.
+- `apprigate@gmail.com` is an **active Admin**, restored at 16:40 UTC on 2026-10-11. This corrects the earlier "inactive" note.
+- Tenancy, memberships, Owner staff onboarding, scoped Driver payloads, reports and finance actions were already live and were reused unchanged.
+
+**Built:**
+- **Release file 05** `scripts/localdb/migrations/20261018090000_platform_admins.sql` and its rollback:
+  - RLS enabled and forced;
+  - no anon, authenticated or PUBLIC grants; the service role gets select only;
+  - no policies and no grant function; writes are operator only.
+  - It is registered in `apply-release.mjs` and in the local rehearsal.
+- **API:**
+  - `authorizePlatformRequest` in `api/_lib/tenantAuth.js`;
+  - `api/_lib/platformAdmin.js`;
+  - `GET/POST /api/platform/businesses`, which returns company metadata only and runs `company.create` through the existing `createBusinessWithOwner`.
+  - The creating platform admin is recorded in the new company's audit trail.
+- **UI:** `src/components/PlatformCompaniesPanel.jsx`. The "Companies" button appears only for platform admins: in the tenant bar, the business picker and the no-membership screen.
+- **Design decisions:**
+  - the platform grant gives no company data access;
+  - a platform admin cannot make themselves Owner of a company they create;
+  - Tenant 1 is the existing business, with no data change.
+
+**Defect found and fixed during testing:**
+- The first version of file 05 had a `using (true)` policy for the service role. It did nothing, because the service role bypasses RLS, but `verify.mjs` flags it as permissive.
+- Removed. `verify.mjs` now also expects `platform_admins` and checks RLS on it.
+
+**Evidence** (local synthetic stack, real local Auth, a fresh reset per suite):
+
+| Check | Result |
+|---|---|
+| `platform-admin-tests.mjs` | 75/75, then 75/75 again on the final file 05 (14:00) |
+| Browser `platform-onboarding.spec.js` | 1/1 alone, and within the full localdb browser suite 11/11 on the final file 05 |
+| Node unit tests | 342/342 |
+| Sync guards | pass |
+| Build | pass |
+| Mock-backend Playwright | 34/34 |
+| `verify.mjs` (final file 05) | 16 PASS, 0 WARN, 0 FAIL |
+| Tenant access | 36/36 |
+| Tenant rollback | 8/8 |
+| Server auth | 26/26 |
+| Onboarding | 64/64 |
+| Finance actions | 56/56 |
+| Finance capture | 43/43 |
+| Finance record | 36/36 |
+| Expense-only days | 32/32 |
+| Backup/restore | 35/35 |
+| Hosted rehearsal (exact live-schema copy plus files 01–05) | 22/22 |
+| `apply-release.mjs --target local` re-run | already-applied files skipped; post-checks PASS (RLS on every public table; no browser-executable function) |
+
+What `platform-admin-tests.mjs` covers:
+- **Who is refused:** no token, garbage token, Owner, Admin, Driver and non-member; forged token metadata; browser and service-role writes to the grant table.
+- **Operator grant:** Tenant 1 is listed as Tenant 1; the list is metadata only and no-store.
+- **No extra power:** the platform admin keeps exactly Admin in Tenant 1 and has no access to company B or to the companies it creates.
+- **Create refusals:** forged fields, invalid input and self-ownership.
+- **Create, then a retry:** a no-op with no second email; slug hijack refused.
+- **Existing account as Owner:** no reset, and its Tenant 1 membership unchanged.
+- **New company:** the Owner sets their own password from the email and sees only company 2; the Owner grants Admin, Manager and Driver, and cannot mint an Owner or act in Tenant 1.
+- **Driver:** saves an expense that persists; the payload is driver-scoped; no member list.
+- **Manager:** sees the Driver's save; is refused a Tenant 1 report.
+- **Unchanged:** Tenant 1 and B snapshot hashes and memberships.
+- **Fail closed:** after revocation and after the file-05 rollback; companies are kept; re-applying is idempotent.
+
+**Not done:** no production SQL, grant, push, merge, promote or email. Real Owner invitations still wait for DKIM.
+
+### 2026-10-18 — Platform admin branch pushed; draft PR #3; Preview verified (read-only)
+
+- Tebogo confirmed `apprigate@gmail.com` as the platform admin.
+- Pushed `agent/platform-admin-onboarding` (`6b0b249`, `946861d`).
+- Draft PR https://github.com/Tebza102/taxiflowpro/pull/3: 2 checks passing.
+- **Preview** `taxiflowpro-kd3l04xjy` (`dpl_GVo3AdGULhEfSBViNkRkqYyDnca4`): READY from `946861d`.
+  - The sign-in screen renders.
+  - The platform route returns 401 with no token (GET and POST) and with a garbage token (validated by production Auth), with `no-store`.
+- Live `taxiflow.co.za/api/platform/businesses` returns 404.
+- **Finding:** the Preview has no service-role key. A signed-in platform request there fails closed (503) before the `platform_admins` lookup, so the "file 05 absent" denial is proven locally, not on the Preview. Not changed: giving the Preview the production secret would weaken isolation.
+- **Production, read-only SQL:**
+  - `platform_admins` absent;
+  - businesses 1, active memberships 6, active Owners 1;
+  - snapshot last updated 2026-10-11 19:18 UTC;
+  - no tables without RLS;
+  - browser grants only `authenticated` SELECT on businesses and memberships.
+- **DKIM DNS** (read-only, public DNS, 2026-10-18):
+  - SPF `v=spf1 +mx +ip4:164.160.91.17 include:spf.zamailgate.com ~all` (the `+a` mechanism is gone);
+  - DKIM `default._domainkey` RSA key published;
+  - DMARC `v=DMARC1; p=none;`;
+  - MX `0 mail.taxiflow.co.za` (164.160.91.17);
+  - NS `ns3/ns5.za-dns.com`.
+  - No DNS change is indicated: webmail mail passed DKIM with the same selector. The ticket is unchanged and not sent.
+- No production SQL writes, grants, merge, promote, companies or emails.
+
+### 2026-10-18 — Prototype assessment re-checked: still inaccessible; no frontend change
+
+- The ChatGPT-hosted prototype is still behind the OpenAI sign-in gate: 401 on every path; only gate assets load. No source or assets are available, and no local export was found.
+- The older `working-prototype-v2` screenshot (2026-08-30) exists but is not confirmed as the approved design.
+- **Smallest scope once inputs exist:** a presentation-only restyle of `SignInShell` (`src/App.jsx`), keeping its handlers (Supabase password sign-in, Forgot password, recovery shell) and the accessible labels the tests use; then only the approved authenticated screens.
+- **Release-procedure link:** `project-os/05-build/platform-admin-release.md` — https://github.com/Tebza102/taxiflowpro/blob/agent/platform-admin-onboarding/project-os/05-build/platform-admin-release.md
+
+### 2026-10-18 — Public website prototype assessed from the export (read-only)
+
+- The export was inspected from a scratch copy; the original is unchanged.
+- Its checks pass (5/5); it renders at desktop and mobile; **no missing assets**.
+- **Finding:** it is a public marketing site with **no Login control**, not an app redesign. This supersedes the earlier note proposing a `SignInShell` restyle.
+- **The app owns the `taxiflow.co.za` root** (PWA scope, service worker, recovery links), so the site should be hosted separately (recommended: `www` subdomain) with a "Log in" link to the existing sign-in.
+- Details, missing inputs and estimate: `05-build/public-website-assessment.md`. No frontend code changed.
+
+### 2026-10-18 — Public website: separate project and Preview; www unchanged
+
+- `agent/public-website`:
+  - the export copied byte-identically (SHA-256 checked; original untouched);
+  - Log in added to the nav and the mobile menu, pointing to `https://taxiflow.co.za`;
+  - every CTA audited.
+- New Vercel project `taxiflow-website`; Preview `dt6j6b4zd` verified in the browser.
+- **Incident:** the first deploy was recorded as project-Production with a public `taxiflow-website.vercel.app` alias. Alias removed.
+- No domain, DNS, app, Auth or database change.
+- Tests: Node 9/9, browser smoke 30/30, app build passes.
+
+### 2026-10-18 15:53 SAST — Public website released on www.taxiflow.co.za
+
+- Released commit `c55b990` as deployment `dpl_CY4Rbhm3LGfcAwZwSDQoogA5TRYd` (promoted from the reviewed Preview; 18/18 files identical by SHA-1).
+- All other project URLs are protected (302); `taxiflow-website.vercel.app` returns 404.
+- www moved from `taxiflowpro` (308 redirect) to `taxiflow-website`. HTTPS, assets, the mobile menu, Log in and the planner were verified live.
+- The app is unchanged. PR #4 is open.
+- Rollback: `05-build/public-website.md`.

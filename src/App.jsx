@@ -33,6 +33,7 @@ import { MobileActionScreen } from "./components/MobileActionScreen";
 import { MobileBottomSheet } from "./components/MobileBottomSheet";
 import { TripLegOptionalFields } from "./components/TripLegOptionalFields";
 import { ReportsPanel } from "./components/ReportsPanel";
+import PlatformCompaniesPanel from "./components/PlatformCompaniesPanel";
 import TenantAccessPanel from "./components/TenantAccessPanel";
 const formatSignedMoney = (value) => {
   const amount = Number(value ?? 0);
@@ -44,6 +45,7 @@ import { repository } from "./lib/dataGateway";
 import {
   TENANT_UNSUPPORTED_MESSAGE,
   isTenantMode,
+  loadPlatformCompanies,
   runFinanceAction,
   selectBusiness,
   toTenantTripLeg,
@@ -323,6 +325,23 @@ function App() {
   const viewerModeLocked = isViewerRole(sessionRole);
   const effectiveBackendMode = viewerModeLocked ? "mock" : backendMode;
   const tenantLive = isTenantMode && effectiveBackendMode === "live";
+  // Platform admin (operator-granted, decided by the server): may open the
+  // Companies console. It never widens access inside any business.
+  const [platformAccess, setPlatformAccess] = useState(false);
+  const [platformOpen, setPlatformOpen] = useState(false);
+  const authUserId = authSession?.user?.id ?? null;
+  useEffect(() => {
+    setPlatformAccess(false);
+    setPlatformOpen(false);
+    if (!tenantLive || !authUserId) return undefined;
+    let cancelled = false;
+    void loadPlatformCompanies().then((result) => {
+      if (!cancelled) setPlatformAccess(result.allowed === true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [tenantLive, authUserId]);
   const tenantOwnerDriver =
     tenantLive && tenantMeta?.role === "Owner" && Boolean(tenantMeta?.driverStaffId);
   const tenantCaptureAs = () =>
@@ -1775,6 +1794,16 @@ function App() {
     );
   }
 
+  if (tenantLive && platformAccess && platformOpen) {
+    return (
+      <PlatformCompaniesPanel
+        email={authSession?.user?.email ?? ""}
+        onBack={() => setPlatformOpen(false)}
+        onSignOut={handleSignOut}
+      />
+    );
+  }
+
   // Tenant mode, several active businesses and none chosen yet: no business
   // data is loaded until the user picks one explicitly.
   if (tenantLive && snapshot?.meta?.tenantNeedsSelection) {
@@ -1784,6 +1813,7 @@ function App() {
         businesses={snapshot.meta.businesses ?? []}
         onSelect={handleTenantBusinessChange}
         onSignOut={handleSignOut}
+        onOpenPlatform={tenantLive && platformAccess ? () => setPlatformOpen(true) : null}
       />
     );
   }
@@ -1793,6 +1823,7 @@ function App() {
       <AccessDeniedShell
         email={authSession?.user?.email ?? "Unknown account"}
         onSignOut={handleSignOut}
+        onOpenPlatform={tenantLive && platformAccess ? () => setPlatformOpen(true) : null}
       />
     );
   }
@@ -5900,6 +5931,11 @@ function App() {
                 <span className="status-chip" data-tone="navy">
                   {tenantMeta.businessName}
                 </span>
+              )}
+              {platformAccess && (
+                <button type="button" className="action-button" onClick={() => setPlatformOpen(true)}>
+                  Companies
+                </button>
               )}
               {tenantOwnerDriver && (
                 <>
@@ -13822,7 +13858,7 @@ function PasswordRecoveryShell({
   );
 }
 
-function TenantBusinessPicker({ email, businesses, onSelect, onSignOut }) {
+function TenantBusinessPicker({ email, businesses, onSelect, onSignOut, onOpenPlatform }) {
   return (
     <div className="auth-shell">
       <div className="auth-card" data-testid="tenant-picker">
@@ -13846,6 +13882,11 @@ function TenantBusinessPicker({ email, businesses, onSelect, onSignOut }) {
           </select>
         </label>
         <div className="finance-form-actions">
+          {onOpenPlatform && (
+            <button type="button" className="action-button" onClick={onOpenPlatform}>
+              Companies
+            </button>
+          )}
           <button type="button" className="action-button" onClick={onSignOut}>
             Sign out
           </button>
@@ -13855,7 +13896,7 @@ function TenantBusinessPicker({ email, businesses, onSelect, onSignOut }) {
   );
 }
 
-function AccessDeniedShell({ email, onSignOut }) {
+function AccessDeniedShell({ email, onSignOut, onOpenPlatform }) {
   return (
     <div className="auth-shell">
       <div className="auth-card">
@@ -13871,6 +13912,11 @@ function AccessDeniedShell({ email, onSignOut }) {
           </p>
         </div>
         <div className="finance-form-actions">
+          {onOpenPlatform && (
+            <button type="button" className="action-button" onClick={onOpenPlatform}>
+              Companies
+            </button>
+          )}
           <button type="button" className="action-button" onClick={onSignOut}>
             Sign out
           </button>

@@ -59,7 +59,7 @@ const supabaseUrl = () => process.env.SUPABASE_URL || process.env.VITE_SUPABASE_
 const anonKey = () => process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || null;
 const serviceKey = () => process.env.SUPABASE_SERVICE_ROLE_KEY || null;
 
-const callerClient = (accessToken) => {
+export const callerClient = (accessToken) => {
   if (!supabaseUrl() || !anonKey()) {
     throw createHttpError(503, "Supabase server configuration is incomplete.");
   }
@@ -157,6 +157,53 @@ export const serviceClientFor = (authorization) => {
     throw createHttpError(503, "Supabase server configuration is incomplete.");
   }
   return createClient(supabaseUrl(), serviceKey(), { auth: { autoRefreshToken: false, persistSession: false } });
+};
+
+// Platform administration (api/_lib/platformAdmin.js) only: created after the
+// caller was verified as an active platform admin. It never reads snapshots.
+export const platformServiceClientFor = (platformAuthorization) => {
+  if (!platformAuthorization?.platformAdmin || !platformAuthorization?.userId) {
+    throw createHttpError(500, "Platform service access requested without an authorized platform admin.");
+  }
+  if (!supabaseUrl() || !serviceKey()) {
+    throw createHttpError(503, "Supabase server configuration is incomplete.");
+  }
+  return createClient(supabaseUrl(), serviceKey(), { auth: { autoRefreshToken: false, persistSession: false } });
+};
+
+// Verification only: the caller's own platform_admins row (no browser grants on
+// that table, so the service role reads it, after the token is validated).
+const verifierClient = () => {
+  if (!supabaseUrl() || !serviceKey()) {
+    throw createHttpError(503, "Supabase server configuration is incomplete.");
+  }
+  return createClient(supabaseUrl(), serviceKey(), { auth: { autoRefreshToken: false, persistSession: false } });
+};
+
+// 1. A valid Supabase access token (401 otherwise).
+// 2. An ACTIVE row for that exact user id in public.platform_admins, which only
+//    the operator can write. Token metadata, request input and business roles
+//    (including Owner) never make anyone a platform admin. Any read error,
+//    including a missing table after a rollback, refuses (fail closed).
+export const authorizePlatformRequest = async (req) => {
+  const accessToken = getBearerToken(req);
+  if (!accessToken) throw createHttpError(401, "A Supabase access token is required.");
+  const client = callerClient(accessToken);
+  const {
+    data: { user },
+    error: userError,
+  } = await client.auth.getUser(accessToken);
+  if (userError || !user?.id) throw createHttpError(401, "The supplied Supabase access token is invalid or expired.");
+  const { data, error } = await verifierClient()
+    .from("platform_admins")
+    .select("user_id, active")
+    .eq("user_id", user.id)
+    .eq("active", true)
+    .maybeSingle();
+  if (error || !data || data.user_id !== user.id || data.active !== true) {
+    throw createHttpError(403, "This account does not have platform administration access.");
+  }
+  return { userId: user.id, email: user.email ?? null, platformAdmin: true };
 };
 
 export const readBusinessSnapshot = async (authorization) => {

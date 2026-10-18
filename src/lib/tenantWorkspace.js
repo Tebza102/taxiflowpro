@@ -183,3 +183,26 @@ export const membersRequest = async (body) => {
     return { ok: false, error: "Network error. Nothing was confirmed; try again." };
   }
 };
+
+// Platform administration (companies and their Owners). The server decides who
+// is a platform admin (operator-granted platform_admins row); a 403 simply hides
+// the console. Responses are company metadata only and are never cached.
+export const loadPlatformCompanies = async () => {
+  try {
+    const { status, json } = await apiFetch("/api/platform/businesses");
+    if (status === 200) return { ok: true, allowed: true, companies: json.companies ?? [] };
+    return { ok: false, allowed: false, status, error: json.error ?? "Platform access is not available." };
+  } catch {
+    return { ok: false, allowed: false, error: "Network error while loading companies." };
+  }
+};
+
+export const createPlatformCompany = async (fields) => {
+  try {
+    const { status, json } = await apiFetch("/api/platform/businesses", { method: "POST", body: { action: "company.create", fields } });
+    if (status === 200) return { ok: true, ...json };
+    return { ok: false, status, error: json.error ?? "The company could not be created." };
+  } catch {
+    return { ok: false, retryable: true, error: "Network error. Nothing is lost; repeating the same details is safe." };
+  }
+};

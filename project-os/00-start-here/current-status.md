@@ -1,16 +1,96 @@
 # Current Status
 
+## Public website on www (2026-10-18): RELEASED 15:53 SAST
+
+- **Live:** `https://www.taxiflow.co.za`. Commit `c55b990`; deployment `dpl_CY4Rbhm3LGfcAwZwSDQoogA5TRYd` (files identical to the reviewed Preview `dpl_5HJ3YjCEDmMS4YmqrTmgRV5Tnrhc`).
+- **Website PR:** https://github.com/Tebza102/taxiflowpro/pull/4 (not merged).
+- **App** `taxiflow.co.za`: unchanged (`jng5n1ced`).
+- Verification and rollback: `05-build/public-website.md` on `agent/public-website`.
+- The platform-admin release is still under its review gate (PR #3, file 05 not applied).
+
+### Before the release (history)
+
+- **Branch:** `agent/public-website` (from `origin/main`): `30636b5` (export, unchanged), `c55b990` (Log in link, tests, config), `fa732cf` (docs). Local; not pushed.
+- **Hosting:** new Vercel project `taxiflow-website` (not Git-connected).
+- **Preview:** `https://taxiflow-website-dt6j6b4zd-apprigate.vercel.app` (Vercel Authentication).
+- **Tests:** 9/9 Node; 30/30 browser smoke; Preview checks at 1440 px and 375 px pass; Log in reaches the app sign-in.
+- **Flag:** the walkthrough planner only downloads a brief. It does not persist enquiries or notify anyone, and it says so (no false success).
+- **Incident (fixed):** the new project's first deploy got a public `taxiflow-website.vercel.app` alias. It was removed (now 404).
+- **Conflict:** `www` is still on `taxiflowpro` as a 308 redirect. DNS needs no change.
+- **The app** (`taxiflow.co.za`) is unchanged.
+- Details: `05-build/public-website.md` (on the website branch).
+
+## Platform admin and multi-company onboarding (2026-10-18): BUILT and TESTED locally; NOT deployed
+
+Branch `agent/platform-admin-onboarding` (from `a85bde6`). **Pushed** with `6b0b249` and `946861d`; **draft PR** https://github.com/Tebza102/taxiflowpro/pull/3 (2 checks passing).
+
+**Preview** `https://taxiflowpro-kd3l04xjy-apprigate.vercel.app` (`dpl_GVo3AdGULhEfSBViNkRkqYyDnca4`): READY, built from `946861d`. Read-only checks:
+- the sign-in screen renders;
+- `/api/platform/businesses` returns 401 with no token (GET and POST) and with a garbage token, with `no-store`;
+- live `taxiflow.co.za/api/platform/businesses` returns 404 (the route is not deployed).
+
+**Limit:** the Preview environment has **no** `SUPABASE_SERVICE_ROLE_KEY` (it is set for Production only). A signed-in platform request on the Preview therefore fails closed with a 503 configuration error before it reaches `platform_admins`, so the Preview cannot demonstrate the "file 05 absent" denial itself. That denial is proven locally (`platform-admin-tests.mjs`: 403 after the file-05 rollback). Read-only production SQL (2026-10-18) shows `platform_admins` absent, 1 business, 6 active members, 1 Owner, no tables without RLS, and browser grants only `authenticated` SELECT on businesses and memberships.
+
+Production is unchanged: `jng5n1ced` = `e59417a`; the Supabase schema has release files 01–04 only.
+
+| | State |
+|---|---|
+| Built | Release file 05 `public.platform_admins` (operator-granted, browser-locked) + rollback; `GET/POST /api/platform/businesses` (company metadata, create company + Owner); Companies console in the app. Tenant 1 = the existing "TaxiFlow Pro" business, with no data change. Owners already onboard Admin/Manager/Driver (Task 18, unchanged). |
+| Tested | Local synthetic stack, real local Auth. Evidence: change log 2026-10-18. |
+| Deployed | **Nothing.** No production SQL, grant, push, merge or promote. |
+
+**Confirmed by Tebogo (2026-10-18):** the platform admin is `apprigate@gmail.com`. It stays an active Admin of TaxiFlow Pro unless the Owner removes it.
+
+**External blocker** (unchanged): DKIM for `taxiflow.co.za`. Inviting real new Owners waits for it, but the release itself does not.
+
+Procedure: `05-build/platform-admin-release.md`.
+
+## Frontend prototype integration (2026-10-12; re-checked 2026-10-18, still blocked)
+
+- **2026-10-18 re-check:** `https://taxiflow-pro-operations.divine-tune-4772.chatgpt.site` still shows only OpenAI's "Log in to access" gate.
+  - Every path, including `/`, `/index.html`, `/assets/` and `/manifest.json`, returns **401**.
+  - Only OpenAI's own gate assets load (`/_sites/dispatch-assets/*`).
+  - The design, source files and assets are not inspectable or downloadable.
+- **No exported copy** was found in Downloads, Desktop, Documents, OneDrive or the TaxiFlow Drive folder. The only lead is `Downloads/screencapture-localhost-8000-assets-mockups-working-prototype-v2-index-html-2026-08-30…png`, an older local mockup. It is **not confirmed** as the approved design.
+- No frontend code was changed.
+
+- Feature branch: `codex/frontend-prototype-integration`, created from `a85bde66adf9941198685619c02d09303526456c` (current release lineage plus documentation updates). `origin/main` is `e59417a96b6df23b8d0bc0dfe08c03971e9f5da1`; local `main` remains older at `008ce8e`.
+- Initial worktree clean; origin is `https://github.com/Tebza102/taxiflowpro`. Recorded unused stash `bd2b25a5d48b34fdf557bacc04b8a9793d8da0f1` preserved without applying or dropping it.
+- Reference `https://taxiflow-pro-operations.divine-tune-4772.chatgpt.site` shows “Log in to access”; Continue with ChatGPT leads to `auth.openai.com/log-in` requiring a fresh login. Layout, interactions and desktop/mobile design are not yet inspectable. No exported prototype source provided.
+- Application code unchanged; no backend, production, credentials, schema, email, DNS, push or deployment action. Implementation and validation have not started.
+
 ## Summary
 
 TaxiFlow Pro is currently in a production-hardening release phase on draft PR #2. The feature branch has replaced premature client-side success reporting for live Supabase mutations with confirmed persistence patterns, hardened Owner-first authentication and user lifecycle handling, standardised the live workspace contract, added password recovery, and preserved the existing finance workflow. Application logic is already substantially implemented; the remaining work is release validation and controlled rollout, not product redesign.
 
+## Release state (2026-10-11, stabilisation closed): secure tenant app LIVE for existing users; new-Owner onboarding ON HOLD (DKIM)
+
+The secure tenant release is live on `https://taxiflow.co.za`. Rows 1–11 and 13 PASS. Row 12 works, but one email criterion fails (DKIM), so **onboarding new Owners is on hold** until the hosting ticket (`05-build/email-dkim-hosting-ticket.md`) is resolved and DKIM passes on a repeat test.
+
+| Item | Value |
+|---|---|
+| Deployed code | `origin/main` = `e59417a96b6df23b8d0bc0dfe08c03971e9f5da1` (code fix `288e3f2`; later commits are Project OS only) |
+| Live deployment | `taxiflowpro-jng5n1ced` (`dpl_FruSfHfKnvUv8Gv367g6wzeduEpv`), promoted; `taxiflow.co.za` stays attached |
+| Other deployments | `cmlp6fmww` (maintenance fallback) and `301dw9v3b` (branch Preview) only; bypass secrets: 0; auto-assign off |
+| Supabase | `vfxftviwteypasredjgm`; release files 01–04 applied, all post-checks PASS; legacy JWT keys disabled; publishable `web_app` and secret `vercel_production` only |
+| Data | 1 business "TaxiFlow Pro"; **6 active memberships** (re-read 2026-10-18); 1 active Owner (`owner@apprigate.com`). **Correction:** `apprigate@gmail.com` is an **active Admin**, not inactive. It was removed at 14:18 UTC and restored by the Owner at 16:40 UTC on 2026-10-11 (snapshot audit trail), after the 18:00 SAST note. |
+| Backups (all in `C:\Users\appri\taxiflow-recovery\backups` and `G:\My Drive\TaxiFlow backups`, SHA-256 matches; Drive for Desktop reported 0 pending uploads at 17:51 SAST) | final pre-migration `…T07-38-37-806Z` (`390a7d12…`); after-release `…T15-15-11-698Z` tenant format (`7ce304fb…`) |
+| Auth URLs | Site URL `https://taxiflow.co.za`; redirects `https://taxiflow.co.za/**` only |
+| Email | SMTP `notifications@taxiflow.co.za` as "TaxiFlow"; delivered, but to Gmail **Spam**; SPF and DMARC pass, DKIM `taxiflow.co.za` **fail**. Proven: the only Message-ID was added by the relay after the cPanel signature. Hypothesis: that addition breaks the signature. Ticket drafted, not sent |
+
+**Open findings:**
+1. Grant-access role: **closed, no code change.** Normal selection (pointer and keyboard) saves Admin, Manager and Driver exactly, persists after reload, and gives the matching server permissions (`tests/localdb-browser/tenant-access-roles.spec.js`, 1/1). The row 12 mismatch came only from browser automation that changed the dropdown without a change event.
+2. DKIM / Spam (above): **the single outstanding blocker** for new-Owner onboarding.
+
+Unused stash kept on purpose: `stash@{0}` (`bd2b25a5d48b34fdf557bacc04b8a9793d8da0f1`, "WIP on agent/tenant-db-foundation: e636df3 …"), the candidate grant-role change (not applied, not deployed).
+3. The layout differs from the legacy app; no functional problem.
+4. Chrome autofill puts a random value in the email field (Tebogo's saved entries).
+
+Evidence for each row: `05-build/pilot-release-checklist.md` and `08-logs/change-log.md` (2026-10-11 entries).
+
 ## Working Branch
 
-`agent/owner-first-auth-reset`
-
-Draft PR: `#2 — Harden production auth and reset to Owner-first access`
-
-Do not merge this branch to `main` until the release gates below are satisfied.
+`agent/tenant-db-foundation` (fast-forwarded into `main` for the release). The older sections below are history.
 
 ### Local commits not yet pushed (2026-10-09)
 

@@ -2820,3 +2820,43 @@ button {
 .tenant-access-detail {
   overflow-wrap: anywhere;
 }
+
+/* Platform admin Companies console */
+.platform-card {
+  width: min(100%, 40rem);
+}
+
+.platform-company-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.platform-company-row {
+  display: grid;
+  gap: 0.15rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: 0.9rem;
+  border: 1px solid rgba(10, 25, 37, 0.1);
+  overflow-wrap: anywhere;
+}
+
+.platform-company-row span {
+  font-size: 0.85rem;
+  color: var(--subtext);
+}
+
+.platform-form {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.platform-form h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.platform-checkbox {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}

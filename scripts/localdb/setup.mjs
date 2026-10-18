@@ -120,6 +120,7 @@ export const HOSTED_RELEASE = [
   path.join(MIGRATIONS_DIR, "20261010063144_finance_actions.sql"),
   path.join(MIGRATIONS_DIR, "20261010113000_pilot_onboarding.sql"),
   path.join(MIGRATIONS_DIR, "20261011090000_assign_initial_owner.sql"),
+  path.join(MIGRATIONS_DIR, "20261018090000_platform_admins.sql"),
 ];
 
 export const rebuild = ({ seed, hosted = false, releaseFiles = true }) => {

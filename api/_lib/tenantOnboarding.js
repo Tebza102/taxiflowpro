@@ -105,7 +105,7 @@ const audit = (actorId, title, detail) => ({
 });
 
 // --- Operator: create a business with its initial Owner -----------------------------
-export const buildInitialSnapshot = ({ name, owner, ownerDriver }) => ({
+export const buildInitialSnapshot = ({ name, owner, ownerDriver, createdBy }) => ({
   profile: { fleetName: name, legalEntity: name, district: "" },
   appUsers: [
     directoryEntry({ email: owner.email, name: owner.name, role: "Owner", staffId: ownerDriver?.staffId ?? null, active: true }),
@@ -118,10 +118,13 @@ export const buildInitialSnapshot = ({ name, owner, ownerDriver }) => ({
   financeTransactions: [],
   dailyCashUps: [],
   deposits: [],
-  auditTrail: [],
+  // A company created in the platform console records who created it.
+  auditTrail: createdBy
+    ? [{ id: `audit-${randomUUID()}`, timestamp: new Date().toISOString(), scope: "settings", actorId: createdBy.userId, actorRole: "Platform admin", source: "server", title: "Company created", detail: `${name} / Owner ${owner.email}` }]
+    : [],
 });
 
-export const createBusinessWithOwner = async (service, { slug, name, ownerEmail, ownerName, ownerDrives = false, redirectTo }) => {
+export const createBusinessWithOwner = async (service, { slug, name, ownerEmail, ownerName, ownerDrives = false, redirectTo, createdBy = null }) => {
   const normalizedSlug = text(slug).toLowerCase();
   if (!SLUG.test(normalizedSlug)) throw bad("The business slug must be 3-63 lowercase letters, digits or dashes.");
   if (!text(name)) throw bad("The business name is required.");
@@ -130,7 +133,7 @@ export const createBusinessWithOwner = async (service, { slug, name, ownerEmail,
 
   const account = await ensureAuthUser(service, { email, name: ownerName, redirectTo });
   const ownerDriver = ownerDrives ? { staffId: `drv-${normalizedSlug}-owner`, name: text(ownerName) || email } : null;
-  const snapshot = buildInitialSnapshot({ name: text(name), owner: { email, name: ownerName }, ownerDriver });
+  const snapshot = buildInitialSnapshot({ name: text(name), owner: { email, name: ownerName }, ownerDriver, createdBy });
   const { data, error } = await service.rpc("create_business_with_owner", {
     p_slug: normalizedSlug,
     p_name: text(name),

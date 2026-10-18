@@ -225,3 +225,8 @@ dialog select{font-size:16px}
  *,*:before,*:after{animation:none!important;transition:none!important}
  .reveal-ready{opacity:1;transform:none}
 }
+
+/* Log in: link to the operations app sign-in (https://taxiflow.co.za). */
+.header nav a.nav-login{color:var(--gold);font-weight:600;border:1px solid #ffb60099;border-radius:4px;padding:10px 16px;margin-left:4px}
+.header nav a.nav-login:hover{color:var(--ink);background:var(--gold)}
+@media(max-width:850px){.header nav.is-open a.nav-login{margin:6px 0 0;padding-block:12px;text-align:center;border:1px solid #ffb60099}}

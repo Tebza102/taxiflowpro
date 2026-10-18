@@ -29,7 +29,7 @@ test('local assets, fragment links and tab references resolve',()=>{
   assert.equal(ids.length,new Set(ids).size,'duplicate element ID');
   for(const m of html.matchAll(/\bhref="#([^"\s]+)"/g))assert.ok(ids.includes(m[1]),`missing anchor ${m[1]}`);
   for(const m of html.matchAll(/\baria-(?:controls|labelledby)="([^"]+)"/g))for(const id of m[1].split(' '))assert.ok(ids.includes(id),`missing ARIA target ${id}`);
-  for(const m of html.matchAll(/(?:href|src)="([^"#][^"]*)"/g))assert.ok(fs.existsSync(path.join(root,'dist',m[1])),`missing asset ${m[1]}`);
+  for(const m of html.matchAll(/(?:href|src)="([^"#][^"]*)"/g))if(!m[1].startsWith('https://'))assert.ok(fs.existsSync(path.join(root,'dist',m[1])),`missing asset ${m[1]}`);
 });
 
 test('prototype enquiries are explicitly disclosed and send no contact data',()=>{

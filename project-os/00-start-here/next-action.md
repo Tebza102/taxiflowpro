@@ -1,5 +1,28 @@
 # Next Action
 
+## Platform admin release (2026-10-18): review, then a controlled production release
+
+The branch `agent/platform-admin-onboarding` is built and locally tested. Nothing is deployed.
+
+1. **Tebogo:**
+   - confirm that the platform-admin login is `apprigate@gmail.com`;
+   - authorize the push and the PR (a push builds a Vercel **Preview** against the live Supabase project; without file 05 its platform API refuses everyone).
+2. **Review the PR.** Then, on authorization, follow `05-build/platform-admin-release.md`:
+   - backup (Tebogo types the passphrase);
+   - file 05;
+   - grant;
+   - merge;
+   - promote;
+   - live checks;
+   - after-release backup.
+3. **Onboarding real companies** waits for DKIM to pass (send `05-build/email-dkim-hosting-ticket.md`). Set-up data still goes through `load-business-data.mjs`.
+
+Rollback: re-promote `jng5n1ced`; file 05 is additive.
+
+## Frontend prototype integration next action (2026-10-12)
+
+Provide access to the approved reference by signing in to the browser pane, or provide the exported prototype files/local folder. Then inspect desktop/mobile screens, map public versus authenticated screens to existing routes and tenant gateway, and implement only the approved presentation changes on `codex/frontend-prototype-integration`. Preserve auth, membership-derived roles, business isolation, snapshot versions, stable retry IDs, conflicts, finance/report flows and the unused stash. Validate against the existing local synthetic backend. No push, merge or deployment authorized. Existing DKIM onboarding hold remains separate and unchanged.
+
 ## Immediate Next Step (updated 2026-10-11, stabilisation CLOSED)
 
 **Stabilisation is closed. Existing users can use the app today. The single outstanding blocker for onboarding new Owners is the DKIM hosting ticket.** No more app changes or repeat tests for this task.

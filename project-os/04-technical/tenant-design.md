@@ -426,3 +426,41 @@ In tenant mode these writes are still blocked. Before go-live, the operator coll
 3. Hosted email: the Supabase project's SMTP and redirect URLs for the password-setup email (local uses Mailpit).
 4. Live or hosted UAT of the pilot flows.
 5. A removed user sees the generic "Account not mapped" screen; clearer wording is optional.
+
+## Platform administration and company onboarding (2026-10-18, release file 05)
+
+Branch `agent/platform-admin-onboarding`. Local only; nothing hosted. Release procedure: `05-build/platform-admin-release.md`.
+
+### Model
+- **`public.platform_admins (user_id → auth.users, active, granted_at, granted_by, note)`:**
+  - RLS is enabled and forced;
+  - anon, authenticated and PUBLIC get nothing; the service role gets `select` only;
+  - rows are written only by the operator (postgres);
+  - there is no grant RPC, so no app or API path can grant it.
+- **A platform grant is not a membership.** It gives no company data access, and a platform admin's role in any company stays exactly their membership role.
+- **Tenant 1** is the existing mapped business "TaxiFlow Pro" (`…00a`, slug `taxiflow-legacy`). The console numbers companies by creation order. Data is unchanged.
+
+### Server (`api/platform/businesses.js`, `api/_lib/platformAdmin.js`)
+- **`authorizePlatformRequest`:**
+  - token validated by Supabase Auth (401 otherwise);
+  - then the caller's own active `platform_admins` row (403 otherwise);
+  - any read error, including a missing table, refuses.
+- **`GET`:** company metadata only (name, slug, created, Owner emails, active member count). Never snapshots. `Cache-Control: no-store`.
+- **`POST company.create`** reuses `createBusinessWithOwner`: one transaction, idempotent by slug, slug hijack refused.
+  - Fields allowed: `name`, `slug?`, `ownerEmail`, `ownerName?`, `ownerDrives?`. Any other field gets 400.
+  - The platform admin's own email as Owner gets 403 (separation of duties).
+  - The new company's audit trail records "Company created" with the platform admin as actor.
+- **Owner account:**
+  - a new account is created with no known password and gets the setup email;
+  - an existing account is reused unchanged: no reset, no email, other memberships untouched.
+
+### Frontend
+- After sign-in, `loadPlatformCompanies` decides whether the "Companies" button appears (tenant bar, business picker and the no-membership screen). A 403 hides it.
+- `PlatformCompaniesPanel` lists companies and creates a company with its Owner.
+- No company data is loaded there, and nothing is cached: `/api/*` bypasses the service worker, and the responses are no-store.
+
+### Evidence
+See the 2026-10-18 change-log entry:
+- `scripts/localdb/platform-admin-tests.mjs`;
+- `tests/platform-admin.test.mjs`;
+- `tests/localdb-browser/platform-onboarding.spec.js`.

@@ -1377,3 +1377,76 @@ Recorded for later review (out of scope): **the layout looks different from the 
 - **Unused stash preserved:** `stash@{0}` (`bd2b25a5d48b34fdf557bacc04b8a9793d8da0f1`, "WIP on agent/tenant-db-foundation: e636df3 …"), the candidate FormData grant-role change to `TenantAccessPanel.jsx`. Do not drop or apply it without a new decision.
 - **E1 raw headers:** none were found in the transcripts on this machine; the ticket cites the E1 Exim id and the Gmail pass result.
 - **Next week, separate task:** the operator dashboard.
+
+### 2026-10-12 — Frontend prototype integration preflight; reference access blocked
+
+Created codex/frontend-prototype-integration from a85bde6, the current release lineage plus later documentation. Initial worktree clean; origin/main e59417a; local main 008ce8e. Unused stash bd2b25a preserved. Published prototype requires OpenAI sign-in; no accessible design or exported source yet. No application edits or tests; no external changes, push, merge or deployment. Next: user signs in to reference or supplies exported files, then desktop/mobile inspection and scoped synthetic-backend integration.
+
+### 2026-10-18 — Platform admin and multi-company onboarding: built and tested locally; not deployed
+
+Branch `agent/platform-admin-onboarding` (from `a85bde6`), local commits; not pushed.
+
+**Discovery (read-only):**
+- Production is `jng5n1ced` = `e59417a`.
+- Supabase has 1 business (TaxiFlow Pro, `…00a`) and 6 active memberships.
+- `apprigate@gmail.com` is an **active Admin**, restored at 16:40 UTC on 2026-10-11. This corrects the earlier "inactive" note.
+- Tenancy, memberships, Owner staff onboarding, scoped Driver payloads, reports and finance actions were already live and were reused unchanged.
+
+**Built:**
+- **Release file 05** `scripts/localdb/migrations/20261018090000_platform_admins.sql` and its rollback:
+  - RLS enabled and forced;
+  - no anon, authenticated or PUBLIC grants; the service role gets select only;
+  - no policies and no grant function; writes are operator only.
+  - It is registered in `apply-release.mjs` and in the local rehearsal.
+- **API:**
+  - `authorizePlatformRequest` in `api/_lib/tenantAuth.js`;
+  - `api/_lib/platformAdmin.js`;
+  - `GET/POST /api/platform/businesses`, which returns company metadata only and runs `company.create` through the existing `createBusinessWithOwner`.
+  - The creating platform admin is recorded in the new company's audit trail.
+- **UI:** `src/components/PlatformCompaniesPanel.jsx`. The "Companies" button appears only for platform admins: in the tenant bar, the business picker and the no-membership screen.
+- **Design decisions:**
+  - the platform grant gives no company data access;
+  - a platform admin cannot make themselves Owner of a company they create;
+  - Tenant 1 is the existing business, with no data change.
+
+**Defect found and fixed during testing:**
+- The first version of file 05 had a `using (true)` policy for the service role. It did nothing, because the service role bypasses RLS, but `verify.mjs` flags it as permissive.
+- Removed. `verify.mjs` now also expects `platform_admins` and checks RLS on it.
+
+**Evidence** (local synthetic stack, real local Auth, a fresh reset per suite):
+
+| Check | Result |
+|---|---|
+| `platform-admin-tests.mjs` | 75/75, then 75/75 again on the final file 05 (14:00) |
+| Browser `platform-onboarding.spec.js` | 1/1 alone, and within the full localdb browser suite 11/11 on the final file 05 |
+| Node unit tests | 342/342 |
+| Sync guards | pass |
+| Build | pass |
+| Mock-backend Playwright | 34/34 |
+| `verify.mjs` (final file 05) | 16 PASS, 0 WARN, 0 FAIL |
+| Tenant access | 36/36 |
+| Tenant rollback | 8/8 |
+| Server auth | 26/26 |
+| Onboarding | 64/64 |
+| Finance actions | 56/56 |
+| Finance capture | 43/43 |
+| Finance record | 36/36 |
+| Expense-only days | 32/32 |
+| Backup/restore | 35/35 |
+| Hosted rehearsal (exact live-schema copy plus files 01–05) | 22/22 |
+| `apply-release.mjs --target local` re-run | already-applied files skipped; post-checks PASS (RLS on every public table; no browser-executable function) |
+
+What `platform-admin-tests.mjs` covers:
+- **Who is refused:** no token, garbage token, Owner, Admin, Driver and non-member; forged token metadata; browser and service-role writes to the grant table.
+- **Operator grant:** Tenant 1 is listed as Tenant 1; the list is metadata only and no-store.
+- **No extra power:** the platform admin keeps exactly Admin in Tenant 1 and has no access to company B or to the companies it creates.
+- **Create refusals:** forged fields, invalid input and self-ownership.
+- **Create, then a retry:** a no-op with no second email; slug hijack refused.
+- **Existing account as Owner:** no reset, and its Tenant 1 membership unchanged.
+- **New company:** the Owner sets their own password from the email and sees only company 2; the Owner grants Admin, Manager and Driver, and cannot mint an Owner or act in Tenant 1.
+- **Driver:** saves an expense that persists; the payload is driver-scoped; no member list.
+- **Manager:** sees the Driver's save; is refused a Tenant 1 report.
+- **Unchanged:** Tenant 1 and B snapshot hashes and memberships.
+- **Fail closed:** after revocation and after the file-05 rollback; companies are kept; re-applying is idempotent.
+
+**Not done:** no production SQL, grant, push, merge, promote or email. Real Owner invitations still wait for DKIM.

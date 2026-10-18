@@ -1,5 +1,28 @@
 # Current Status
 
+## Platform admin and multi-company onboarding (2026-10-18): BUILT and TESTED locally; NOT deployed
+
+Branch `agent/platform-admin-onboarding` (from `a85bde6`); local commits only, not pushed. Production is unchanged: `jng5n1ced` = `e59417a`; the Supabase schema has release files 01–04 only.
+
+| | State |
+|---|---|
+| Built | Release file 05 `public.platform_admins` (operator-granted, browser-locked) + rollback; `GET/POST /api/platform/businesses` (company metadata, create company + Owner); Companies console in the app. Tenant 1 = the existing "TaxiFlow Pro" business, with no data change. Owners already onboard Admin/Manager/Driver (Task 18, unchanged). |
+| Tested | Local synthetic stack, real local Auth. Evidence: change log 2026-10-18. |
+| Deployed | **Nothing.** No production SQL, grant, push, merge or promote. |
+
+**Assumption to confirm:** the platform admin is `apprigate@gmail.com` (the session's login). It stays an active Admin of TaxiFlow Pro unless the Owner removes it.
+
+**External blocker** (unchanged): DKIM for `taxiflow.co.za`. Inviting real new Owners waits for it, but the release itself does not.
+
+Procedure: `05-build/platform-admin-release.md`.
+
+## Frontend prototype integration (2026-10-12; local preflight only)
+
+- Feature branch: `codex/frontend-prototype-integration`, created from `a85bde66adf9941198685619c02d09303526456c` (current release lineage plus documentation updates). `origin/main` is `e59417a96b6df23b8d0bc0dfe08c03971e9f5da1`; local `main` remains older at `008ce8e`.
+- Initial worktree clean; origin is `https://github.com/Tebza102/taxiflowpro`. Recorded unused stash `bd2b25a5d48b34fdf557bacc04b8a9793d8da0f1` preserved without applying or dropping it.
+- Reference `https://taxiflow-pro-operations.divine-tune-4772.chatgpt.site` shows “Log in to access”; Continue with ChatGPT leads to `auth.openai.com/log-in` requiring a fresh login. Layout, interactions and desktop/mobile design are not yet inspectable. No exported prototype source provided.
+- Application code unchanged; no backend, production, credentials, schema, email, DNS, push or deployment action. Implementation and validation have not started.
+
 ## Summary
 
 TaxiFlow Pro is currently in a production-hardening release phase on draft PR #2. The feature branch has replaced premature client-side success reporting for live Supabase mutations with confirmed persistence patterns, hardened Owner-first authentication and user lifecycle handling, standardised the live workspace contract, added password recovery, and preserved the existing finance workflow. Application logic is already substantially implemented; the remaining work is release validation and controlled rollout, not product redesign.
@@ -14,7 +37,7 @@ The secure tenant release is live on `https://taxiflow.co.za`. Rows 1–11 and 1
 | Live deployment | `taxiflowpro-jng5n1ced` (`dpl_FruSfHfKnvUv8Gv367g6wzeduEpv`), promoted; `taxiflow.co.za` stays attached |
 | Other deployments | `cmlp6fmww` (maintenance fallback) and `301dw9v3b` (branch Preview) only; bypass secrets: 0; auto-assign off |
 | Supabase | `vfxftviwteypasredjgm`; release files 01–04 applied, all post-checks PASS; legacy JWT keys disabled; publishable `web_app` and secret `vercel_production` only |
-| Data | 1 business "TaxiFlow Pro"; 5 active memberships; 1 active Owner; 1 inactive test membership (`apprigate@gmail.com`; its remaining sign-in session sees 0 businesses and 0 memberships, verified 18:00 SAST) |
+| Data | 1 business "TaxiFlow Pro"; **6 active memberships** (re-read 2026-10-18); 1 active Owner (`owner@apprigate.com`). **Correction:** `apprigate@gmail.com` is an **active Admin**, not inactive. It was removed at 14:18 UTC and restored by the Owner at 16:40 UTC on 2026-10-11 (snapshot audit trail), after the 18:00 SAST note. |
 | Backups (all in `C:\Users\appri\taxiflow-recovery\backups` and `G:\My Drive\TaxiFlow backups`, SHA-256 matches; Drive for Desktop reported 0 pending uploads at 17:51 SAST) | final pre-migration `…T07-38-37-806Z` (`390a7d12…`); after-release `…T15-15-11-698Z` tenant format (`7ce304fb…`) |
 | Auth URLs | Site URL `https://taxiflow.co.za`; redirects `https://taxiflow.co.za/**` only |
 | Email | SMTP `notifications@taxiflow.co.za` as "TaxiFlow"; delivered, but to Gmail **Spam**; SPF and DMARC pass, DKIM `taxiflow.co.za` **fail**. Proven: the only Message-ID was added by the relay after the cPanel signature. Hypothesis: that addition breaks the signature. Ticket drafted, not sent |

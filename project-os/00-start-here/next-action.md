@@ -4,10 +4,8 @@
 
 The branch `agent/platform-admin-onboarding` is built and locally tested. Nothing is deployed.
 
-1. **Tebogo:**
-   - confirm that the platform-admin login is `apprigate@gmail.com`;
-   - authorize the push and the PR (a push builds a Vercel **Preview** against the live Supabase project; without file 05 its platform API refuses everyone).
-2. **Review the PR.** Then, on authorization, follow `05-build/platform-admin-release.md`:
+1. ~~Confirm the platform admin and push~~: done. `apprigate@gmail.com` is confirmed; the draft PR is https://github.com/Tebza102/taxiflowpro/pull/3; the Preview is `taxiflowpro-kd3l04xjy`.
+2. **Review PR #3.** Then, on authorization, follow `05-build/platform-admin-release.md`:
    - backup (Tebogo types the passphrase);
    - file 05;
    - grant;

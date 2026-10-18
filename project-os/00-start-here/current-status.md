@@ -2,7 +2,16 @@
 
 ## Platform admin and multi-company onboarding (2026-10-18): BUILT and TESTED locally; NOT deployed
 
-Branch `agent/platform-admin-onboarding` (from `a85bde6`); local commits only, not pushed. Production is unchanged: `jng5n1ced` = `e59417a`; the Supabase schema has release files 01–04 only.
+Branch `agent/platform-admin-onboarding` (from `a85bde6`). **Pushed** with `6b0b249` and `946861d`; **draft PR** https://github.com/Tebza102/taxiflowpro/pull/3 (2 checks passing).
+
+**Preview** `https://taxiflowpro-kd3l04xjy-apprigate.vercel.app` (`dpl_GVo3AdGULhEfSBViNkRkqYyDnca4`): READY, built from `946861d`. Read-only checks:
+- the sign-in screen renders;
+- `/api/platform/businesses` returns 401 with no token (GET and POST) and with a garbage token, with `no-store`;
+- live `taxiflow.co.za/api/platform/businesses` returns 404 (the route is not deployed).
+
+**Limit:** the Preview environment has **no** `SUPABASE_SERVICE_ROLE_KEY` (it is set for Production only). A signed-in platform request on the Preview therefore fails closed with a 503 configuration error before it reaches `platform_admins`, so the Preview cannot demonstrate the "file 05 absent" denial itself. That denial is proven locally (`platform-admin-tests.mjs`: 403 after the file-05 rollback). Read-only production SQL (2026-10-18) shows `platform_admins` absent, 1 business, 6 active members, 1 Owner, no tables without RLS, and browser grants only `authenticated` SELECT on businesses and memberships.
+
+Production is unchanged: `jng5n1ced` = `e59417a`; the Supabase schema has release files 01–04 only.
 
 | | State |
 |---|---|
@@ -10,7 +19,7 @@ Branch `agent/platform-admin-onboarding` (from `a85bde6`); local commits only, n
 | Tested | Local synthetic stack, real local Auth. Evidence: change log 2026-10-18. |
 | Deployed | **Nothing.** No production SQL, grant, push, merge or promote. |
 
-**Assumption to confirm:** the platform admin is `apprigate@gmail.com` (the session's login). It stays an active Admin of TaxiFlow Pro unless the Owner removes it.
+**Confirmed by Tebogo (2026-10-18):** the platform admin is `apprigate@gmail.com`. It stays an active Admin of TaxiFlow Pro unless the Owner removes it.
 
 **External blocker** (unchanged): DKIM for `taxiflow.co.za`. Inviting real new Owners waits for it, but the release itself does not.
 

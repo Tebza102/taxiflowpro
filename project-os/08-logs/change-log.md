@@ -1450,3 +1450,28 @@ What `platform-admin-tests.mjs` covers:
 - **Fail closed:** after revocation and after the file-05 rollback; companies are kept; re-applying is idempotent.
 
 **Not done:** no production SQL, grant, push, merge, promote or email. Real Owner invitations still wait for DKIM.
+
+### 2026-10-18 — Platform admin branch pushed; draft PR #3; Preview verified (read-only)
+
+- Tebogo confirmed `apprigate@gmail.com` as the platform admin.
+- Pushed `agent/platform-admin-onboarding` (`6b0b249`, `946861d`).
+- Draft PR https://github.com/Tebza102/taxiflowpro/pull/3: 2 checks passing.
+- **Preview** `taxiflowpro-kd3l04xjy` (`dpl_GVo3AdGULhEfSBViNkRkqYyDnca4`): READY from `946861d`.
+  - The sign-in screen renders.
+  - The platform route returns 401 with no token (GET and POST) and with a garbage token (validated by production Auth), with `no-store`.
+- Live `taxiflow.co.za/api/platform/businesses` returns 404.
+- **Finding:** the Preview has no service-role key. A signed-in platform request there fails closed (503) before the `platform_admins` lookup, so the "file 05 absent" denial is proven locally, not on the Preview. Not changed: giving the Preview the production secret would weaken isolation.
+- **Production, read-only SQL:**
+  - `platform_admins` absent;
+  - businesses 1, active memberships 6, active Owners 1;
+  - snapshot last updated 2026-10-11 19:18 UTC;
+  - no tables without RLS;
+  - browser grants only `authenticated` SELECT on businesses and memberships.
+- **DKIM DNS** (read-only, public DNS, 2026-10-18):
+  - SPF `v=spf1 +mx +ip4:164.160.91.17 include:spf.zamailgate.com ~all` (the `+a` mechanism is gone);
+  - DKIM `default._domainkey` RSA key published;
+  - DMARC `v=DMARC1; p=none;`;
+  - MX `0 mail.taxiflow.co.za` (164.160.91.17);
+  - NS `ns3/ns5.za-dns.com`.
+  - No DNS change is indicated: webmail mail passed DKIM with the same selector. The ticket is unchanged and not sent.
+- No production SQL writes, grants, merge, promote, companies or emails.

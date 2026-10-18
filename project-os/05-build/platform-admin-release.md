@@ -19,7 +19,7 @@ Tenant 1 is the existing business "TaxiFlow Pro" (`10000000-0000-4000-8000-00000
 
 ## Decision before the grant (Tebogo)
 
-Which login becomes platform admin. Assumed: `apprigate@gmail.com`.
+Which login becomes platform admin. **Confirmed by Tebogo on 2026-10-18:** `apprigate@gmail.com`.
 - Today it is also an **active Admin** of TaxiFlow Pro: restored 2026-10-11 16:40 UTC, after the earlier "inactive" note.
 - The platform grant does not change that membership. Keep it or remove it in Business access as you prefer; the console works either way.
 - The platform admin cannot make itself the Owner of a company it creates.

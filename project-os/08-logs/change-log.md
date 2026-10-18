@@ -1490,3 +1490,14 @@ What `platform-admin-tests.mjs` covers:
 - **Finding:** it is a public marketing site with **no Login control**, not an app redesign. This supersedes the earlier note proposing a `SignInShell` restyle.
 - **The app owns the `taxiflow.co.za` root** (PWA scope, service worker, recovery links), so the site should be hosted separately (recommended: `www` subdomain) with a "Log in" link to the existing sign-in.
 - Details, missing inputs and estimate: `05-build/public-website-assessment.md`. No frontend code changed.
+
+### 2026-10-18 — Public website: separate project and Preview; www unchanged
+
+- `agent/public-website`:
+  - the export copied byte-identically (SHA-256 checked; original untouched);
+  - Log in added to the nav and the mobile menu, pointing to `https://taxiflow.co.za`;
+  - every CTA audited.
+- New Vercel project `taxiflow-website`; Preview `dt6j6b4zd` verified in the browser.
+- **Incident:** the first deploy was recorded as project-Production with a public `taxiflow-website.vercel.app` alias. Alias removed.
+- No domain, DNS, app, Auth or database change.
+- Tests: Node 9/9, browser smoke 30/30, app build passes.

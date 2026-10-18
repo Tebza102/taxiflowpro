@@ -1,5 +1,13 @@
 # Next Action
 
+## Public website (2026-10-18): Tebogo reviews the Preview, then authorizes the www move
+
+1. Review `https://taxiflow-website-dt6j6b4zd-apprigate.vercel.app` on desktop and phone.
+2. Decide the content items: the preview strip, the "Website prototype" footer, pricing, privacy, and the enquiry destination.
+3. Authorize: push the branch; `vercel deploy --prod` for `taxiflow-website`; move `www.taxiflow.co.za` from `taxiflowpro` (redirect) to `taxiflow-website`.
+
+Steps and rollback: `05-build/public-website.md` on `agent/public-website`.
+
 ## Platform admin release (2026-10-18): review, then a controlled production release
 
 The branch `agent/platform-admin-onboarding` is built and locally tested. Nothing is deployed.

@@ -1,5 +1,17 @@
 # Current Status
 
+## Public website on www (2026-10-18): Preview built for visual review; www NOT reassigned
+
+- **Branch:** `agent/public-website` (from `origin/main`): `30636b5` (export, unchanged), `c55b990` (Log in link, tests, config), `fa732cf` (docs). Local; not pushed.
+- **Hosting:** new Vercel project `taxiflow-website` (not Git-connected).
+- **Preview:** `https://taxiflow-website-dt6j6b4zd-apprigate.vercel.app` (Vercel Authentication).
+- **Tests:** 9/9 Node; 30/30 browser smoke; Preview checks at 1440 px and 375 px pass; Log in reaches the app sign-in.
+- **Flag:** the walkthrough planner only downloads a brief. It does not persist enquiries or notify anyone, and it says so (no false success).
+- **Incident (fixed):** the new project's first deploy got a public `taxiflow-website.vercel.app` alias. It was removed (now 404).
+- **Conflict:** `www` is still on `taxiflowpro` as a 308 redirect. DNS needs no change.
+- **The app** (`taxiflow.co.za`) is unchanged.
+- Details: `05-build/public-website.md` (on the website branch).
+
 ## Platform admin and multi-company onboarding (2026-10-18): BUILT and TESTED locally; NOT deployed
 
 Branch `agent/platform-admin-onboarding` (from `a85bde6`). **Pushed** with `6b0b249` and `946861d`; **draft PR** https://github.com/Tebza102/taxiflowpro/pull/3 (2 checks passing).

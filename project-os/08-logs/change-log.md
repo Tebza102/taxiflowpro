@@ -1519,3 +1519,6 @@ What `platform-admin-tests.mjs` covers:
 - **Unchanged:** data (membership and snapshot fingerprints) and www.
 - **After-release backup:** PASS (`62345aea…`, off-machine hashes match).
 - **Signed-in checks:** still pending; the pane had no session.
+- **User-verified** (Tebogo, own browser): the Companies button is visible; only TaxiFlow Pro is listed; the role is still Admin; existing records are visible after a refresh.
+- **Unverified in production:** the Owner, Driver, Admin-grant, non-member and Owner-minting restrictions (proven locally only).
+- **Remaining rollout blocker:** DKIM, which blocks real Owner invitations.

@@ -1,13 +1,10 @@
 # Next Action
 
-## Platform admin live (2026-10-18): finish the signed-in checks
+## Platform admin live (2026-10-18): release closed; remaining rollout items
 
-1. Sign in as `apprigate@gmail.com` **inside the agent's browser pane**. The agent then checks, read-only and with no company created:
-   - Companies lists Tenant 1: TaxiFlow Pro;
-   - the Tenant 1 role is still Admin and the data loads;
-   - Admin still cannot grant access;
-   - a non-member business is refused.
-2. Confirm that Drive for Desktop has uploaded both 2026-10-18 backups.
+1. **Done (user-verified):** Companies is visible; only TaxiFlow Pro is listed; the role is still Admin; records survive a refresh.
+2. **Optional:** production checks of the Owner and Driver restrictions, which are unverified in production and proven only locally. Done by the Owner and a Driver signing in themselves.
+3. Confirm that Drive for Desktop has uploaded both 2026-10-18 backups.
 3. **No real Owner invitations** until DKIM passes (send `05-build/email-dkim-hosting-ticket.md`, then retest).
 
 

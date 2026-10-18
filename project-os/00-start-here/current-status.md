@@ -19,7 +19,19 @@
   - `/api/platform/businesses` returns 401 with no token (GET and POST) and with a garbage token, with `no-store`;
   - `/api/business/memberships` returns 401; `sw.js` 200;
   - www is unchanged (same `index.html` hash).
-- **NOT YET VERIFIED:** the signed-in checks (Companies list, Tenant 1 role and data, Admin restrictions). Tebogo's 16:26 SAST sign-in was not in the agent's browser pane, which had no session.
+- **User-verified signed-in checks** (Tebogo, in his own browser, as `apprigate@gmail.com`, after the 16:26 SAST sign-in; reported to the agent, not observed by it):
+  - the Companies button is visible;
+  - only TaxiFlow Pro is listed;
+  - his business role is still Admin;
+  - existing records are visible after a refresh.
+- **Unverified in production** (no production sign-in by the agent or as those roles):
+  - Owner (`owner@apprigate.com`) sees no Companies button;
+  - Drivers see only their own records;
+  - Admin cannot grant access;
+  - a non-member company is refused;
+  - an Owner cannot mint Owners.
+
+  These are proven only locally (`platform-admin-tests.mjs` 75/75; Playwright 11/11). The server checks are identical code in production.
 - **Rollback:** `vercel promote https://taxiflowpro-jng5n1ced-apprigate.vercel.app --scope apprigate` (file 05 is additive). Revoke the capability with `update public.platform_admins set active = false` or the file-05 rollback. For data, restore the pre-release backup.
 
 

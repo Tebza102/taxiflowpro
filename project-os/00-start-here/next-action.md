@@ -1,5 +1,13 @@
 # Next Action
 
+## Platform admin live (2026-10-18): release closed; remaining rollout items
+
+1. **Done (user-verified):** Companies is visible; only TaxiFlow Pro is listed; the role is still Admin; records survive a refresh.
+2. **Optional:** production checks of the Owner and Driver restrictions, which are unverified in production and proven only locally. Done by the Owner and a Driver signing in themselves.
+3. Confirm that Drive for Desktop has uploaded both 2026-10-18 backups.
+3. **No real Owner invitations** until DKIM passes (send `05-build/email-dkim-hosting-ticket.md`, then retest).
+
+
 ## Public website (2026-10-18): live on www; remaining items
 
 - Content decisions: the preview strip, the "Website prototype" footer, pricing and privacy wording.

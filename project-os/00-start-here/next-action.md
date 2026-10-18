@@ -17,7 +17,16 @@ The branch `agent/platform-admin-onboarding` is built and locally tested. Nothin
 
 Rollback: re-promote `jng5n1ced`; file 05 is additive.
 
-## Frontend prototype integration next action (2026-10-12)
+## Public website (2026-10-18): decisions needed before implementation
+
+See `05-build/public-website-assessment.md`. Tebogo needs to decide:
+1. **Hosting:** (a) a separate static project on `www.taxiflow.co.za` (recommended), or (b) a path in the app.
+2. **Login link placement:** header plus footer, linking to `https://taxiflow.co.za/`.
+3. **Pre-launch content:** the preview strip, pricing wording, privacy information and the enquiry destination.
+
+Then implement on a new branch, without touching the app or backend.
+
+## Frontend prototype integration next action (2026-10-12; superseded 2026-10-18)
 
 Provide access to the approved reference by signing in to the browser pane, or provide the exported prototype files/local folder. Then inspect desktop/mobile screens, map public versus authenticated screens to existing routes and tenant gateway, and implement only the approved presentation changes on `codex/frontend-prototype-integration`. Preserve auth, membership-derived roles, business isolation, snapshot versions, stable retry IDs, conflicts, finance/report flows and the unused stash. Validate against the existing local synthetic backend. No push, merge or deployment authorized. Existing DKIM onboarding hold remains separate and unchanged.
 

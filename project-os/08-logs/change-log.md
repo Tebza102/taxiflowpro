@@ -1482,3 +1482,11 @@ What `platform-admin-tests.mjs` covers:
 - The older `working-prototype-v2` screenshot (2026-08-30) exists but is not confirmed as the approved design.
 - **Smallest scope once inputs exist:** a presentation-only restyle of `SignInShell` (`src/App.jsx`), keeping its handlers (Supabase password sign-in, Forgot password, recovery shell) and the accessible labels the tests use; then only the approved authenticated screens.
 - **Release-procedure link:** `project-os/05-build/platform-admin-release.md` — https://github.com/Tebza102/taxiflowpro/blob/agent/platform-admin-onboarding/project-os/05-build/platform-admin-release.md
+
+### 2026-10-18 — Public website prototype assessed from the export (read-only)
+
+- The export was inspected from a scratch copy; the original is unchanged.
+- Its checks pass (5/5); it renders at desktop and mobile; **no missing assets**.
+- **Finding:** it is a public marketing site with **no Login control**, not an app redesign. This supersedes the earlier note proposing a `SignInShell` restyle.
+- **The app owns the `taxiflow.co.za` root** (PWA scope, service worker, recovery links), so the site should be hosted separately (recommended: `www` subdomain) with a "Log in" link to the existing sign-in.
+- Details, missing inputs and estimate: `05-build/public-website-assessment.md`. No frontend code changed.

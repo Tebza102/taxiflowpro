@@ -1475,3 +1475,10 @@ What `platform-admin-tests.mjs` covers:
   - NS `ns3/ns5.za-dns.com`.
   - No DNS change is indicated: webmail mail passed DKIM with the same selector. The ticket is unchanged and not sent.
 - No production SQL writes, grants, merge, promote, companies or emails.
+
+### 2026-10-18 — Prototype assessment re-checked: still inaccessible; no frontend change
+
+- The ChatGPT-hosted prototype is still behind the OpenAI sign-in gate: 401 on every path; only gate assets load. No source or assets are available, and no local export was found.
+- The older `working-prototype-v2` screenshot (2026-08-30) exists but is not confirmed as the approved design.
+- **Smallest scope once inputs exist:** a presentation-only restyle of `SignInShell` (`src/App.jsx`), keeping its handlers (Supabase password sign-in, Forgot password, recovery shell) and the accessible labels the tests use; then only the approved authenticated screens.
+- **Release-procedure link:** `project-os/05-build/platform-admin-release.md` — https://github.com/Tebza102/taxiflowpro/blob/agent/platform-admin-onboarding/project-os/05-build/platform-admin-release.md

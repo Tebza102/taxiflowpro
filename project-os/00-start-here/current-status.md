@@ -25,7 +25,14 @@ Production is unchanged: `jng5n1ced` = `e59417a`; the Supabase schema has releas
 
 Procedure: `05-build/platform-admin-release.md`.
 
-## Frontend prototype integration (2026-10-12; local preflight only)
+## Frontend prototype integration (2026-10-12; re-checked 2026-10-18, still blocked)
+
+- **2026-10-18 re-check:** `https://taxiflow-pro-operations.divine-tune-4772.chatgpt.site` still shows only OpenAI's "Log in to access" gate.
+  - Every path, including `/`, `/index.html`, `/assets/` and `/manifest.json`, returns **401**.
+  - Only OpenAI's own gate assets load (`/_sites/dispatch-assets/*`).
+  - The design, source files and assets are not inspectable or downloadable.
+- **No exported copy** was found in Downloads, Desktop, Documents, OneDrive or the TaxiFlow Drive folder. The only lead is `Downloads/screencapture-localhost-8000-assets-mockups-working-prototype-v2-index-html-2026-08-30…png`, an older local mockup. It is **not confirmed** as the approved design.
+- No frontend code was changed.
 
 - Feature branch: `codex/frontend-prototype-integration`, created from `a85bde66adf9941198685619c02d09303526456c` (current release lineage plus documentation updates). `origin/main` is `e59417a96b6df23b8d0bc0dfe08c03971e9f5da1`; local `main` remains older at `008ce8e`.
 - Initial worktree clean; origin is `https://github.com/Tebza102/taxiflowpro`. Recorded unused stash `bd2b25a5d48b34fdf557bacc04b8a9793d8da0f1` preserved without applying or dropping it.

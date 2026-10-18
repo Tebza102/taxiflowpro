@@ -17,3 +17,6 @@ playwright-report/
 *.tfbk.partial
 taxiflow-*.manifest.json
 backup-log.txt
+
+# Public website (static, buildless): its dist/ is the source.
+!website/dist/

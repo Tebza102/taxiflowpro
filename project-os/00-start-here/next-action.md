@@ -1,5 +1,16 @@
 # Next Action
 
+
+## After the local rehearsal (2026-10-19)
+
+**Readiness gate for the first real business (all required, not DKIM alone):**
+1. DKIM passes on a repeat test (send `05-build/email-dkim-hosting-ticket.md`).
+2. Owner-assigned responsibilities are built and verified: count, verify, bank, manage drivers, manage routes and vehicles, and manage staff permissions, each separately controllable (fix plan in change-log 2026-10-19).
+3. Add Route, Add Vehicle and Save driver work in the app (server actions), not only through the loader.
+4. Owner and Driver restrictions are verified in production.
+
+Do not onboard a real business, deploy, or change production until authorized. To start Docker for local work, use the package-context command in change-log 2026-10-19.
+
 ## Platform admin live (2026-10-18): release closed; remaining rollout items
 
 1. **Done (user-verified):** Companies is visible; only TaxiFlow Pro is listed; the role is still Admin; records survive a refresh.

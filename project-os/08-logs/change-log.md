@@ -1522,3 +1522,47 @@ What `platform-admin-tests.mjs` covers:
 - **User-verified** (Tebogo, own browser): the Companies button is visible; only TaxiFlow Pro is listed; the role is still Admin; existing records are visible after a refresh.
 - **Unverified in production:** the Owner, Driver, Admin-grant, non-member and Owner-minting restrictions (proven locally only).
 - **Remaining rollout blocker:** DKIM, which blocks real Owner invitations.
+
+### 2026-10-19 — Local company-onboarding rehearsal (synthetic, local stack only)
+
+**Changed by:** Claude Code, with Tebogo's go-ahead. Local machine only; no production, repo code or tests changed.
+
+- **Docker fix (local).** Docker Desktop is installed inside the Claude app's package storage, so it only starts in that context: `Invoke-CommandInDesktopPackage -PackageFamilyName Claude_pzs8sxrjxfjjc -AppId Claude -PreventBreakaway -Command "%LOCALAPPDATA%\Programs\DockerDesktop\Docker Desktop.exe"`. After the Windows build moved to 26300, `wsl.exe --mount` could no longer reach the data disk at the real path (`ERROR_PATH_NOT_FOUND`). Added a reversible junction `%LOCALAPPDATA%\Docker\wsl` → `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Local\Docker\wsl`; nothing deleted, reset or reinstalled. Rollback: `rmdir "%LOCALAPPDATA%\Docker\wsl"`.
+- **Isolation evidence:** `verify.mjs` 14 PASS, 2 FAIL (exact-count baseline only: 16 users, all `@example.com`; 4 snapshots, 0 live traces; extra rows are earlier test data). Auth SMTP is the local Mailpit container, which has no relay configured.
+- **Rehearsal (runbook flow), company "Rehearsal Taxis" (Tenant 5):**
+  1. platform admin `admin@example.com` created the company and Owner; the console states it gives no access to the company's data;
+  2. the Owner set a password from the Mailpit email (the page was branded with the company);
+  3. the Owner added a driver profile plus Driver, Manager and Admin logins;
+  4. set-up data (route RH-01, vehicle RHL 001 GP) loaded with `scripts/localdb/load-business-data.mjs`: dry run, apply, repeat run showed "No changes";
+  5. the Driver captured R300 and sent the day checking;
+  6. the Admin counted R300; the Admin cannot verify, edit or delete;
+  7. the Manager verified it;
+  8. the Manager finished deposit `TFP-MON-1019-01`.
+- **Separation:** Driver and Manager tokens get 403 for another company's workspace and for the platform list; the Driver's memberships call returns only its own role. In the database, the record is `banked`, the 4 memberships are in Rehearsal Taxis only, and the other companies' snapshots are unchanged.
+- **Findings, all expected or minor:**
+  - creating a route in the app's Fleet screen is refused ("not available in the business workspace yet"), so set-up stays loader-only, as Project OS states;
+  - the loader requires `business.name` in the file (refused safely without it);
+  - in this local company, the Manager can finish the deposit without any extra grant.
+
+### 2026-10-19 — Owner permissions findings (inspection only; no code changed)
+
+**Correction to the rehearsal entry above:** loading routes and vehicles with the loader was a rehearsal workaround, not a fix for Add Route. DKIM passing is not the readiness gate on its own (see next-action).
+
+- **Add Route / Add Vehicle refused (by design, unfinished).** Business-workspace (tenant) mode has no whole-snapshot save: `dataGateway.persistSnapshot`, `commitLiveSnapshotMutation` and `callUserLifecycleApi` return `TENANT_UNSUPPORTED_MESSAGE` (`src/App.jsx` ~1104/1182; `src/lib/tenantWorkspace.js:19`; `tenant-design.md` §344). Writes exist only as explicit server actions: `api/business/finance-actions.js` (finance) and `api/business/members.js` (access). There is no route, vehicle or defect action.
+- **Add Driver, local success vs earlier failure.** The code is identical: deployed `af3e5ad` and local `HEAD` differ only in Project OS. Both runs are tenant mode. Two different paths:
+  - Settings → Business access → "Add driver profile" (`driver.save_profile`) works, but only for an **Owner** (`assertOwner`, `tenantOnboarding.js:213`);
+  - Drivers module → "Save driver" (`saveDriver` → snapshot commit or lifecycle API) is refused.
+  - The earlier failure is most likely the Drivers module, or Settings used as an Admin. In production, `apprigate@gmail.com` is an Admin in Tenant 1, so it would get "Only an Owner can manage access". Not yet confirmed with the user's screen or error text.
+- **Permissions that exist:** Owner grants, deactivates or reactivates Admin, Manager or Driver; driver profiles; owner-driver link; role-fixed finance rules (`api/_lib/financeActions.js:22-34`):
+  - hand-in: Owner, Admin;
+  - verify: Owner, Manager;
+  - bank (`deposit.lock`): Owner, or Manager with `moduleAccess.finance` = true;
+  - module view switches are stored in `snapshot.appUsers`, applied by `tenantAuth.js:226-240`, and can only narrow access.
+- **Permissions that are missing:**
+  - per-person count, verify and bank switches;
+  - a fleet (route/vehicle) management permission, and its server actions;
+  - drivers management delegable to a Manager;
+  - delegable staff-permission management;
+  - any screen for `member.update` (the server accepts module switches; the panel has none).
+- **Current Manager banking rule:** a Manager can bank whenever their Money access is on. Since `d3adf04` that is the default, so every Manager can bank unless restricted, and in tenant mode no screen can restrict them.
+- **verify.mjs failures fully explained.** Line 48 expects 11 users (`SEED_USERS` + `TENANT_USERS`) and found 16 before the rehearsal. Line 53 expects 2 snapshot rows and found 4. The extras are 5 users and 2 companies created by `scripts/localdb/platform-admin-tests.mjs` (2026-10-18 11:57–11:58, run without a later reset), plus the rehearsal's 4 users and 1 company. The safety parts pass: 0 non-example.com users, 0 live traces, 0 unmapped rows.

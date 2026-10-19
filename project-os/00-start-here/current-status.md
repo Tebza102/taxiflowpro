@@ -1,5 +1,15 @@
 # Current Status
 
+
+## Local onboarding rehearsal (2026-10-19): PASSED on the local synthetic stack
+
+The full runbook flow ran locally: create the company and Owner, Owner password, team, set-up data, Driver capture, Admin count, Manager verify, Manager deposit. Company separation and Driver restrictions were shown in the UI and at the API (403s). Production was not touched. Details and the Docker launch fix: change-log 2026-10-19.
+
+**Not ready for a real business.** DKIM passing is necessary but not sufficient. Open gaps found by the rehearsal (findings in change-log 2026-10-19, "Owner permissions findings"):
+- **Add Route and Add Vehicle** in Fleet, and **Save driver** in the Drivers module, are refused in the business workspace. No server action exists for them. The route loader used in the rehearsal was an operator workaround, not a fix.
+- **Owner-assigned responsibilities are missing.** Hand-in is fixed to Owner/Admin, verify to Owner/Manager, and banking to Owner, or Manager with Money on (the default). Driver profiles and staff access are Owner-only. There is no screen for per-person switches.
+- Owner and Driver restrictions are still unverified in production.
+
 ## Platform admin RELEASED to production (2026-10-18 16:20 SAST)
 
 - **Deployed:** commit `af3e5ad` (merge of PR #3; code identical to the reviewed `6b0b249`). Deployment `dpl_2P2aUep4zsvNYk2LirS4qecRHX3s` (`taxiflowpro-dy1a1k761`), promoted to `taxiflow.co.za` at 16:20:44–16:20:55; bundle `index-2xzkC0xd.js`.

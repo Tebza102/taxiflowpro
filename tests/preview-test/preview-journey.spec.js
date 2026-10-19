@@ -246,7 +246,21 @@ test("delegated staff management stays within the delegate's own responsibilitie
 test("separation of duties: a Manager holding count and verify cannot verify its own count", async ({ request }) => {
   const manager = (await workspace(request, "manager@example.com")).json.permissions;
   expect(manager).toEqual(expect.arrayContaining(["cash.count", "cash.verify"]));
-  const submitted = await act(request, "driver@example.com", "cashup.submit", { workDate: "2026-10-02" });
+  // The driver captures a second day through the server action (direct API).
+  const vehicle = (await workspace(request, "driver@example.com")).json.snapshot.vehicles.find((entry) => entry.registration === "PV-TEST-01");
+  const SOD_DAY = "2026-10-09";
+  const captured = await act(request, "driver@example.com", "capture.standard_income", {
+    captureAs: "driver",
+    vehicleId: vehicle.id,
+    tripDate: SOD_DAY,
+    timeIn: "06:00",
+    timeOut: "09:00",
+    openingOdo: 1080,
+    closingOdo: 1140,
+    tripLogbook: [{ fromLocation: "Rank A", toLocation: "Rank B", passengerCount: 10, amountCollected: 250 }],
+  });
+  expect(captured.status, captured.json.error).toBe(200);
+  const submitted = await act(request, "driver@example.com", "cashup.submit", { workDate: SOD_DAY });
   expect(submitted.status).toBe(200);
   const day = submitted.json.cashUpId;
   expect((await act(request, "manager@example.com", "cashup.record_handin", { cashUpId: day, actualCashReceived: 250 })).status).toBe(200);

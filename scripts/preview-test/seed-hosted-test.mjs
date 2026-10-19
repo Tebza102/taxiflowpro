@@ -7,7 +7,7 @@
 //   * two companies with their Owners (createBusinessWithOwner);
 //   * set-up data through the operator loader (route, driver profile, vehicles);
 //   * Admin, Manager and Driver access (the Owner's member.grant).
-//   node scripts/preview-test/seed-hosted-test.mjs --target <ref> --env-file <outside-repo> [--apply]
+//   node scripts/preview-test/seed-hosted-test.mjs --target <ref> --env-file <outside-repo> [--apply [--confirm-ref <ref>]]
 // The env file holds SUPABASE_URL and SUPABASE_SECRET_KEY (sb_secret_...) for the
 // TEST project; the script refuses production and any ref other than the one in
 // .env.preview-test.local. Dry run by default; --apply asks for the typed ref.
@@ -81,7 +81,17 @@ try {
     console.log("Dry run only. Re-run with --apply to write.");
     process.exit(0);
   }
-  await confirmApply(target);
+  // Confirmation: the typed ref in a terminal, or (non-interactive, this
+  // test-only script) --confirm-ref with the exact test ref. Both still need
+  // --apply and every target guard above.
+  const confirmIndex = argv.indexOf("--confirm-ref");
+  if (confirmIndex >= 0) {
+    if (argv[confirmIndex + 1] !== "sxoonhovoqgcpflhqirb" || argv[confirmIndex + 1] !== target.ref) {
+      throw new Error("--confirm-ref must be exactly the isolated test project ref; nothing was written.");
+    }
+  } else {
+    await confirmApply(target);
+  }
 
   for (const person of emails) {
     if (await findAuthUserByEmail(service, person.email)) continue;

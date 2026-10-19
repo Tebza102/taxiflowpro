@@ -99,6 +99,15 @@ test("target: the Preview runs this build against the isolated test project, nev
   const owner = await workspace(request, "owner@example.com");
   expect(owner.status).toBe(200);
   expect(owner.json.role).toBe("Owner");
+  // Company separation on hosted infrastructure: B's Manager cannot read or write A.
+  const managerB = await token("manager.b@example.com");
+  const crossRead = await request.get("/api/business/workspace", { headers: { authorization: `Bearer ${managerB.token}`, "x-taxiflow-business": owner.json.businessId } });
+  expect(crossRead.status()).toBe(403);
+  const crossWrite = await request.post("/api/business/finance-actions", {
+    headers: { authorization: `Bearer ${managerB.token}`, "x-taxiflow-business": owner.json.businessId, "content-type": "application/json" },
+    data: { action: "route.save", requestId: crypto.randomUUID(), expectedVersion: owner.json.version, fields: { name: "Cross Company", primaryOrigin: "X", primaryDestination: "Y" } },
+  });
+  expect(crossWrite.status()).toBe(403);
 });
 
 test("full cash workflow: driver capture and checking, admin count, manager verify, owner bank", async ({ page }) => {
@@ -247,7 +256,7 @@ test("separation of duties: a Manager holding count and verify cannot verify its
   const manager = (await workspace(request, "manager@example.com")).json.permissions;
   expect(manager).toEqual(expect.arrayContaining(["cash.count", "cash.verify"]));
   // The driver captures a second day through the server action (direct API).
-  const vehicle = (await workspace(request, "driver@example.com")).json.snapshot.vehicles.find((entry) => entry.registration === "PV-TEST-01");
+  const vehicle = (await workspace(request, "driver@example.com")).json.snapshot.vehicles.find((entry) => entry.registration === "PV TEST 01");
   const SOD_DAY = "2026-10-09";
   const captured = await act(request, "driver@example.com", "capture.standard_income", {
     captureAs: "driver",

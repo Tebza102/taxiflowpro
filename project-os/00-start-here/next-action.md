@@ -2,7 +2,7 @@
 
 ## Hosted Preview journey (isolated test backend): waiting on Tebogo
 
-1. **Tebogo:** in the Supabase dashboard, open project **taxiflow-preview-test** (`sxoonhovoqgcpflhqirb`) > SQL editor. Confirm the project name and ref, check `scripts/preview-test/schema.sql` against its SHA-256 in the PR, run it, then run `scripts/preview-test/verify-schema.sql` (read-only; every row `ok = true`). Report the result.
+1. ~~Schema~~ **DONE 2026-10-19:** `schema.sql` from `cd329d3` (SHA-256 matched) applied by Tebogo (via ChatGPT, Supabase migration `preview_test_schema_releases_01_to_06`, version 20261019191640). The agent re-ran only the read-only `verify-schema.sql`: 10/10 true, users=0 businesses=0 snapshots=0. Security advisor: INFO only (RLS on, no policies, for the 4 server-only tables, as designed). **Do not rerun the schema.**
 2. **Tebogo:** create a secret key (`sb_secret_…`) in that project. Put it (a) in an env file OUTSIDE the repo with `SUPABASE_URL=https://sxoonhovoqgcpflhqirb.supabase.co` and `SUPABASE_SECRET_KEY=…`, and (b) in Vercel: `vercel env add SUPABASE_SERVICE_ROLE_KEY preview agent/owner-responsibilities`.
 3. **Tebogo:** `node scripts/preview-test/seed-hosted-test.mjs --target sxoonhovoqgcpflhqirb --env-file <that file>` (dry run), then add `--apply` and type the ref.
 4. **Agent:** redeploy the branch Preview; create a temporary Protection Bypass for Automation secret (stored only in `.env.preview-test.local`); run `PREVIEW_URL=<preview> npx playwright test -c playwright.preview-test.config.mjs`; revoke the bypass secret (back to 0); report.

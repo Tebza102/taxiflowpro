@@ -1629,3 +1629,13 @@ What `platform-admin-tests.mjs` covers:
 **Risks remaining:** the hosted journey has not run yet. No bypass secret exists yet (to be created for the run and revoked after). Signups are open by default on the new test project (an account without membership has no access).
 
 **Next action:** see next-action.md "Hosted Preview journey".
+
+### 2026-10-19 — Isolated Preview test schema applied (Tebogo) and verified (agent, read-only)
+
+**Changed by:** Tebogo (via ChatGPT) applied `scripts/preview-test/schema.sql` from `cd329d3` to `sxoonhovoqgcpflhqirb` (taxiflow-preview-test) as Supabase migration `preview_test_schema_releases_01_to_06` (version 20261019191640); SHA-256 `e7280981…5431651` matched. Agent: read-only checks only.
+
+**Tests run:** `list_migrations` shows exactly that one migration; `verify-schema.sql` re-run read-only: 10/10 true, users=0 businesses=0 snapshots=0; security advisor: one INFO lint (RLS enabled without policies on finance_action_requests, member_permission_changes, platform_admins, workspace_snapshots — intended: server-only tables).
+
+**Result:** Pass. The schema must not be rerun (it refuses non-empty projects anyway).
+
+**Next action:** Tebogo: the test project's secret key (env file outside the repo; branch-scoped Vercel `SUPABASE_SERVICE_ROLE_KEY`), then `seed-hosted-test.mjs`. Production on hold.

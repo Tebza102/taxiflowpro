@@ -5,6 +5,9 @@
 -- Effect: per-member responsibilities are discarded; the previous fixed role
 -- rules apply again (Admin counts; Manager verifies and banks). Memberships,
 -- roles, driver links and snapshots are kept unchanged.
+-- public.member_permission_changes (the audit of past changes) is deliberately
+-- KEPT: it is inert without the function, and audit history should survive a
+-- rollback. Drop it by hand only if that history must go.
 drop function if exists public.set_member_permissions(uuid, uuid, uuid, text[], timestamptz, jsonb);
 drop trigger if exists business_memberships_permissions_follow_role on public.business_memberships;
 drop function if exists taxiflow_private.member_permissions_follow_role();

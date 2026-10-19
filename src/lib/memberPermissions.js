@@ -1,12 +1,13 @@
 // Owner-assigned responsibilities (release file 06), shared by the server
 // (authoritative) and the screens (what to show). No imports, so Node can load it.
 //
-// Stored per membership in business_memberships.permissions; only an active
-// Owner changes them (public.set_member_permissions). The Owner always holds
-// every responsibility. Drivers hold none. Each responsibility also needs its
-// module's view access (moduleAccess), so a switched-off module is never
-// bypassed. Changing staff roles, sign-ins or these responsibilities is not a
-// responsibility: it stays with the Owner only.
+// Stored per membership in business_memberships.permissions; changed through
+// public.set_member_permissions by an active Owner, or by a holder of
+// staff.manage within its own responsibilities (see delegablePermissions). The
+// Owner always holds every responsibility. Drivers hold none. Each
+// responsibility also needs its module's view access (moduleAccess), so a
+// switched-off module is never bypassed. Roles and sign-ins are never a
+// responsibility: they stay with the Owner only.
 
 export const MEMBER_PERMISSIONS = Object.freeze([
   Object.freeze({ key: "cash.count", module: "finance", label: "Receive and count cash", detail: "Record a driver's day hand-in and count standalone income." }),
@@ -14,10 +15,35 @@ export const MEMBER_PERMISSIONS = Object.freeze([
   Object.freeze({ key: "cash.bank", module: "finance", label: "Bank verified cash", detail: "Finish the deposit for the verified batch." }),
   Object.freeze({ key: "drivers.manage", module: "drivers", label: "Manage driver profiles and assignments", detail: "Add or edit driver profiles and their route. Never gives anyone a sign-in." }),
   Object.freeze({ key: "fleet.manage", module: "fleet", label: "Manage routes and vehicles", detail: "Add or edit routes and vehicles." }),
+  Object.freeze({
+    key: "staff.manage",
+    module: "settings",
+    label: "Manage staff responsibilities",
+    detail: "Give or remove other Admins' and Managers' responsibilities, only ones you hold yourself. Never roles, sign-ins or this responsibility; only the Owner gives it.",
+  }),
 ]);
 
 export const PERMISSION_KEYS = Object.freeze(MEMBER_PERMISSIONS.map((permission) => permission.key));
 export const PERMISSION_ROLES = Object.freeze(["Admin", "Manager"]);
+// Only the Owner can give or remove these (they are never delegated onward).
+export const OWNER_ONLY_PERMISSIONS = Object.freeze(["staff.manage"]);
+
+// Responsibilities this requester may give or remove for someone else: the
+// Owner any; a staff manager only those it currently holds (effective, so a
+// switched-off module also limits what it can delegate); everyone else none.
+export const delegablePermissions = (requester) => {
+  if (requester?.role === "Owner") return [...PERMISSION_KEYS];
+  const held = Array.isArray(requester?.permissions) ? requester.permissions : [];
+  if (!PERMISSION_ROLES.includes(requester?.role) || !held.includes("staff.manage")) return [];
+  return held.filter((key) => PERMISSION_KEYS.includes(key) && !OWNER_ONLY_PERMISSIONS.includes(key));
+};
+
+// The keys a change would add or remove.
+export const changedPermissions = (before, after) => {
+  const a = new Set(normalizePermissionList(before));
+  const b = new Set(normalizePermissionList(after));
+  return [...new Set([...a].filter((key) => !b.has(key)).concat([...b].filter((key) => !a.has(key))))].sort();
+};
 
 // Must match taxiflow_private.default_member_permissions (release file 06).
 const ROLE_DEFAULTS = Object.freeze({

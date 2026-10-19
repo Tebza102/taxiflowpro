@@ -1,5 +1,11 @@
 # Current Status
 
+## Acceptance gaps (2026-10-19, later): parts 1-2 DONE locally; part 3 WAITING on Tebogo
+
+- **Delegated staff management** (`staff.manage`, Owner-given only; holders change other Admins'/Managers' responsibilities only within their own; audit table `member_permission_changes`) and **separation of duties** (nobody verifies a count they recorded, Owner included) are built and pass locally (101/101, 25/25, unit 10/10, regressions, browser 12/12).
+- **Isolated Preview backend:** test project `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`) is EMPTY. Branch-scoped Vercel Preview variables point this branch's Preview at it. The connector migrations were automatically declined and not retried. Waiting for Tebogo to run `scripts/preview-test/schema.sql` in that project's SQL editor and report the `verify-schema.sql` result. Then: secret key (outside the repo + branch Vercel variable), seed via `seed-hosted-test.mjs`, temporary bypass secret, hosted journey, revoke bypass.
+- Production on hold (`af3e5ad`, file 05 only).
+
 ## Owner-assigned responsibilities (release file 06), 2026-10-19: BUILT and TESTED locally + Preview; NOT in production
 
 - **Branch** `agent/owner-responsibilities` (pushed; code `7f1419b`), from `0b02435`. **Preview** `https://taxiflowpro-nifglxqz9-apprigate.vercel.app` READY. Production unchanged (`af3e5ad`, file 05 only).

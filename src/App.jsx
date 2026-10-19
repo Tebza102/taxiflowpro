@@ -6160,6 +6160,7 @@ function App() {
             <TenantAccessPanel
               activeRole={activeRole}
               currentUserEmail={authSession?.user?.email ?? ""}
+              actorPermissions={tenantMeta?.permissions ?? []}
               onChanged={reloadCanonicalLiveSnapshot}
             />
           )}

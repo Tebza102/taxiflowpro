@@ -47,6 +47,8 @@ export const FINANCE_ACTIONS = Object.freeze({
   ...Object.fromEntries(Object.entries(FLEET_ACTIONS).map(([name, spec]) => [name, { roles: spec.roles, permission: spec.permission, fields: spec.fields, record: spec }])),
 });
 
+export const SELF_VERIFY_MESSAGE = "You counted this hand-in, so another authorized person must verify it.";
+
 const ENVELOPE_FIELDS = ["action", "requestId", "expectedVersion", "fields"];
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -285,6 +287,9 @@ export const applyFinanceAction = (storedSnapshot, request, requester, now = new
 
   // cashup.verify
   if (status !== "counted") throw createHttpError(409, status === "verified" ? "This day checking has already been verified." : "An administrator must record the day hand-in before manager verification.");
+  // Separation of duties: whoever counted the hand-in cannot verify it, whatever
+  // responsibilities they hold (the Owner included).
+  if (text(target.countedBy) && text(target.countedBy) === text(requester.id)) throw createHttpError(403, SELF_VERIFY_MESSAGE);
   const amount = request.fields.actualCashReceived ?? Number(target.actualCashReceived);
   if (!Number.isFinite(amount) || amount < 0) throw createHttpError(409, "An administrator must record the day hand-in before manager verification.");
   const settlementView = getDayCashSettlement(summary, amount);

@@ -89,10 +89,10 @@ const driver = userOf("Driver");
 
 // Only an active Owner; never self; never Owner or Driver targets.
 const byAdmin = setPerms(admin, manager, ["cash.count"]);
-record(!byAdmin.ok && /Only an active Owner/.test(byAdmin.out), "an Admin cannot change permissions");
+record(!byAdmin.ok && /Only the Owner, or someone given/.test(byAdmin.out), "an Admin cannot change permissions");
 const byManager = setPerms(manager, manager, ["cash.count", "cash.verify", "cash.bank", "fleet.manage", "drivers.manage"]);
-record(!byManager.ok && /Only an active Owner/.test(byManager.out), "a Manager cannot raise their own permissions");
-record(/42501|Only an active Owner/.test(setPerms(driver, admin, ["cash.bank"]).out), "a Driver cannot change permissions");
+record(!byManager.ok && /Only the Owner, or someone given/.test(byManager.out), "a Manager cannot raise their own permissions");
+record(/42501|Only the Owner, or someone given/.test(setPerms(driver, admin, ["cash.bank"]).out), "a Driver cannot change permissions");
 record(/own responsibilities/.test(setPerms(owner, owner, ["cash.count"]).out), "the Owner cannot change their own entry");
 record(/Only Admin and Manager/.test(setPerms(owner, driver, ["cash.count"]).out), "a Driver cannot be given staff permissions");
 record(!tryRun(`update public.business_memberships set permissions = array['cash.bank'] where user_id='${driver}' and business_id='${BUSINESS_A_ID}';`).ok, "the table refuses permissions on a Driver row");
@@ -113,7 +113,7 @@ const otherBusiness = q(`select business_id from public.business_memberships whe
 if (otherBusiness) {
   const otherMember = q(`select user_id from public.business_memberships where business_id='${otherBusiness}' and role in ('Admin','Manager') limit 1;`);
   const crossSameId = setPerms(owner, otherMember, ["cash.bank"], { businessId: otherBusiness });
-  record(!crossSameId.ok && /Only an active Owner/.test(crossSameId.out), "an Owner of A cannot change permissions in another business");
+  record(!crossSameId.ok && /Only the Owner, or someone given/.test(crossSameId.out), "an Owner of A cannot change permissions in another business");
 }
 
 // A role change resets permissions to the new role's defaults (no carried powers).
@@ -131,6 +131,7 @@ const shapeMid = membershipsShape();
 apply(ROLLBACK);
 record(!hasColumn() && q("select count(*) from pg_proc where proname='set_member_permissions';") === "0", "rollback removes column, trigger and functions");
 record(membershipsShape() === shapeMid, "rollback keeps memberships unchanged");
+record(q("select to_regclass('public.member_permission_changes') is not null;") === "t", "rollback keeps the audit of past responsibility changes");
 apply(MIGRATION);
 record(permsOf(admin) === "cash.count" && hasColumn(), "re-applying after rollback restores role defaults");
 

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import { PERMISSION_KEYS, PERMISSION_ROLES, hasPermission } from "../../src/lib/memberPermissions.js";
+import { PERMISSION_KEYS, PERMISSION_ROLES, changedPermissions, delegablePermissions, hasPermission } from "../../src/lib/memberPermissions.js";
 import { normalizeModuleViewAccess } from "../../src/lib/moduleAccessPolicy.js";
 import { buildRequester, createHttpError, readBusinessSnapshot, serviceClientFor } from "./tenantAuth.js";
 
@@ -176,6 +176,19 @@ const loadMembership = async (service, businessId, userId) => {
   return data ?? null;
 };
 
+// Stored responsibilities of one membership ([] before release file 06).
+const loadMemberPermissions = async (service, businessId, userId) => {
+  const { data, error } = await service
+    .from("business_memberships")
+    .select("permissions")
+    .eq("business_id", businessId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error?.code === "42703") return [];
+  if (error) throw createHttpError(502, "The membership could not be read.");
+  return Array.isArray(data?.permissions) ? [...data.permissions].sort() : [];
+};
+
 const emailOf = async (service, userId) => {
   const { data } = await service.auth.admin.getUserById(userId);
   return normalizeEmail(data?.user?.email);
@@ -285,11 +298,15 @@ export const MEMBER_ACTIONS = {
     });
   },
 
-  // Owner only: the responsibilities of an Admin or Manager (release file 06).
-  // Not delegable: no responsibility lets anyone change roles, sign-ins or
-  // responsibilities. The database function re-checks every rule.
+  // The responsibilities of an Admin or Manager (release file 06): the Owner,
+  // or a holder of staff.manage within its delegation limits (only
+  // responsibilities it holds itself, never staff.manage, never another staff
+  // manager, never itself). Roles and sign-ins are never delegated. The
+  // database function re-checks every rule and records the change.
   "member.permissions": async (authorization, fields) => {
-    assertOwner(authorization);
+    if (!["Owner", ...PERMISSION_ROLES].includes(authorization.role)) {
+      throw createHttpError(403, 'Only the Owner, or someone given "Manage staff responsibilities", can change responsibilities.');
+    }
     const userId = text(fields.userId);
     if (!userId) throw bad("Choose the person whose responsibilities change.");
     if (userId === authorization.userId) throw createHttpError(403, "You cannot change your own access.");
@@ -302,10 +319,24 @@ export const MEMBER_ACTIONS = {
     if (!existing) throw createHttpError(404, "That person is not a member of this business.");
     if (existing.role === "Owner") throw createHttpError(403, "Owner access is managed by the operator.");
     if (!PERMISSION_ROLES.includes(existing.role)) throw createHttpError(403, "Only Admin and Manager access has responsibilities.");
+    const before = await loadMemberPermissions(service, authorization.businessId, userId);
     const email = await emailOf(service, userId);
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const row = await readBusinessSnapshot(authorization);
-      const snapshot = { ...row.snapshot, auditTrail: [audit(authorization.userId, "Responsibilities changed", `${email} / ${requested.sort().join(", ") || "none"}`), ...(row.snapshot.auditTrail ?? [])] };
+      // Delegation limits on the actor's CURRENT effective responsibilities.
+      const requester = buildRequester(authorization, row.snapshot);
+      if (requester.role !== "Owner") {
+        if (!hasPermission(requester, "staff.manage")) {
+          throw createHttpError(403, 'You have not been given the "Manage staff responsibilities" responsibility.');
+        }
+        if (before.includes("staff.manage")) {
+          throw createHttpError(403, "Only the Owner can change the responsibilities of someone who manages staff.");
+        }
+        const beyond = changedPermissions(before, requested).filter((key) => !delegablePermissions(requester).includes(key));
+        if (beyond.length) throw createHttpError(403, `You can only give or remove responsibilities you hold yourself (not: ${beyond.join(", ")}).`);
+      }
+      const detail = `${email} / ${[...requested].sort().join(", ") || "none"} (was ${before.join(", ") || "none"})`;
+      const snapshot = { ...row.snapshot, auditTrail: [audit(authorization.userId, "Responsibilities changed", detail, authorization.role), ...(row.snapshot.auditTrail ?? [])] };
       const { data, error } = await service.rpc("set_member_permissions", {
         p_business_id: authorization.businessId,
         p_actor: authorization.userId,
@@ -397,9 +428,13 @@ export const saveDriverProfile = async (authorization, fields) => {
   throw createHttpError(409, "The business changed repeatedly while saving; try again.");
 };
 
-// Members of ONE business, for an Owner or Admin.
+// Members of ONE business, for an Owner, an Admin, or a holder of
+// staff.manage (who needs the list to manage responsibilities).
 export const listMembers = async (authorization) => {
-  if (!["Owner", "Admin"].includes(authorization.role)) throw createHttpError(403, "Only an Owner or Admin can view business access.");
+  if (!["Owner", "Admin"].includes(authorization.role)) {
+    const requester = PERMISSION_ROLES.includes(authorization.role) ? buildRequester(authorization, (await readBusinessSnapshot(authorization)).snapshot) : null;
+    if (!hasPermission(requester, "staff.manage")) throw createHttpError(403, "Only an Owner or Admin can view business access.");
+  }
   const service = serviceClientFor(authorization);
   const columns = "user_id, role, driver_staff_id, active";
   let { data, error } = await service.from("business_memberships").select(`${columns}, permissions`).eq("business_id", authorization.businessId);

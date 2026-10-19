@@ -15,8 +15,8 @@ Supabase Auth (email and password; password setup and recovery by email through 
 |---|---|---|
 | Platform admin | List companies (metadata only: name, slug, Owners, member count). Create a company with its initial Owner (setup email, or an existing account reused unchanged). | Read any company's workspace, members, finance or reports without a membership. Make themselves Owner through the console. Grant platform admin (operator SQL only). Change Owners of existing companies. |
 | Owner | Everything in their company. Grant, update, remove or restore Admin, Manager and Driver access. Set each Admin's and Manager's responsibilities. Driver profiles. Own driver link (owner-driver). | Create or change Owners. Change their own access. Act in another company. Platform actions. |
-| Admin | View business access. The responsibilities the Owner gives (default: receive and count cash). Module access as granted by the Owner. | Grant access, change roles, sign-ins or responsibilities (never delegable). |
-| Manager | The responsibilities the Owner gives (default: verify and bank). | Grant or view access, change roles, sign-ins or responsibilities (never delegable). |
+| Admin | View business access. The responsibilities the Owner gives (default: receive and count cash). Module access as granted by the Owner. | Grant access, change roles or sign-ins. Change responsibilities unless given *Manage staff responsibilities* (then only within its limits). |
+| Manager | The responsibilities the Owner gives (default: verify and bank). | Grant access, change roles or sign-ins. View access or change responsibilities unless given *Manage staff responsibilities*. |
 | Driver | Own records only (capture, edits with a reason, own day cash-up submit). | See other drivers, the directory, members or reports. |
 
 ## Responsibilities (release file 06; local and Preview only until released)
@@ -29,10 +29,13 @@ Stored per membership in `business_memberships.permissions` and changed only by 
 | Bank verified cash | `cash.bank` | `deposit.lock` (also needs Money edit) | Money |
 | Manage driver profiles and assignments | `drivers.manage` | `driver.save`, `driver.save_profile`, changing a vehicle's driver | Drivers |
 | Manage routes and vehicles | `fleet.manage` | `route.save`, `vehicle.save` | Fleet & Operations |
+| Manage staff responsibilities | `staff.manage` | `member.permissions` for other Admins/Managers; view the access list | Settings |
 
 - Owner holds all; Driver none (database constraint). Admin/Manager defaults equal the pre-06 fixed rules (Admin: count; Manager: verify + bank). A role change resets to the new role's defaults.
 - A responsibility works only while its module is on for that person; it never bypasses module access.
-- Not a responsibility: granting sign-ins, changing roles, removing access or changing responsibilities. These stay with the Owner. `drivers.manage` never creates a sign-in; driver profile saves accept no email, password or login fields.
+- Not a responsibility: granting sign-ins, changing roles or removing access. These stay with the Owner. `drivers.manage` never creates a sign-in; driver profile saves accept no email, password or login fields.
+- **Delegation limits for `staff.manage`** (server and database function): only the Owner gives or removes `staff.manage`; a holder may add or remove only responsibilities it currently holds (effective, so a switched-off module also limits it); never its own entry, an Owner, a Driver, or another holder of `staff.manage`; only within its own business. Every change (Owner or delegate) is one row in `public.member_permission_changes` (business, actor, actor role, target, before, after; no browser access) and an audit entry in that business's snapshot.
+- **Separation of duties:** whoever recorded a hand-in count (`countedBy`) cannot verify it (`cashup.verify`, `income.verify`), whatever they hold, the Owner included. Another person with *Verify counted cash* must verify. A business where the Owner works alone therefore needs a second person to verify counts the Owner made.
 - Before file 06 the server falls back to the role defaults (undefined column 42703), so the code can be deployed before the migration without changing anyone's access.
 
 ## Protected Routes

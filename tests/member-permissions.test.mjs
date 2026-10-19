@@ -14,7 +14,7 @@ const RID = "22222222-2222-4222-8222-222222222222";
 const VERSION = "2026-10-01T16:30:00Z";
 const request = (action, fields) => parseFinanceActionRequest({ action, requestId: RID, expectedVersion: VERSION, fields });
 const NOW = "2026-10-19T10:00:00.000Z";
-const staff = (role, permissions, moduleAccess = { finance: true, fleet: true, drivers: true }) => ({
+const staff = (role, permissions, moduleAccess = { finance: true, fleet: true, drivers: true, settings: true }) => ({
   id: `u-${role.toLowerCase()}`,
   role,
   moduleAccess,
@@ -154,4 +154,30 @@ test("driver.save: a profile only - no email, password or sign-in fields; routes
   assert.equal(profile.email, stored.drivers[0].email ?? null);
   assert.deepEqual(saved.snapshot.appUsers, stored.appUsers);
   assert.equal("accessPassword" in profile, false);
+});
+
+test("staff.manage: Owner-only to give; a holder delegates only what it holds, never staff.manage", async () => {
+  const { delegablePermissions, changedPermissions, OWNER_ONLY_PERMISSIONS } = await import("../src/lib/memberPermissions.js");
+  assert.deepEqual(OWNER_ONLY_PERMISSIONS, ["staff.manage"]);
+  assert.deepEqual(delegablePermissions({ role: "Owner" }).length, PERMISSION_KEYS.length);
+  assert.deepEqual(delegablePermissions(staff("Manager", ["fleet.manage", "drivers.manage"])), []);
+  assert.deepEqual(delegablePermissions(staff("Manager", ["staff.manage", "fleet.manage", "cash.count"])), ["cash.count", "fleet.manage"]);
+  // A switched-off module also limits what can be delegated.
+  assert.deepEqual(delegablePermissions(staff("Manager", ["staff.manage", "fleet.manage", "cash.count"], { finance: false, fleet: true, drivers: true, settings: true })), ["fleet.manage"]);
+  assert.deepEqual(delegablePermissions({ role: "Driver", permissions: ["staff.manage", "cash.count"] }), []);
+  assert.deepEqual(changedPermissions(["cash.count", "cash.verify"], ["cash.verify", "fleet.manage"]), ["cash.count", "fleet.manage"]);
+});
+
+test("separation of duties: the counter cannot verify their own hand-in (day and standalone); another verifier can", () => {
+  const stored = buildSyntheticSnapshot();
+  const both = staff("Manager", ["cash.count", "cash.verify"]);
+  const other = { ...staff("Manager", ["cash.verify"]), id: "u-manager-2" };
+  const counted = applyFinanceAction(stored, request("cashup.record_handin", { cashUpId: "uat-cu-1", actualCashReceived: 680 }), both, NOW).snapshot;
+  forbidden(() => applyFinanceAction(counted, request("cashup.verify", { cashUpId: "uat-cu-1" }), both, NOW), /another authorized person/);
+  forbidden(() => applyFinanceAction(counted, request("cashup.verify", { cashUpId: "uat-cu-1" }), { ...owner, id: both.id }, NOW), /another authorized person/);
+  assert.equal(applyFinanceAction(counted, request("cashup.verify", { cashUpId: "uat-cu-1" }), other, NOW).response.status, "verified");
+  // Standalone income (uat-fin-7 special is pending).
+  const counted7 = applyFinanceAction(stored, request("income.count", { recordId: "uat-fin-7", actualCashReceived: 300 }), both, NOW).snapshot;
+  forbidden(() => applyFinanceAction(counted7, request("income.verify", { recordId: "uat-fin-7" }), both, NOW), /another authorized person/);
+  assert.equal(applyFinanceAction(counted7, request("income.verify", { recordId: "uat-fin-7" }), other, NOW).response.status, "verified");
 });

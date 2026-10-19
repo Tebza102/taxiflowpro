@@ -14,6 +14,7 @@ import { createClient } from "@supabase/supabase-js";
 
 import { assertLocalDatabase, assertLoopbackOnlyOrStop, psql } from "./lib/exec.mjs";
 import { ACTIVE_PROFILE } from "./lib/localTarget.mjs";
+import { PERMISSION_KEYS } from "../../src/lib/memberPermissions.js";
 import { BUSINESS_A_ID, BUSINESS_B_ID, LOCAL_TEST_PASSWORD } from "./seed-data.mjs";
 
 if (ACTIVE_PROFILE.name !== "test") {
@@ -94,7 +95,7 @@ record(r.status === 200 && stable(r.json.permissions) === stable(["cash.count"])
 r = await workspace(managerA);
 record(r.status === 200 && stable([...r.json.permissions].sort()) === stable(["cash.bank", "cash.verify"]), "Manager starts with the pre-06 rule: verify and bank", stable(r.json.permissions));
 r = await workspace(ownerA);
-record(r.json.permissions?.length === 5, "Owner holds every responsibility");
+record(stable([...(r.json.permissions ?? [])].sort()) === stable([...PERMISSION_KEYS].sort()), "Owner holds every responsibility", stable(r.json.permissions));
 r = await workspace(driverA);
 record(r.status === 200 && stable(r.json.permissions) === "[]", "Driver holds none");
 
@@ -282,6 +283,73 @@ const listedManager = r.json.members?.find((m) => m.userId === managerA.userId);
 record(r.status === 200 && stable([...listedManager.permissions].sort()) === stable(["cash.bank", "cash.verify", "drivers.manage", "fleet.manage"]), "the Owner sees the Manager's responsibilities in Business access");
 const audits = snapshotOf(BUSINESS_A_ID).auditTrail.filter((event) => event.title === "Responsibilities changed");
 record(audits.length === 8 && audits.every((event) => event.actorId === ownerA.userId), "every responsibility change is in the audit trail, by the Owner", `${audits.length}`);
+
+// --- 12. Delegated staff-responsibility management (staff.manage) ---------------------------
+const auditRows = (businessId, actorId) => Number(sql(`select count(*) from public.member_permission_changes where business_id = '${businessId}' and actor_user_id = '${actorId}';`));
+const staffManagersBefore = membershipsHash();
+r = await setPerms(["cash.count", "staff.manage"], adminA, managerA);
+record(r.status === 403, "without staff.manage an Admin cannot change anyone's responsibilities", `${r.status}`);
+r = await setPerms(["cash.count", "staff.manage"], ownerA, adminA);
+record(r.status === 200 && permsOf(BUSINESS_A_ID, adminA.userId) === "cash.count,staff.manage", "the Owner gives the Admin staff management", `${r.status}`);
+r = await listMembers(managerA);
+record(r.status === 403, "a Manager without staff.manage cannot read the access list", `${r.status}`);
+const managerBefore = permsOf(BUSINESS_A_ID, managerA.userId);
+r = await setPerms(managerBefore.split(",").filter((key) => key !== "fleet.manage"), adminA, managerA);
+record(r.status === 403 && /hold yourself/.test(r.json.error ?? "") && permsOf(BUSINESS_A_ID, managerA.userId) === managerBefore, "a staff manager cannot remove a responsibility it does not hold", `${r.status}`);
+r = await setPerms([...managerBefore.split(","), "cash.count"], adminA, managerA);
+record(r.status === 200 && permsOf(BUSINESS_A_ID, managerA.userId).split(",").includes("cash.count"), "a staff manager gives a responsibility it holds (counting)", `${r.status}`);
+r = await setPerms(managerBefore.split(","), adminA, managerA);
+record(r.status === 200 && permsOf(BUSINESS_A_ID, managerA.userId) === managerBefore, "...and removes it again", `${r.status}`);
+r = await setPerms([...managerBefore.split(","), "staff.manage"], adminA, managerA);
+record(r.status === 403 && !permsOf(BUSINESS_A_ID, managerA.userId).includes("staff.manage"), "a staff manager cannot pass staff management on", `${r.status}`);
+r = await setPerms(["cash.count", "staff.manage", "cash.bank"], adminA, adminA);
+record(r.status === 403 && permsOf(BUSINESS_A_ID, adminA.userId) === "cash.count,staff.manage", "a staff manager cannot raise its own responsibilities", `${r.status}`);
+r = await setPerms(["cash.count"], adminA, ownerA);
+record(r.status === 403, "a staff manager cannot change the Owner", `${r.status}`);
+r = await setPerms(["cash.count"], adminA, driverA);
+record(r.status === 403, "a staff manager cannot give a Driver responsibilities", `${r.status}`);
+r = await setPerms(["cash.count"], adminA, managerB);
+record(r.status === 404 && permsOf(BUSINESS_B_ID, managerB.userId) === "cash.verify,cash.bank", "a staff manager of A cannot change a member of B", `${r.status}`);
+r = await members(adminA, "member.grant", { email: "staffmgr.grant@example.com", role: "Manager" });
+record(r.status === 403, "staff management cannot grant sign-ins", `${r.status}`);
+r = await members(adminA, "member.update", { userId: managerA.userId, role: "Admin" });
+record(r.status === 403, "staff management cannot change roles", `${r.status}`);
+r = await setPerms([...managerBefore.split(","), "staff.manage"], ownerA, managerA);
+r = await setPerms(managerBefore.split(",").concat("staff.manage").filter((key) => key !== "cash.verify"), adminA, managerA);
+record(r.status === 403 && /manages staff/.test(r.json.error ?? ""), "a staff manager cannot change another staff manager", `${r.status}`);
+r = await setPerms(managerBefore.split(","), ownerA, managerA);
+record(r.status === 200, "the Owner removes the Manager's staff management", `${r.status}`);
+r = await setPerms(["cash.count"], ownerA, adminA);
+r = await setPerms([...managerBefore.split(","), "cash.count"], adminA, managerA);
+record(r.status === 403, "removing staff management blocks the very next delegated change", `${r.status}`);
+// Database rule, independent of the API: a staff manager calling the function directly is held to the same limits.
+const directBeyond = psql(`select public.set_member_permissions('${BUSINESS_A_ID}', '${managerA.userId}', '${adminA.userId}', array['cash.bank']::text[], null, null);`, { allowFailure: true });
+record(directBeyond.status !== 0, "the database function refuses a non-holder directly too", directBeyond.stderr.trim().split("\n").pop());
+record(auditRows(BUSINESS_A_ID, adminA.userId) === 2 && auditRows(BUSINESS_B_ID, adminA.userId) === 0, "each delegated change is one audit row in business A only", `${auditRows(BUSINESS_A_ID, adminA.userId)}`);
+const lastAudit = sql(`select actor_role||'|'||array_to_string(permissions_before, ',')||'|'||array_to_string(permissions_after, ',') from public.member_permission_changes where business_id = '${BUSINESS_A_ID}' and actor_user_id = '${adminA.userId}' order by changed_at desc limit 1;`);
+record(lastAudit.startsWith("Admin|") && lastAudit.split("|")[1].includes("cash.count") && !lastAudit.split("|")[2].includes("cash.count"), "audit rows record the actor's role and before/after", lastAudit);
+const browserAudit = await createClient(status.apiUrl, status.ANON_KEY, { auth: { persistSession: false }, global: { headers: { Authorization: `Bearer ${ownerA.token}` } } }).from("member_permission_changes").select("id");
+record(Boolean(browserAudit.error) || (browserAudit.data ?? []).length === 0, "a browser (even the Owner's) cannot read the audit table", browserAudit.error?.code ?? `${(browserAudit.data ?? []).length} rows`);
+record(membershipsHash() === staffManagersBefore, "roles, activity and driver links unchanged by delegated management");
+
+// --- 13. Separation of duties: the counter never verifies its own count ------------------
+r = await setPerms([...managerBefore.split(","), "cash.count"], ownerA, managerA);
+record(permsOf(BUSINESS_A_ID, managerA.userId).includes("cash.count") && permsOf(BUSINESS_A_ID, managerA.userId).includes("cash.verify"), "a Manager may hold both counting and verifying");
+r = await act(managerA, "income.count", { recordId: "uat-fin-7", actualCashReceived: 300 });
+record(r.status === 200, "the Manager counts standalone income", `${r.status} ${r.json.error ?? ""}`);
+r = await act(managerA, "income.verify", { recordId: "uat-fin-7" });
+record(r.status === 403 && /another authorized person/.test(r.json.error ?? "") && snapshotOf(BUSINESS_A_ID).financeTransactions.find((t) => t.id === "uat-fin-7").status === "counted", "a direct request to verify its own count is refused", `${r.status}`);
+r = await act(ownerA, "income.verify", { recordId: "uat-fin-7" });
+record(r.status === 200 && snapshotOf(BUSINESS_A_ID).financeTransactions.find((t) => t.id === "uat-fin-7").verifiedBy === ownerA.userId, "another authorized person (the Owner) verifies it", `${r.status}`);
+r = await act(driverA, "cashup.submit", { workDate: "2026-10-02" });
+const dayId = r.json.cashUpId;
+record(r.status === 200 && Boolean(dayId), "a Driver submits another day checking", `${r.status} ${dayId}`);
+r = await act(managerA, "cashup.record_handin", { cashUpId: dayId, actualCashReceived: 250 });
+record(r.status === 200, "the Manager records that day's hand-in", `${r.status}`);
+r = await act(managerA, "cashup.verify", { cashUpId: dayId });
+record(r.status === 403 && /another authorized person/.test(r.json.error ?? ""), "the same Manager cannot verify that day (direct API)", `${r.status}`);
+r = await act(ownerA, "cashup.verify", { cashUpId: dayId });
+record(r.status === 200 && snapshotOf(BUSINESS_A_ID).dailyCashUps.find((c) => c.id === dayId).status === "verified", "another authorized person verifies the day", `${r.status}`);
 
 const failed = results.filter((ok) => !ok).length;
 console.log(`\n${results.length - failed}/${results.length} PASS`);

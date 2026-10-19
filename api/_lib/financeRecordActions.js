@@ -119,6 +119,10 @@ const verifyIncome = (stored, fields, requester, now, requestId) => {
   if (record.status !== "counted") {
     throw createHttpError(409, record.status === "verified" ? "This cash checking has already been verified." : "An administrator must record the cash hand-in before manager verification.");
   }
+  // Separation of duties (same rule as cashup.verify): the counter cannot verify.
+  if (text(record.countedBy) && text(record.countedBy) === text(requester.id)) {
+    throw createHttpError(403, "You counted this hand-in, so another authorized person must verify it.");
+  }
   const amount = fields.actualCashReceived ?? Number(record.actualCashReceived);
   if (!Number.isFinite(amount) || amount < 0) throw createHttpError(409, "An administrator must record the cash hand-in before manager verification.");
   const claimed = Number(record.amountClaimed ?? record.amount ?? 0);

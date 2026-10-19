@@ -1606,3 +1606,26 @@ What `platform-admin-tests.mjs` covers:
 
 **Next action:**
 - Review the PR; on authorization follow the release steps in next-action.md (backup, file 06, merge, promote, checks).
+
+### 2026-10-19 — Acceptance gaps: delegated staff management, separation of duties, isolated Preview backend (in progress)
+
+**Changed by:** Agent (Claude), branch `agent/owner-responsibilities` (PR #6). Production on hold; nothing deployed or migrated in production.
+
+**Files changed:** release file 06 (`scripts/localdb/migrations/20261019090000_member_permissions.sql`, edited in place: it is unreleased) and its rollback note; `src/lib/memberPermissions.js`; `api/_lib/tenantOnboarding.js`; `api/_lib/financeActions.js`; `api/_lib/financeRecordActions.js`; `src/components/TenantAccessPanel.jsx`; `src/App.jsx`; tests `tests/member-permissions.test.mjs`, `scripts/localdb/member-permissions-tests.mjs`, `scripts/localdb/member-permissions-migration-tests.mjs`; new `scripts/preview-test/` (`build-schema.mjs`, `schema.sql`, `verify-schema.sql`, `seed-hosted-test.mjs`), `tests/preview-test/preview-journey.spec.js`, `playwright.preview-test.config.mjs`; `playwright.config.mjs` (ignores `preview-test`); `04-technical/auth-and-roles.md`, `04-technical/tenant-design.md`.
+
+**Summary:**
+1. **Delegated staff management (`staff.manage`, "Manage staff responsibilities").** Given and removed only by the Owner. A holder may add or remove for another Admin/Manager only responsibilities it currently holds (effective, so module switches also limit it); never `staff.manage`, never its own entry, an Owner, a Driver, another holder of `staff.manage`, or another business; never roles or sign-ins. Enforced by the server (current membership, per request) and again inside `set_member_permissions`. Every change writes one row to the new tenant-scoped audit table `public.member_permission_changes` (business, actor, actor role, target, before, after; RLS forced, no browser access, kept on rollback) plus the business audit entry. Holders can read the access list; the Business access screen shows only the checkboxes they may change.
+2. **Separation of duties.** `cashup.verify` and `income.verify` refuse (403) when the requester recorded that count (`countedBy`), for every role including the Owner. One person may still hold both counting and verifying. Consequence: a business where the Owner works alone needs a second person to verify the Owner's counts.
+3. **Isolated Preview backend.** New free Supabase project `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`, eu-west-1, Tebogo-approved, quoted $0). Vercel Preview variables scoped to branch `agent/owner-responsibilities` only: `VITE_SUPABASE_URL`, `SUPABASE_URL` (test project) and `VITE_SUPABASE_ANON_KEY` (its public anon key). Production variables untouched. Two connector migrations to the test project returned `{"status":"declined"}` from the Supabase MCP server in 1.7-2.3 s with Claude Code permission "accept" and no prompt recorded (assessed as an automatic rejection of its destructive-statement confirmation). Not retried. The first attempt also inserted synthetic accounts by SQL; Tebogo chose no accounts via SQL, and that approach was removed. Instead: `scripts/preview-test/schema.sql` (schema only, generated from release files 01-06, refuses non-empty projects) for Tebogo to run in the SQL editor, and `scripts/preview-test/seed-hosted-test.mjs` (test sign-ins, companies, set-up data and access through the app's own operator functions; secret key from an env file outside the repo; dry run by default; typed ref to apply).
+
+**Tests run:**
+- Unit: all files pass; `member-permissions.test.mjs` 10/10 (delegation limits, separation of duties); `vite build` passes.
+- Isolated local test stack (fresh reset each): `member-permissions-tests` 101/101 (adds 29 checks: delegated limits, direct database-function refusal, audit rows tenant-scoped with before/after, browser cannot read the audit table, removing `staff.manage` blocks the next delegated change, self-verification refused for day and standalone income via direct API, another verifier succeeds); `member-permissions-migration-tests` 25/25 (audit table kept on rollback); finance-action 56/56; finance-record 36/36; onboarding 64/64; localdb browser 12/12.
+- `schema.sql` on a fresh EMPTY local Supabase (no migrations, no seed): applies cleanly; `verify-schema.sql` 10/10 true (6 tables, permissions column, RLS everywhere, only the two intended authenticated SELECT grants, no browser-executable functions, 5 server functions for service_role, no snapshot policies, RLS forced on platform_admins and the audit table, 0 users/businesses/snapshots, no local-only schema); a second run refuses ("TaxiFlow tables already exist").
+- Rehearsal database: not touched.
+
+**Result:** parts 1 and 2 done and proven locally. Part 3 waiting on Tebogo (schema run in the test project's SQL editor; the test project's secret key in an env file outside the repo and in the branch-scoped Vercel variable).
+
+**Risks remaining:** the hosted journey has not run yet. No bypass secret exists yet (to be created for the run and revoked after). Signups are open by default on the new test project (an account without membership has no access).
+
+**Next action:** see next-action.md "Hosted Preview journey".

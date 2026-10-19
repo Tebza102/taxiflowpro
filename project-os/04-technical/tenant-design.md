@@ -492,4 +492,5 @@ Branch `agent/owner-responsibilities`. Roles and the responsibility table: `auth
 - Business access: per-person responsibility checkboxes (Owner edits, Admin views), inactive-module note.
 - Fleet and Drivers: tenant saves call the server actions; forms are hidden without the responsibility; Money buttons follow the responsibilities.
 - Clearly marked as **not available yet** in the business workspace (nothing is saved): archiving vehicles, logging or resolving defects, service/document records, shift allocation from the Drivers page, expense presets, profile/settings saves, changing a member's role in the UI (`member.update` exists server-side only), custom roles. Driver email changes are not possible from the profile form.
-- Known policy gap (not in scope): the Owner can give one person both counting and verifying; no segregation-of-duties check exists.
+- Separation of duties (added 2026-10-19): one person may hold counting and verifying, but the server refuses verifying a count they recorded (403, direct API included).
+- Delegated staff management (`staff.manage`, added 2026-10-19): see auth-and-roles.md for the limits; audit table `public.member_permission_changes` (RLS forced, no policies, service role SELECT only; kept on rollback).

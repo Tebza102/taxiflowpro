@@ -1,6 +1,13 @@
 # Next Action
 
-## Hosted Preview journey (isolated test backend): waiting on Tebogo
+## After the hosted journey (2026-10-19): review and release decision
+
+1. **Tebogo decides** whether separation of duties should also bind the Owner (current behaviour) or allow a sole Owner to verify their own count (would need a rule change and retest).
+2. **Review PR #6.** On authorization, run the release-06 procedure below (backup, file 06 via `apply-release.mjs`, merge, promote, live checks, backup). File 06 now also adds `staff.manage` and `member_permission_changes`.
+3. **Test environment cleanup when no longer needed:** remove the four branch-scoped Preview variables (`vercel env rm … preview agent/owner-responsibilities`), delete or pause `taxiflow-preview-test`, delete `C:\Users\appri\taxiflow-preview-test.env.txt` and revoke its secret key in Supabase.
+4. Do not use `vercel curl` on this project (it creates a bypass secret).
+
+## Hosted Preview journey (isolated test backend): DONE 2026-10-19 (history)
 
 1. ~~Schema~~ **DONE 2026-10-19:** `schema.sql` from `cd329d3` (SHA-256 matched) applied by Tebogo (via ChatGPT, Supabase migration `preview_test_schema_releases_01_to_06`, version 20261019191640). The agent re-ran only the read-only `verify-schema.sql`: 10/10 true, users=0 businesses=0 snapshots=0. Security advisor: INFO only (RLS on, no policies, for the 4 server-only tables, as designed). **Do not rerun the schema.**
 2. **Tebogo:** create a secret key (`sb_secret_…`) in that project. Put it (a) in an env file OUTSIDE the repo with `SUPABASE_URL=https://sxoonhovoqgcpflhqirb.supabase.co` and `SUPABASE_SECRET_KEY=…`, and (b) in Vercel: `vercel env add SUPABASE_SERVICE_ROLE_KEY preview agent/owner-responsibilities`.

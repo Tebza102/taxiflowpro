@@ -1639,3 +1639,27 @@ What `platform-admin-tests.mjs` covers:
 **Result:** Pass. The schema must not be rerun (it refuses non-empty projects anyway).
 
 **Next action:** Tebogo: the test project's secret key (env file outside the repo; branch-scoped Vercel `SUPABASE_SERVICE_ROLE_KEY`), then `seed-hosted-test.mjs`. Production on hold.
+
+### 2026-10-19 — Authenticated hosted Preview journey on the isolated test backend: PASS
+
+**Changed by:** Agent (Claude), under Tebogo's authorization of 2026-10-19 (test-only seeding, Preview deployment, hosted verification, bypass removal). Branch `agent/owner-responsibilities`. Production untouched (no merge, migration, promotion or onboarding).
+
+**What was done:**
+- `seed-hosted-test.mjs`: added `--confirm-ref` (exact `sxoonhovoqgcpflhqirb`, still behind `--apply` and every target/production guard; a wrong ref was proven refused before any write). Other operator scripts unchanged. Seeded test project `sxoonhovoqgcpflhqirb` through the app's own functions: 6 synthetic `@example.com` sign-ins (password only in git-ignored `.env.preview-test.local`), Preview Company A (Owner, Admin, Manager, Driver `pv-drv-01`; route Rank A to Rank B; vehicles PV TEST 01/02) and Preview Company B (Owner, Manager; route, driver profile, vehicle). Database trigger applied role defaults (Admin cash.count; Manager cash.verify, cash.bank).
+- Defect found and fixed (configuration): the branch-scoped Preview `SUPABASE_SERVICE_ROLE_KEY` held no usable value (server answered "Supabase server configuration is incomplete", 503). Replaced from the external env file by piping, never displayed; still Preview + this branch only. Redeployed: `taxiflowpro-n8yesi8bq-apprigate.vercel.app`.
+- Test fixes (no app code changed): stops on a route with named stops are dropdowns (located by caption); seeded registrations are stored normalized ("PV TEST 01"); the journey re-issues API tokens after each browser sign-out; the fleet test resets the Manager to role defaults so it can be rerun.
+- **Incident (found and closed):** the earlier read-only `vercel curl` attempt (17:21:27 UTC) silently created an automation protection-bypass secret on the project (exposed to deployments as an env var). It existed until this run and was used as the run's temporary bypass, then revoked. The Project OS statement "bypass secrets: 0" was untrue between 17:21 and the revocation. Do not use `vercel curl` on this project.
+- **Observation (not changed, outside scope):** the app's Sign out ends all of that user's sessions on every device (Supabase global sign-out).
+
+**Tests run (Preview `taxiflowpro-n8yesi8bq-apprigate.vercel.app`, dpl via `vercel redeploy` of `e78e4b3`; isolated backend):**
+- Target guard: bundle carries the test project URL and anon key and no production ref; unauthenticated 401; Owner workspace 200; Company B's Manager refused Company A's workspace (403) and a route save into A (403).
+- Full cash workflow in the browser: driver trip + safe-paid expense, refresh, checking sent; Admin records hand-in R380; Manager verifies; Owner finishes the deposit; after reload Finish deposit is disabled. PASS (1.4 min).
+- Owner gives the Manager fleet and driver management in Business access; the Manager creates a route, a vehicle and a driver profile; all survive a full reload and are read back from the server attributed to the Manager. PASS.
+- Owner unticks banking in Business access; the Manager's next direct `deposit.lock` is refused (403, "Bank verified cash") and the version is unchanged. PASS.
+- Delegation: Admin without staff.manage refused; after the Owner gives staff.manage, the Admin adds counting to the Manager (200) but cannot remove fleet management (403, not held), pass on staff.manage (403), raise itself (403), change the Owner (403) or grant a sign-in (403); after removal, the next delegated change is refused. Audit table rows in Company A only: Owner 8, Admin 1. PASS.
+- Separation of duties via direct API: the driver captures a day; the Manager (count + verify) records the hand-in, its own verification is refused (403); the Owner verifies (200). PASS.
+- Totals: 6 hosted tests passed (cash workflow on run 4; the other 5 together on run 7, same deployment).
+
+**Cleanup:** automation bypass secrets now 0 (verified; deployment protection still on); the local bypass copy deleted; Preview without Vercel login now redirects to sign-in (302). Left in place for further testing (Tebogo to decide): test project data, the four branch-scoped Preview variables, the external env file.
+
+**Result:** Pass.

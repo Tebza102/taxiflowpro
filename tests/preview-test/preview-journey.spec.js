@@ -59,6 +59,9 @@ const signIn = async (page, email) => {
 const signOut = async (page) => {
   await page.getByRole("button", { name: "Sign out" }).click();
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
+  // The app's sign-out ends ALL of that user's sessions (Supabase global sign-out),
+  // so API tokens issued earlier for any account are re-issued.
+  for (const email of Object.keys(tokens)) delete tokens[email];
 };
 const moduleButton = (page, label) => page.locator("button.module-button").filter({ hasText: label }).first();
 const openBanking = async (page) => {
@@ -119,8 +122,15 @@ test("full cash workflow: driver capture and checking, admin count, manager veri
   await panel.getByLabel("Time out").fill("10:00");
   await panel.getByLabel("Opening odo").fill("1000");
   await panel.getByLabel("Closing odo").fill("1080");
-  await panel.getByLabel("From").first().fill("Rank A");
-  await panel.getByLabel("To", { exact: true }).first().fill("Rank B");
+  // A route with named stops offers them as a list; otherwise stops are typed.
+  const setStop = async (locator, value) => {
+    const tag = await locator.evaluate((element) => element.tagName);
+    if (tag === "SELECT") await locator.selectOption({ label: value });
+    else await locator.fill(value);
+  };
+  const stopField = (caption) => panel.locator("label.finance-field", { has: page.locator("span", { hasText: new RegExp(`^${caption}$`) }) }).locator("select, input").first();
+  await setStop(stopField("From"), "Rank A");
+  await setStop(stopField("To"), "Rank B");
   await panel.getByRole("spinbutton", { name: "Passengers" }).first().fill("12");
   await panel.getByRole("spinbutton", { name: "Amount collected" }).first().fill("500");
   await page.getByRole("button", { name: "Save trip" }).click();
@@ -170,6 +180,8 @@ test("full cash workflow: driver capture and checking, admin count, manager veri
 });
 
 test("Owner grants fleet and driver management; the Manager's saves survive a reload", async ({ page, request }) => {
+  // Start from the Manager role defaults (rerunnable).
+  expect((await setPerms(request, "owner@example.com", "manager@example.com", ["cash.verify", "cash.bank"])).status).toBe(200);
   await signIn(page, "manager@example.com");
   await moduleButton(page, "Fleet & Operations").click();
   await expect(page.getByTestId("tenant-fleet-scope")).toContainText("view-only");
@@ -214,7 +226,9 @@ test("Owner grants fleet and driver management; the Manager's saves survive a re
   await expect(page.locator("option", { hasText: `${registration} / ${routeName}` })).toHaveCount(1, { timeout: 60_000 });
   await signOut(page);
 
-  const { json } = await workspace(request, "manager@example.com");
+  const readBack = await workspace(request, "manager@example.com");
+  expect(readBack.status, JSON.stringify(readBack.json).slice(0, 300)).toBe(200);
+  const { json } = readBack;
   const route = json.snapshot.routes.find((entry) => entry.name === routeName);
   expect(route?.createdByRole).toBe("Manager");
   expect(json.snapshot.vehicles.find((entry) => entry.registration === registration)?.currentRouteId).toBe(route?.id);

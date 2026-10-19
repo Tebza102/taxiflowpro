@@ -1,6 +1,12 @@
 # Current Status
 
-## Acceptance gaps (2026-10-19, later): parts 1-2 DONE locally; part 3 WAITING on Tebogo
+## Release file 06 acceptance: ALL THREE gaps PASSED (2026-10-19 night); production on hold
+
+- **Hosted proof:** authenticated journey on Preview `taxiflowpro-n8yesi8bq-apprigate.vercel.app` against the isolated test project `sxoonhovoqgcpflhqirb` (never production): full cash workflow; Owner permission changes; Manager route/vehicle/driver saves surviving reload; banking revocation blocking the next direct request; delegated staff management limits with tenant-scoped audit rows; separation of duties by direct API; cross-company refusal. 6/6 passed. Details: change-log 2026-10-19 "Authenticated hosted Preview journey".
+- **Cleanup:** automation bypass secrets 0 (an accidental one created by `vercel curl` at 17:21 UTC was found and revoked); deployment protection on. Test project, its data and the branch-scoped Preview variables remain until Tebogo decides.
+- **Decision needed before release:** separation of duties applies to the Owner too, so a business run by the Owner alone cannot verify the Owner's own counts.
+
+## Acceptance gaps (2026-10-19, later): parts 1-2 DONE locally; part 3 WAITING on Tebogo (superseded above)
 
 - **Delegated staff management** (`staff.manage`, Owner-given only; holders change other Admins'/Managers' responsibilities only within their own; audit table `member_permission_changes`) and **separation of duties** (nobody verifies a count they recorded, Owner included) are built and pass locally (101/101, 25/25, unit 10/10, regressions, browser 12/12).
 - **Isolated Preview backend:** test project `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`) has the schema (release files 01-06; applied by Tebogo 2026-10-19, verified 10/10 read-only by the agent); still no accounts or data. Branch-scoped Vercel Preview variables point this branch's Preview at it. Next: Tebogo puts the test project's secret key in an env file outside the repo and in the branch Vercel variable, then runs `seed-hosted-test.mjs`; then the agent runs the hosted journey with a temporary bypass secret and revokes it.

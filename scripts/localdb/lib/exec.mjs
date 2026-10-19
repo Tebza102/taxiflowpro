@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 
 import {
   COMPOSE_VOLUME,
+  CONTAINER_PREFIX,
+  ACTIVE_PROFILE,
   DEFAULT_LOCAL_WORKDIR,
   LOCAL_API_PORT,
   LOCAL_DB_PORT,
@@ -24,7 +26,7 @@ export const WORKDIR = process.env.TAXIFLOW_LOCALDB_WORKDIR || DEFAULT_LOCAL_WOR
 export const COMPOSE_DIR = path.join(WORKDIR, "compose");
 export const COMPOSE_FILE = path.join(COMPOSE_DIR, "docker-compose.yml");
 export const ENV_FILE = path.join(COMPOSE_DIR, ".env");
-export const DB_CONTAINER = "taxiflow_localdb_db";
+export const DB_CONTAINER = `${CONTAINER_PREFIX}_db`;
 
 export const run = (command, args, { input, allowFailure = false, timeout = 600_000 } = {}) => {
   const result = spawnSync(command, args, { input, encoding: "utf8", maxBuffer: 64 << 20, timeout });

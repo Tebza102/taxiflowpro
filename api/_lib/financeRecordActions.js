@@ -233,13 +233,15 @@ const deleteRecord = (stored, fields, requester, now, requestId) => {
 
 export const RECORD_ACTIONS = Object.freeze({
   "income.count": {
-    roles: ["Owner", "Admin"],
+    roles: ["Owner", "Admin", "Manager"],
+    permission: "cash.count",
     fields: ["recordId", "actualCashReceived"],
     parse: (f) => (onlyKeys(f, ["recordId", "actualCashReceived"]), { recordId: parseRecordId(f), actualCashReceived: parseCash(f.actualCashReceived, true) }),
     apply: countIncome,
   },
   "income.verify": {
-    roles: ["Owner", "Manager"],
+    roles: ["Owner", "Admin", "Manager"],
+    permission: "cash.verify",
     fields: ["recordId", "actualCashReceived"],
     parse: (f) => (onlyKeys(f, ["recordId", "actualCashReceived"]), { recordId: parseRecordId(f), actualCashReceived: parseCash(f.actualCashReceived, false) }),
     apply: verifyIncome,

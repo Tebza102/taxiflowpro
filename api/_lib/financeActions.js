@@ -9,7 +9,9 @@ import {
 } from "../../src/lib/cashUpContract.js";
 import { normalizeTripFinanceTransactions } from "../../src/lib/tripHistory.js";
 import { CAPTURE_ACTIONS } from "./financeCapture.js";
+import { FLEET_ACTIONS } from "./fleetActions.js";
 import { RECORD_ACTIONS } from "./financeRecordActions.js";
+import { hasPermission, permissionLabel } from "../../src/lib/memberPermissions.js";
 import { createHttpError } from "./tenantAuth.js";
 
 // Scoped server-side finance actions. Pure: given the stored business snapshot,
@@ -19,25 +21,30 @@ import { createHttpError } from "./tenantAuth.js";
 // Permissions are the existing workflow's (src/lib/appRuntime.js):
 //   cashup.submit         Driver, or an Owner who drives; requires the membership's
 //                         authoritative driver linkage (own records only)
-//   cashup.record_handin  Owner, Admin  (canRecordCashHandoverForRole)
-//   cashup.verify         Owner, Manager (canVerifyCashCheckForRole)
-//   deposit.lock          Owner, Manager with finance edit (canFinishDepositForRole +
-//                         hasModuleUpdateAccess("finance")): verified -> banked
+//   cashup.record_handin  Owner, or staff holding cash.count
+//   cashup.verify         Owner, or staff holding cash.verify
+//   deposit.lock          Owner, or staff holding cash.bank with finance edit:
+//                         verified -> banked
+// Staff responsibilities come from the membership (release file 06; before it,
+// the role defaults: Admin cash.count, Manager cash.verify + cash.bank) and each
+// is capped by its module's access (src/lib/memberPermissions.js).
 // Status values stay pending | counted | verified | banked; expected cash in is
 // the shared summarizeDriverDayCash (income less cash expenses).
 
 export const FINANCE_ACTIONS = Object.freeze({
   // Owner-driver: one identity, Owner role kept, driver linkage from the membership.
   "cashup.submit": { roles: ["Driver", "Owner"], fields: ["workDate"], requiresDriverLink: true },
-  "cashup.record_handin": { roles: ["Owner", "Admin"], fields: ["cashUpId", "actualCashReceived"] },
-  "cashup.verify": { roles: ["Owner", "Manager"], fields: ["cashUpId", "actualCashReceived"] },
-  "deposit.lock": { roles: ["Owner", "Manager"], fields: ["cashUpIds", "transactionIds"], requiresFinanceEdit: true },
+  "cashup.record_handin": { roles: ["Owner", "Admin", "Manager"], permission: "cash.count", fields: ["cashUpId", "actualCashReceived"] },
+  "cashup.verify": { roles: ["Owner", "Admin", "Manager"], permission: "cash.verify", fields: ["cashUpId", "actualCashReceived"] },
+  "deposit.lock": { roles: ["Owner", "Admin", "Manager"], permission: "cash.bank", fields: ["cashUpIds", "transactionIds"], requiresFinanceEdit: true },
   // Capture (create only). Role/mode rules live in financeCapture.resolveMode:
   // Driver -> own driver work; Owner with linkage -> driver or management;
   // Owner/Admin/Manager -> management with finance edit (Owner always).
   ...Object.fromEntries(Object.entries(CAPTURE_ACTIONS).map(([name, spec]) => [name, { roles: ["Owner", "Admin", "Manager", "Driver"], fields: spec.fields, capture: spec }])),
   // Standalone count/verify and pending-record edit/delete (financeRecordActions.js).
-  ...Object.fromEntries(Object.entries(RECORD_ACTIONS).map(([name, spec]) => [name, { roles: spec.roles, fields: spec.fields, record: spec }])),
+  ...Object.fromEntries(Object.entries(RECORD_ACTIONS).map(([name, spec]) => [name, { roles: spec.roles, permission: spec.permission, fields: spec.fields, record: spec }])),
+  // Route, vehicle and driver-profile saves (fleetActions.js), same record shape.
+  ...Object.fromEntries(Object.entries(FLEET_ACTIONS).map(([name, spec]) => [name, { roles: spec.roles, permission: spec.permission, fields: spec.fields, record: spec }])),
 });
 
 const ENVELOPE_FIELDS = ["action", "requestId", "expectedVersion", "fields"];
@@ -155,6 +162,9 @@ export const applyFinanceAction = (storedSnapshot, request, requester, now = new
   const spec = FINANCE_ACTIONS[request.action];
   if (!spec || !spec.roles.includes(requester.role)) {
     throw createHttpError(403, `Your role cannot perform ${request.action}.`);
+  }
+  if (spec.permission && !hasPermission(requester, spec.permission)) {
+    throw createHttpError(403, `You have not been given the "${permissionLabel(spec.permission)}" responsibility.`);
   }
   if (spec.requiresDriverLink && !text(requester.driverStaffId)) {
     throw createHttpError(403, "Your membership is not linked to a driver record.");

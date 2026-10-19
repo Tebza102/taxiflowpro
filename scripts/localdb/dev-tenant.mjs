@@ -2,16 +2,17 @@
 // Runs the Vite dev server in tenant mode against the LOCAL synthetic stack only
 // (VITE_BACKEND_MODE=live; hosted builds are always tenant). Keys are read from the local
 // stack's env file and passed through the child environment; nothing is printed.
-// Usage: node scripts/localdb/dev-tenant.mjs [port]   (default 5175, 127.0.0.1)
+// Usage: node scripts/localdb/dev-tenant.mjs [port]   (default: the profile app port, 127.0.0.1)
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { assertLocalDatabase, assertLoopbackOnlyOrStop } from "./lib/exec.mjs";
+import { ACTIVE_PROFILE } from "./lib/localTarget.mjs";
 
 const status = assertLocalDatabase();
 assertLoopbackOnlyOrStop();
-const port = String(Number(process.argv[2]) || 5175);
+const port = String(Number(process.argv[2]) || ACTIVE_PROFILE.appPort);
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 const env = {

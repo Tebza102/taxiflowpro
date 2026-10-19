@@ -6,13 +6,63 @@ import path from "node:path";
 // Every local script calls these before any start, reset, SQL, seed, export or
 // restore. Pure functions; I/O lives in exec.mjs.
 
-export const LOCAL_PROJECT_ID = "taxiflow-localdb";
+// Two fixed local profiles, selected with TAXIFLOW_LOCALDB_PROFILE:
+//   default  the long-lived stack (rehearsal and manual work)
+//   test     a separate, disposable stack for destructive/resetting suites
+// Each has its own Compose project, volume, workdir, container names and
+// loopback ports; every guard below applies unchanged to whichever is active.
+// Any other profile name is refused.
+export const LOCAL_PROFILES = Object.freeze({
+  default: Object.freeze({
+    name: "default",
+    projectId: "taxiflow-localdb",
+    workdir: "C:\\Users\\appri\\taxiflow-localdb",
+    apiPort: 54321,
+    dbPort: 54322,
+    mailPort: 54324,
+    volume: "taxiflow_localdb_compose_db",
+    containerPrefix: "taxiflow_localdb",
+    appPort: 5175,
+  }),
+  test: Object.freeze({
+    name: "test",
+    projectId: "taxiflow-localdb-test",
+    workdir: "C:\\Users\\appri\\taxiflow-localdb-test",
+    apiPort: 55321,
+    dbPort: 55322,
+    mailPort: 55324,
+    volume: "taxiflow_localdb_test_db",
+    containerPrefix: "taxiflow_localdb_test",
+    appPort: 5176,
+  }),
+});
+
+export const resolveLocalProfile = (value) => {
+  const name = String(value ?? "").trim() || "default";
+  const profile = LOCAL_PROFILES[name];
+  if (!profile || !Object.hasOwn(LOCAL_PROFILES, name)) {
+    throw new LocalTargetError(`Unknown local profile "${name}" (expected ${Object.keys(LOCAL_PROFILES).join(" or ")}).`);
+  }
+  return profile;
+};
+
+export class LocalTargetError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "LocalTargetError";
+  }
+}
+
+export const ACTIVE_PROFILE = resolveLocalProfile(process.env.TAXIFLOW_LOCALDB_PROFILE);
+export const LOCAL_PROJECT_ID = ACTIVE_PROFILE.projectId;
+// The marker means "a dedicated local TaxiFlow database"; both profiles carry it.
 export const LOCAL_MARKER_ID = "taxiflow-localdb-isolated";
-export const DEFAULT_LOCAL_WORKDIR = "C:\\Users\\appri\\taxiflow-localdb";
-export const LOCAL_API_PORT = 54321;
-export const LOCAL_DB_PORT = 54322;
-export const LOCAL_MAIL_PORT = 54324;
-export const COMPOSE_VOLUME = "taxiflow_localdb_compose_db";
+export const DEFAULT_LOCAL_WORKDIR = ACTIVE_PROFILE.workdir;
+export const LOCAL_API_PORT = ACTIVE_PROFILE.apiPort;
+export const LOCAL_DB_PORT = ACTIVE_PROFILE.dbPort;
+export const LOCAL_MAIL_PORT = ACTIVE_PROFILE.mailPort;
+export const COMPOSE_VOLUME = ACTIVE_PROFILE.volume;
+export const CONTAINER_PREFIX = ACTIVE_PROFILE.containerPrefix;
 export const CLI_DISABLED_SENTINEL = "TAXIFLOW_SUPABASE_CLI_DISABLED";
 // Intentionally invalid TOML: any supabase CLI command in the workdir fails to parse it.
 export const CLI_DISABLED_CONFIG = `# ${"TAXIFLOW_SUPABASE_CLI_DISABLED"}
@@ -24,24 +74,19 @@ export const CLI_DISABLED_CONFIG = `# ${"TAXIFLOW_SUPABASE_CLI_DISABLED"}
 // The hosted TaxiFlow project; its ref must never appear in a local target.
 export const LIVE_PROJECT_REF = "vfxftviwteypasredjgm";
 
-// The only published ports allowed, each loopback-only.
-export const ALLOWED_BINDINGS = Object.freeze([
-  "127.0.0.1:54321->8000/tcp",
-  "127.0.0.1:54322->5432/tcp",
-  "127.0.0.1:54324->8025/tcp",
-]);
+// The only published ports allowed for the active profile's project, each loopback-only.
+export const bindingsFor = (profile) =>
+  Object.freeze([
+    `127.0.0.1:${profile.apiPort}->8000/tcp`,
+    `127.0.0.1:${profile.dbPort}->5432/tcp`,
+    `127.0.0.1:${profile.mailPort}->8025/tcp`,
+  ]);
+export const ALLOWED_BINDINGS = bindingsFor(ACTIVE_PROFILE);
 
 const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 const LOOPBACK_ADDRESSES = new Set(["127.0.0.1", "::1"]);
 const FORBIDDEN_CLI_ARGS = ["--linked", "--db-url", "--project-ref"];
 const LOCAL_DOCKER_CONTEXTS = new Set(["desktop-linux", "default"]);
-
-export class LocalTargetError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = "LocalTargetError";
-  }
-}
 
 const refuse = (message) => {
   throw new LocalTargetError(message);
@@ -147,9 +192,13 @@ export const assertPublishedBindings = (lines) => {
 
 // listeners: [{ address, port, process }] Windows TCP listeners owned by the
 // Docker Desktop port forwarders (com.docker.backend, wslrelay). All must be
-// loopback and on an allowed port.
+// loopback and on a port of one of the fixed local profiles (the forwarders are
+// machine-wide, so both stacks' listeners are visible from either profile).
+export const ALL_PROFILE_PORTS = Object.freeze(
+  Object.values(LOCAL_PROFILES).flatMap((profile) => [profile.apiPort, profile.dbPort, profile.mailPort]),
+);
 export const assertWindowsListeners = (listeners) => {
-  const allowedPorts = new Set([LOCAL_API_PORT, LOCAL_DB_PORT, LOCAL_MAIL_PORT]);
+  const allowedPorts = new Set(ALL_PROFILE_PORTS);
   const bad = listeners.filter(
     (entry) => !LOOPBACK_ADDRESSES.has(String(entry.address)) || !allowedPorts.has(Number(entry.port)),
   );
@@ -157,6 +206,31 @@ export const assertWindowsListeners = (listeners) => {
     refuse(`Docker listeners reachable beyond loopback or on extra ports: ${bad.map((e) => `${e.address}:${e.port} (${e.process})`).join(", ")}`);
   }
   return listeners;
+};
+
+// The checked-in Compose template is the default profile. Another profile gets
+// the same file with its own project name, container names, volume and
+// loopback ports; nothing of the default profile may remain in it.
+export const renderComposeForProfile = (template, profile = ACTIVE_PROFILE) => {
+  const base = LOCAL_PROFILES.default;
+  if (profile.name === base.name) return template;
+  const rendered = template
+    .replace(/^name:\s*taxiflow-localdb\s*$/m, `name: ${profile.projectId}`)
+    .replaceAll(`container_name: ${base.containerPrefix}_`, `container_name: ${profile.containerPrefix}_`)
+    .replaceAll(`name: ${base.volume}`, `name: ${profile.volume}`)
+    .replaceAll(`127.0.0.1:${base.apiPort}:`, `127.0.0.1:${profile.apiPort}:`)
+    .replaceAll(`127.0.0.1:${base.dbPort}:`, `127.0.0.1:${profile.dbPort}:`)
+    .replaceAll(`127.0.0.1:${base.mailPort}:`, `127.0.0.1:${profile.mailPort}:`)
+    .replaceAll(`http://127.0.0.1:${base.apiPort}`, `http://127.0.0.1:${profile.apiPort}`);
+  const leftovers = [
+    new RegExp(`^name:\\s*${base.projectId}\\s*$`, "m"),
+    new RegExp(`container_name: ${base.containerPrefix}_(db|auth|rest|kong|mail)\\b`),
+    new RegExp(base.volume),
+    new RegExp(`\\b(${base.apiPort}|${base.dbPort}|${base.mailPort})\\b`),
+  ].filter((pattern) => pattern.test(rendered));
+  if (leftovers.length) refuse(`The ${profile.name} Compose file still references the default profile (${leftovers.join(", ")}).`);
+  if (!rendered.includes(`name: ${profile.projectId}`)) refuse(`The ${profile.name} Compose file has no project name.`);
+  return rendered;
 };
 
 // --- Canonical manifests --------------------------------------------------------

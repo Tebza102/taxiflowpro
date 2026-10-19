@@ -41,6 +41,9 @@ export default async function handler(req, res) {
       businessId: result.businessId,
       role: requester.role,
       driverStaffId: requester.driverStaffId,
+      // Effective responsibilities (membership, capped by module access). The
+      // screens use them only to show or hide controls; the server re-checks.
+      permissions: requester.permissions ?? [],
       scope: result.scope,
       version: result.version,
       actorNames,

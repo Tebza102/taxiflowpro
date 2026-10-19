@@ -1,9 +1,11 @@
 import { createClient } from "@supabase/supabase-js";
 
+import { LOCAL_MAIL_PORT } from "./localTarget.mjs";
+
 // LOCAL synthetic stack only: completes the password-setup email that the
-// server sent through local Mailpit (127.0.0.1:54324): reads the recovery link,
+// server sent through local Mailpit (the active profile's loopback mail port): reads the recovery link,
 // verifies it with Supabase Auth and sets the given synthetic local password.
-const MAILPIT = "http://127.0.0.1:54324";
+const MAILPIT = `http://127.0.0.1:${LOCAL_MAIL_PORT}`;
 
 export const activateViaEmail = async ({ apiUrl, anonKey, email, password }) => {
   for (let attempt = 0; attempt < 40; attempt += 1) {

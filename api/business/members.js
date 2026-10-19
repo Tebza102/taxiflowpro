@@ -6,8 +6,10 @@ import { MEMBER_ACTIONS, listMembers, saveDriverProfile } from "../_lib/tenantOn
 //   member.grant { email, name?, role: Admin|Manager|Driver, driverStaffId?, moduleAccess? }
 //   member.update { userId, role?, driverStaffId?, moduleAccess?, name? }
 //   member.deactivate { userId } / member.reactivate { userId }
+//   member.permissions { userId, permissions: [...] } (Admin/Manager responsibilities)
 //   owner.link_driver { driverStaffId | null }   (the Owner's own login)
-//   driver.save_profile { staffId?, name, phone? } (a profile, no sign-in)
+//   driver.save_profile { staffId?, name, phone? } (a profile, no sign-in;
+//     Owner, or staff holding drivers.manage)
 // Authorization: tenantAuth (token + ACTIVE membership + explicit business).
 // Every change is recomputed from the current server state, so repeating a
 // request is safe. A partial failure reports what exists (an Auth account

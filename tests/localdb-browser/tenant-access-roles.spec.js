@@ -77,7 +77,7 @@ test("every assignable role saves as chosen, persists, and gets the matching ser
   const grant = async (email, role, choose) => {
     await access.getByLabel("Email", { exact: true }).fill(email);
     await choose();
-    if (role === "Driver") await access.getByLabel("Driver profile").selectOption({ label: "Roles Driver" });
+    if (role === "Driver") await access.getByRole("combobox", { name: /^Driver profile/ }).selectOption({ label: "Roles Driver" });
     await expect(roleSelect).toHaveValue(role);
     await access.getByRole("button", { name: "Grant access" }).click();
     await expect(access.getByRole("status")).toContainText(`${email} can now sign in as ${role}.`);

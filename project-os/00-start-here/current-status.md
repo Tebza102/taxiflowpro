@@ -1,5 +1,14 @@
 # Current Status
 
+## Owner-assigned responsibilities (release file 06), 2026-10-19: BUILT and TESTED locally + Preview; NOT in production
+
+- **Branch** `agent/owner-responsibilities` (pushed; code `7f1419b`), from `0b02435`. **Preview** `https://taxiflowpro-nifglxqz9-apprigate.vercel.app` READY. Production unchanged (`af3e5ad`, file 05 only).
+- **What it does:** the Owner sets, per Admin/Manager, *Receive and count cash*, *Verify counted cash*, *Bank verified cash*, *Manage driver profiles and assignments*, *Manage routes and vehicles* (Settings > Business access). The server enforces them from the membership row on every request, capped by module access. Roles, sign-ins and responsibilities stay Owner-only. Migration keeps everyone's current access (Admin count; Manager verify + bank).
+- **Fixed gaps from the rehearsal:** Add Route, Add/Edit Vehicle (incl. driver assignment) and Save driver now work in the business workspace via server actions.
+- **Still not available in the business workspace** (labelled in the screens; nothing is saved): archive vehicle, defects, service/document records, shift allocation page, expense presets, settings/profile saves, role change in the UI, custom roles, driver email edits. No segregation-of-duties rule (one person can be given both count and verify).
+- **Evidence:** change-log 2026-10-19 "Owner-assigned responsibilities". All suites pass on the isolated test stack (new: 72/72, 24/24, 8/8, browser 1/1; regressions all pass; hosted-copy 22/22 + 72/72; browser 12/12 + mock 34/34). Rehearsal database unchanged.
+- **Readiness gate** (next-action.md): items 2 and 3 are built and locally verified; they count only after release and production checks.
+
 
 ## Local onboarding rehearsal (2026-10-19): PASSED on the local synthetic stack
 

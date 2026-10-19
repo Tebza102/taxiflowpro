@@ -1566,3 +1566,43 @@ What `platform-admin-tests.mjs` covers:
   - any screen for `member.update` (the server accepts module switches; the panel has none).
 - **Current Manager banking rule:** a Manager can bank whenever their Money access is on. Since `d3adf04` that is the default, so every Manager can bank unless restricted, and in tenant mode no screen can restrict them.
 - **verify.mjs failures fully explained.** Line 48 expects 11 users (`SEED_USERS` + `TENANT_USERS`) and found 16 before the rehearsal. Line 53 expects 2 snapshot rows and found 4. The extras are 5 users and 2 companies created by `scripts/localdb/platform-admin-tests.mjs` (2026-10-18 11:57–11:58, run without a later reset), plus the rehearsal's 4 users and 1 company. The safety parts pass: 0 non-example.com users, 0 live traces, 0 unmapped rows.
+
+### 2026-10-19 — Owner-assigned responsibilities and tenant route/vehicle/driver saves (release file 06; local + Preview only)
+
+**Changed by:** Agent (Claude), branch `agent/owner-responsibilities` (commit `7f1419b` + docs), from `0b02435`; `origin/main` = `af3e5ad` unchanged.
+
+**Files changed:**
+- Server: `api/_lib/tenantAuth.js`, `api/_lib/financeActions.js`, `api/_lib/financeRecordActions.js`, `api/_lib/fleetActions.js` (new), `api/_lib/tenantOnboarding.js`, `api/business/members.js`, `api/business/workspace.js`
+- Shared: `src/lib/memberPermissions.js` (new), `src/lib/fleetRecordContract.js` (new, verbatim move from `appRuntime.js`, bundle parity proven), `scripts/pilot/business-data-plan.mjs` (shares `normalizeRegistration`)
+- UI: `src/App.jsx`, `src/components/TenantAccessPanel.jsx`, `src/lib/tenantWorkspace.js`
+- Database: `scripts/localdb/migrations/20261019090000_member_permissions.sql` (release file 06), rollback `scripts/localdb/rollback/20261019090000_member_permissions.down.sql`, `scripts/hosted/apply-release.mjs` (06 entry), `scripts/localdb/setup.mjs`
+- Isolated test stack: `scripts/localdb/lib/localTarget.mjs` profiles (`default` = rehearsal 54321-54324/5175; `test` = 55321-55324/5176, own project, volume and containers), `exec.mjs`, `mailpit.mjs`, `dev-tenant.mjs`, `playwright.localdb.config.mjs`
+- Tests: `tests/member-permissions.test.mjs`, `scripts/localdb/member-permissions-tests.mjs`, `scripts/localdb/member-permissions-migration-tests.mjs`, `tests/localdb-browser/tenant-fleet-saves.spec.js`; fixture/locator updates in `tests/finance-actions.test.mjs`, `tests/finance-record-actions.test.mjs`, three localdb browser specs (my new checkbox labels contain "driver profiles", so the loose `getByLabel("Driver profile")` became ambiguous; now the combobox); `tests/localdb-guard.test.mjs` (+5 profile tests)
+- Docs: `04-technical/auth-and-roles.md`, `04-technical/tenant-design.md`
+
+**Summary:** Membership responsibilities `cash.count`, `cash.verify`, `cash.bank`, `drivers.manage`, `fleet.manage`, enforced by the server from the membership row on every request and capped by module access. Only an active Owner changes them (`member.permissions`), never their own, never Owners/Drivers; roles, sign-ins and responsibilities are not delegable. File 06 backfills the pre-06 rules (Admin count; Manager verify + bank), so nobody's effective access changes on migration; before file 06 the server falls back to those defaults. New tenant server actions `route.save`, `vehicle.save`, `driver.save` (same CAS/replay pipeline; same-business ids only; loader integrity rules; money keys verified unchanged; finance statuses untouched; driver profiles accept no email/password/login). `driver.save_profile` is delegable via `drivers.manage`. Owner controls in Business access; Fleet/Drivers forms wired; Money buttons follow responsibilities. Remaining unsupported actions are labelled in the screens (see tenant-design.md).
+
+**One intentional tightening:** an Admin whose Money module is switched off can no longer record a hand-in by direct request (before, only the screen hid it). Required by "a permission must not bypass module access".
+
+**Tests run (all on the isolated `test` stack, fresh reset before each; the rehearsal stack was never reset):**
+- Unit: 36/36 files pass (incl. new `member-permissions.test.mjs` 8/8); `vite build` passes.
+- DB/API with real local Auth: `member-permissions-tests` 72/72 (allowed and refused for every responsibility; removing banking refuses the next direct `deposit.lock` and writes nothing; module off blocks; delegated driver management cannot grant/update/remove sign-ins, link drivers or change responsibilities, Auth and memberships unchanged; no self-escalation; cross-company reads/writes and forged route/vehicle/driver ids refused; Business B byte-identical; stale version writes nothing; replay applied once; Owner protections; Driver privacy).
+- Migration: `member-permissions-migration-tests` 24/24 (backfill preserves per-role rules, idempotent, stale version, cross-business, role-change reset, service-role-only grants, rollback/re-apply, release-06 code on a database without file 06).
+- Regression: finance-action 56/56, finance-record 36/36, finance-capture 43/43, expense-only 32/32, onboarding 64/64, tenant access 36/36, tenant rollback 8/8, server-auth 26/26, business-data-load 46/46, platform-admin 75/75.
+- Hosted copy (exact live schema + release files 01-06): hosted-rehearsal 22/22; permissions suite on that database 72/72.
+- Browser: localdb suite 12/12 (11 in the full run + the fleet spec rerun after locator fixes); new spec proves the Owner grants in Business access, then a Manager's route, vehicle and driver saves survive a full reload and are in the database, attributed to the Manager, with no sign-in created. Mock-mode suite 34/34.
+- Preview `https://taxiflowpro-nifglxqz9-apprigate.vercel.app` (`dpl_3cHiRw19RhdKQ34EyPyXiNWLkJqP`, READY, built from `7f1419b`), read-only via the user's Vercel-authenticated browser: sign-in renders; `/api/business/workspace`, `/members` GET and `finance-actions` `route.save`/`vehicle.save`, `members` `member.permissions` POST return 401 (no token and garbage token), all `no-store`; `driver.save` with an email returns 400 before authorization. Signed-in Preview checks are impossible by design (Preview has no service-role key; fails closed 503).
+- Rehearsal database fingerprint (users 20, memberships `edac9fdb…`, 5 snapshots) identical before and after.
+
+**Expected fixture-count differences (not safety findings):** `verify.mjs` exact counts on the rehearsal stack still differ for the reasons logged earlier today (platform-admin test data + rehearsal company). The test stack is reset before each suite, so its counts are the seed's.
+
+**Result:** Pass.
+
+**Risks remaining:**
+- Production has file 05 only; file 06 and this code are not deployed. Deploying the code before file 06 is safe (defaults), but the Owner controls return 503 until file 06 is applied.
+- No segregation-of-duties rule: the Owner can give one person both counting and verifying.
+- Not available in the business workspace yet: archive vehicle, defects (log/resolve), service/document records, shift allocation page, expense presets, settings/profile saves, role change in the UI, custom roles, driver email edits.
+- Owner and Driver restrictions remain unverified in production (unchanged).
+
+**Next action:**
+- Review the PR; on authorization follow the release steps in next-action.md (backup, file 06, merge, promote, checks).

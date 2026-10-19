@@ -464,3 +464,32 @@ See the 2026-10-18 change-log entry:
 - `scripts/localdb/platform-admin-tests.mjs`;
 - `tests/platform-admin.test.mjs`;
 - `tests/localdb-browser/platform-onboarding.spec.js`.
+
+## Owner-assigned responsibilities and fleet/driver saves (release file 06, 2026-10-19; NOT in production)
+
+Branch `agent/owner-responsibilities`. Roles and the responsibility table: `auth-and-roles.md`.
+
+### Database (`scripts/localdb/migrations/20261019090000_member_permissions.sql`, release file 06; additive)
+- `business_memberships.permissions text[] not null default '{}'`, checked against the five known keys; only Admin/Manager rows may hold any.
+- `taxiflow_private.default_member_permissions(role)` and a backfill: Admin `{cash.count}`, Manager `{cash.verify,cash.bank}` (the pre-06 fixed rules, so nobody's effective access changes).
+- Trigger: a new Admin/Manager gets the defaults; a role change resets to the new role's defaults.
+- `public.set_member_permissions(business, actor, user, permissions, expected_updated_at, snapshot)`: security definer, service role only. Actor must be an active Owner of that business, never the target; target must be Admin/Manager of the same business; unknown keys refused; optional snapshot compare-and-swap writes the audit entry in the same transaction.
+- Rollback: `scripts/localdb/rollback/20261019090000_member_permissions.down.sql`. **Roll back the application first**, then the file; the previous fixed role rules apply again.
+- Hosted: `scripts/hosted/apply-release.mjs` lists it as "06 member permissions" (marker: the column).
+
+### Server
+- `api/_lib/tenantAuth.js`: memberships are read with `permissions` (fallback without it on 42703); `buildRequester` returns `permissions` = membership value capped by module access (`src/lib/memberPermissions.js effectivePermissions`). Browser `appUsers` can only narrow (module toggles), never add.
+- `api/_lib/financeActions.js`: each action may carry `permission`; staff cash steps are Owner/Admin/Manager **and** the responsibility. Same pipeline as before (request-id replay, `updated_at` compare-and-swap, `commit_finance_action`).
+- `api/_lib/fleetActions.js` (new) through the same endpoint `POST /api/business/finance-actions`:
+  - `route.save` { routeId?, name, code?, type?, primaryOrigin, primaryDestination, isActive? }: `fleet.manage`.
+  - `vehicle.save` { vehicleId?, registration, model, routeId, odometers, service interval, permit/disc expiry, assignedDriverId?, capability flags, seatCapacity }: `fleet.manage`; changing the driver also needs `drivers.manage`; the driver's previous vehicle is released (existing app rule).
+  - `driver.save` { staffId?, name, phone?, routeIds?, licence/PrDP fields }: `drivers.manage`. No email, password or sign-in field is accepted.
+  - Every referenced id must exist in THIS business's stored snapshot (404 otherwise). Integrity rules from the operator loader: unique route names/codes and registrations, no rename/re-registration referenced by money records, odometer never goes back; an existing registration keeps its stored spelling. Money records, cash-ups, deposits, `appUsers` and `verificationQueue` are checked unchanged after every save (500 refusal otherwise). Finance statuses are untouched.
+- `api/_lib/tenantOnboarding.js`: `member.permissions` (Owner only); `listMembers` returns `permissions` and module access; `driver.save_profile` allowed for the Owner or `drivers.manage` (with Drivers on). `member.grant/update/deactivate/reactivate` and `owner.link_driver` remain Owner only.
+- `api/business/workspace.js` returns `permissions` (effective) for showing controls.
+
+### Frontend
+- Business access: per-person responsibility checkboxes (Owner edits, Admin views), inactive-module note.
+- Fleet and Drivers: tenant saves call the server actions; forms are hidden without the responsibility; Money buttons follow the responsibilities.
+- Clearly marked as **not available yet** in the business workspace (nothing is saved): archiving vehicles, logging or resolving defects, service/document records, shift allocation from the Drivers page, expense presets, profile/settings saves, changing a member's role in the UI (`member.update` exists server-side only), custom roles. Driver email changes are not possible from the profile form.
+- Known policy gap (not in scope): the Owner can give one person both counting and verifying; no segregation-of-duties check exists.

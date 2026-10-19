@@ -1,5 +1,18 @@
 # Next Action
 
+## Release file 06 (Owner-assigned responsibilities): review, then a controlled release
+
+Built and tested on `agent/owner-responsibilities`; Preview `taxiflowpro-nifglxqz9`. Nothing is deployed.
+
+1. **Review** the PR (draft) and the Preview (sign-in screen only; signed-in Preview calls fail closed by design).
+2. **On authorization** (same pattern as file 05, `05-build/platform-admin-release.md`):
+   - pre-release backup (Tebogo types the passphrase);
+   - apply file 06 with `scripts/hosted/apply-release.mjs` (01-05 are skipped by their markers); post-check: every Admin has `{cash.count}`, every Manager `{cash.verify,cash.bank}`, Owner/Driver `{}`; `set_member_permissions` executable by `service_role` only;
+   - merge and promote; live checks: Business access shows responsibilities to the Owner; an Admin sees count only; 401s unauthenticated;
+   - after-release backup.
+3. **Rollback:** re-promote the current production deployment `taxiflowpro-dy1a1k761` (`af3e5ad`) first, then `scripts/localdb/rollback/20261019090000_member_permissions.down.sql`. The code also runs safely without file 06 (pre-06 rules).
+4. Production checks by real people: an Owner changes a Manager's responsibilities; that Manager's next banking is refused; a Driver sees only their own records.
+
 
 ## After the local rehearsal (2026-10-19)
 

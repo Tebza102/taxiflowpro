@@ -101,6 +101,15 @@ const driverBToken = await tokenFor("driver.b@example.com");
 res = await send(driverBToken, BUSINESS_B_ID, expenseBody(BUSINESS_B_ID, "backup-b0"));
 record(res.status === 200, "setup: a finance action in business B is committed", res.json.error);
 
+// Owner-set responsibilities (release file 06) that differ from the role
+// defaults: an emptied Admin and a Manager limited to fleet. A restore must
+// bring back exactly these, never re-grant the defaults.
+const permissionsOf = () => psql(`select string_agg(role || '=' || array_to_string(permissions, '+'), ' ' order by role) from public.business_memberships where business_id = '${BUSINESS_A_ID}' and role in ('Admin', 'Manager') and active;`).stdout.trim();
+psql(`update public.business_memberships set permissions = '{}' where business_id = '${BUSINESS_A_ID}' and role = 'Admin';
+update public.business_memberships set permissions = array['fleet.manage'] where business_id = '${BUSINESS_A_ID}' and role = 'Manager' and active;`);
+const permissionsBefore = permissionsOf();
+record(permissionsBefore === "Admin= Manager=fleet.manage", "setup: Owner-set responsibilities differ from the role defaults", permissionsBefore);
+
 // 2. Export ---------------------------------------------------------------------
 const original = dbState();
 let run = cli("export", "--target", "local", "--out-dir", OUT, "--passphrase-file", PASS_FILE);
@@ -164,6 +173,7 @@ const restored = dbState();
 const want = tableHashes(original);
 const got = tableHashes(restored);
 record(Object.keys(want).every((key) => want[key] === got[key]), "independent comparison: Auth users, identities, businesses, memberships, snapshots and request log equal the pre-backup database", JSON.stringify(Object.fromEntries(Object.keys(want).map((key) => [key, want[key] === got[key] ? "MATCH" : "DIFF"]))));
+record(permissionsOf() === permissionsBefore, "responsibilities restore exactly (an emptied list is not re-granted)", permissionsOf());
 
 const signIns = [];
 for (const user of [...SEED_USERS, ...TENANT_USERS]) {

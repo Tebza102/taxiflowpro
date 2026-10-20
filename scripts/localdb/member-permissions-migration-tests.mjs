@@ -103,6 +103,25 @@ record(setPerms(owner, admin, ["cash.count"]).ok && permsOf(admin) === "cash.cou
 const managerSet = setPerms(owner, manager, ["fleet.manage", "drivers.manage", "drivers.manage"]);
 record(managerSet.ok && permsOf(manager) === "drivers.manage,fleet.manage", "Owner grants a Manager drivers and fleet (deduplicated), banking removed");
 
+// Restore fidelity: an Owner-emptied list survives a re-insert (what a full
+// backup restore does) and a re-application of file 06; an insert that omits
+// permissions (a newly granted member) still gets the role defaults.
+record(setPerms(owner, admin, []).ok && permsOf(admin) === "", "Owner empties an Admin's responsibilities");
+const reinsert = tryRun(`begin;
+create temp table saved_member on commit drop as select to_jsonb(m) as row from public.business_memberships m where business_id='${BUSINESS_A_ID}' and user_id='${admin}';
+delete from public.business_memberships where business_id='${BUSINESS_A_ID}' and user_id='${admin}';
+insert into public.business_memberships select (jsonb_populate_record(null::public.business_memberships, row)).* from saved_member;
+commit;`);
+record(reinsert.ok && permsOf(admin) === "", "a restore-style re-insert keeps the emptied list (no re-grant)", reinsert.ok ? permsOf(admin) || "{}" : reinsert.out.slice(-200));
+apply(MIGRATION);
+record(permsOf(admin) === "", "re-applying file 06 does not re-grant an emptied list");
+const omitted = tryRun(`begin;
+insert into public.business_memberships (business_id, user_id, role, active) values ('${BUSINESS_A_ID}', (select id from auth.users where email = 'newhire.a@example.com'), 'Admin', true);
+select array_to_string(permissions, ',') from public.business_memberships where business_id='${BUSINESS_A_ID}' and user_id = (select id from auth.users where email = 'newhire.a@example.com');
+rollback;`);
+record(omitted.ok && /cash\.count/.test(omitted.out), "an insert that omits permissions gets the role defaults", omitted.out.slice(-80));
+record(setPerms(owner, admin, ["cash.count"]).ok && permsOf(admin) === "cash.count", "Owner restores the Admin to counting");
+
 // A stale snapshot version writes nothing; the current one applies atomically.
 const version = versionOf();
 const stale = setPerms(owner, manager, ["cash.bank"], { version: "2000-01-01T00:00:00Z", snapshot: "{\"marker\":1}" });

@@ -645,8 +645,33 @@ drop policy if exists "server reads platform admins" on public.platform_admins;
 -- is recorded in public.member_permission_changes (one row per change, keyed by
 -- business; no browser access).
 
-alter table public.business_memberships
-  add column if not exists permissions text[] not null default '{}'::text[];
+create or replace function taxiflow_private.default_member_permissions(p_role text)
+returns text[]
+language sql
+immutable
+set search_path = ''
+as $$
+  select case p_role
+    when 'Admin' then array['cash.count']::text[]
+    when 'Manager' then array['cash.verify', 'cash.bank']::text[]
+    else '{}'::text[]
+  end;
+$$;
+
+-- Add and backfill ONLY when the column is new: existing rows get exactly their
+-- role's current powers. A re-run never touches stored lists again (an Owner
+-- may have emptied one on purpose).
+do $$ begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'business_memberships' and column_name = 'permissions'
+  ) then
+    alter table public.business_memberships add column permissions text[] not null default '{}'::text[];
+    update public.business_memberships
+    set permissions = taxiflow_private.default_member_permissions(role)
+    where taxiflow_private.default_member_permissions(role) <> '{}'::text[];
+  end if;
+end $$;
 
 do $$ begin
   -- Re-created so a re-run always carries the current list of known keys.
@@ -661,19 +686,6 @@ do $$ begin
   end if;
 end $$;
 
-create or replace function taxiflow_private.default_member_permissions(p_role text)
-returns text[]
-language sql
-immutable
-set search_path = ''
-as $$
-  select case p_role
-    when 'Admin' then array['cash.count']::text[]
-    when 'Manager' then array['cash.verify', 'cash.bank']::text[]
-    else '{}'::text[]
-  end;
-$$;
-
 -- New memberships start with their role's defaults; a role change resets them.
 create or replace function taxiflow_private.member_permissions_follow_role()
 returns trigger
@@ -682,7 +694,10 @@ set search_path = ''
 as $$
 begin
   if tg_op = 'INSERT' then
-    if new.permissions is null or new.permissions = '{}'::text[] then
+    -- Only a row that does not state its permissions (NULL: the column has no
+    -- default) gets the role defaults. An explicit list, including an empty one
+    -- the Owner chose, is kept exactly (a backup restore must not re-grant).
+    if new.permissions is null then
       new.permissions := taxiflow_private.default_member_permissions(new.role);
     end if;
   elsif new.role is distinct from old.role then
@@ -692,18 +707,16 @@ begin
 end;
 $$;
 
--- Backfill before the trigger exists: existing rows get exactly their role's
--- current powers. Idempotent (only rows still at the column default change).
-update public.business_memberships
-set permissions = taxiflow_private.default_member_permissions(role)
-where permissions = '{}'::text[]
-  and taxiflow_private.default_member_permissions(role) <> '{}'::text[];
-
 drop trigger if exists business_memberships_permissions_follow_role on public.business_memberships;
 create trigger business_memberships_permissions_follow_role
   before insert or update on public.business_memberships
   for each row
   execute function taxiflow_private.member_permissions_follow_role();
+
+-- After the backfill: no column default, so an insert that omits permissions
+-- arrives as NULL and the trigger fills the role defaults (NOT NULL is checked
+-- after BEFORE triggers); an insert that states them, e.g. a restore, is kept.
+alter table public.business_memberships alter column permissions drop default;
 
 -- Tenant-scoped audit of every responsibility change (kept on rollback).
 create table if not exists public.member_permission_changes (

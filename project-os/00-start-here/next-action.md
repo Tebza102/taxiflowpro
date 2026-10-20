@@ -1,6 +1,12 @@
 # Next Action
 
-## After the hosted journey (2026-10-19): review and release decision
+## Release 06: go/no-go (2026-10-20)
+
+1. **Tebogo (optional, for hosted alignment):** in project `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`) SQL editor run `scripts/preview-test/delta-06-restore-fidelity.sql`, then `scripts/preview-test/verify-delta-06.sql` Part A (both true) and Part B (error message starts `PASS (rolled back)`). Report the result; only then is the hosted backend aligned with the final file 06.
+2. **Tebogo: go/no-go.** On GO, follow `05-build/release-06-review.md` "Release procedure" (backup, fingerprint, apply-release, verify-release-06, merge, promote, live checks, backup).
+3. Before the first real business: add `member_permission_changes` and `platform_admins` to the backup format.
+
+## After the hosted journey (2026-10-19): review and release decision (history)
 
 1. **Tebogo decides** whether separation of duties should also bind the Owner (current behaviour) or allow a sole Owner to verify their own count (would need a rule change and retest).
 2. **Review PR #6.** On authorization, run the release-06 procedure below (backup, file 06 via `apply-release.mjs`, merge, promote, live checks, backup). File 06 now also adds `staff.manage` and `member_permission_changes`.

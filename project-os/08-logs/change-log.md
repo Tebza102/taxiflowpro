@@ -1663,3 +1663,23 @@ What `platform-admin-tests.mjs` covers:
 **Cleanup:** automation bypass secrets now 0 (verified; deployment protection still on); the local bypass copy deleted; Preview without Vercel login now redirects to sign-in (302). Left in place for further testing (Tebogo to decide): test project data, the four branch-scoped Preview variables, the external env file.
 
 **Result:** Pass.
+
+### 2026-10-20 — Release 06 review completed (production on hold)
+
+**Changed by:** Agent (Claude). Branch `agent/owner-responsibilities`, commits `ac10ed1` (file 06 restore-fidelity fix, post-check SQL, review document) and `c3f6eda` (test ports, hosted check).
+
+**Decisions recorded (Tebogo):** separation of duties binds everyone, including the Owner; the cash workflow requires a second authorized person to verify every count. Sign-out (ends that user's sessions on every device) stays unchanged and is documented.
+
+**Defect found and fixed:** file 06's insert trigger gave role defaults to any Admin/Manager row inserted with an empty list, so a full backup restore would have re-granted "Receive and count cash" to an Admin the Owner had emptied. Fixed: no column default after the backfill; defaults only for NULL; add-and-backfill only when the column is new.
+
+**Final release file 06:** `scripts/localdb/migrations/20261019090000_member_permissions.sql`, SHA-256 `09dd1e33112108f0a17d8645ec9fb3294c8139ba56fc391508ab8699d676b30c`; rollback `6ab9f636…a8e51` (full hashes in `05-build/release-06-review.md`).
+
+**Tests on the final file 06 (isolated local stack):** migration 30/30; backup 37/37; permissions 101/101; onboarding 64/64; finance-action 56/56; tenant access 36/36; platform-admin 75/75; backup-premigration 13/13 (second attempt: the first ran after `reset` instead of its required `setup.mjs hosted-pre` and stopped before any assertion); production-path rehearsal 11/11. Production credentials verified by variable names/targets and the live bundle; app source has no test-project reference.
+
+**Interruptions (not code failures):** 2026-10-19 23:37 machine resource exhaustion crashed Docker mid-run (finance-action stopped after 41 passes); after a reboot, Windows reserved ports 55227-55326 so the test stack moved to 45321/45322/45324 (one failed retry where no tests ran). Bypass secrets: 0 throughout this round.
+
+**Hosted alignment:** the hosted test project still runs the earlier file 06 (verified read-only: both `verify-delta-06.sql` Part A checks false). Delta `scripts/preview-test/delta-06-restore-fidelity.sql` (`76bab4d5…724e9`) and targeted check `scripts/preview-test/verify-delta-06.sql` (`68fd6494…0112a`) are ready for Tebogo to run in its SQL editor. Not aligned until verified.
+
+**Known limit:** the backup does not include `member_permission_changes` (audit history) or `platform_admins`; rollback keeps both. Recommended before the first real business: add them to the backup.
+
+**Result:** release review complete; recommendation GO for a controlled release once authorized.

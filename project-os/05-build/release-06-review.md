@@ -4,7 +4,7 @@ Prepared 2026-10-19 for Tebogo's go/no-go. Nothing here has been applied to prod
 
 ## What is being released
 - **App:** branch `agent/owner-responsibilities`, PR #6 (draft). App code tested on hosted infrastructure: commit `e78e4b3`. `src/`, `api/`, `package.json`, the lockfile, `vercel.json` and `vite.config.js` are identical at the release head (later commits change tests, operator scripts, release file 06 and docs only).
-- **Database:** release file 06 `scripts/localdb/migrations/20261019090000_member_permissions.sql` (version 20261019090000; the SHA-256 of the committed file is recorded in the change-log entry for this review). Applied with `scripts/hosted/apply-release.mjs` ("06 member permissions"; 01-05 are skipped by their markers). Additive.
+- **Database:** release file 06 `scripts/localdb/migrations/20261019090000_member_permissions.sql`, version 20261019090000, final content committed in `ac10ed1`, **SHA-256 `09dd1e33112108f0a17d8645ec9fb3294c8139ba56fc391508ab8699d676b30c`** (rollback file `6ab9f6367c2f071653cc5475eef80d44e6c447e5053ef36eae42c46e4c1e8a51`). Applied with `scripts/hosted/apply-release.mjs` ("06 member permissions"; 01-05 are skipped by their markers). Additive. Post-checks: `scripts/hosted/fingerprint-release-06.sql` (`a12924a2…`), `scripts/hosted/verify-release-06.sql` (`6893af16…`).
 - **Behaviour:** per-person responsibilities (count, verify, bank, manage drivers, manage routes and vehicles, manage staff responsibilities); route, vehicle and driver-profile saves in the business workspace; Business access controls; separation of duties; tenant-scoped audit of responsibility changes.
 
 ## Business rules confirmed by Tebogo (2026-10-19)
@@ -46,6 +46,27 @@ Prepared 2026-10-19 for Tebogo's go/no-go. Nothing here has been applied to prod
 Archive vehicle; log or resolve defects; service and document records; shift allocation from the Drivers page; expense presets; settings and profile saves; changing a member's role in the screens (server action exists); custom roles; editing a driver's email from the profile form.
 
 ## Evidence summary
-- Hosted, Preview `taxiflowpro-n8yesi8bq-apprigate.vercel.app` on the isolated test project: 6/6 (target and isolation incl. cross-company 403s; full cash workflow; Owner grants and Manager saves surviving reload; banking revocation; delegation limits with audit rows; separation of duties by direct API).
-- Local isolated stack: see the change log for the suite totals of this review.
-- Test environment kept for regression testing (test project, its data, branch-scoped Preview variables, external env file). The test project still has the pre-fix trigger; run `scripts/preview-test/delta-06-restore-fidelity.sql` in its SQL editor to match the final file 06.
+- **App code under test:** `src/`, `api/` and build config identical from `e78e4b3` to the release head; unit tests 36/36 files; `vite build` passes.
+- **Hosted** (Preview `taxiflowpro-n8yesi8bq-apprigate.vercel.app`, isolated test project): 6/6: target and isolation incl. cross-company 403s; full cash workflow; Owner grants and Manager saves surviving reload; banking revocation; delegation limits with audit rows; separation of duties by direct API. **Ran against the EARLIER file 06** (schema applied 2026-10-19 from `cd329d3`, `schema.sql` SHA-256 `e7280981…5431651`), see "Hosted alignment" below.
+- **Local isolated stack on the FINAL file 06** (each suite after its own reset):
+
+  | Suite | Result |
+  |---|---|
+  | member-permissions-migration-tests | 30/30 |
+  | backup-tests (encrypted export + full restore, responsibilities round-trip) | 37/37 |
+  | member-permissions-tests | 101/101 |
+  | onboarding-tests | 64/64 |
+  | finance-action-tests | 56/56 |
+  | tenant-tests access | 36/36 |
+  | platform-admin-tests | 75/75 |
+  | backup-premigration-tests (needs `setup.mjs hosted-pre`; first attempt ran on the wrong setup and stopped before any assertion) | 13/13 |
+  | production-path rehearsal on the live-schema copy (01-05 present → apply-release SKIP 01-05, APPLY 06, PASS; fingerprint unchanged; verify-release-06 11/11; audit row; rollback keeps data and audit; re-apply) | 11/11 |
+
+- Earlier results on the pre-fix file 06 that were NOT re-run (not affected by the membership-insert change, or superseded by the rows above): finance-record 36/36, finance-capture 43/43, expense-only 32/32, server-auth 26/26, business-data-load 46/46, tenant rollback 8/8, hosted-rehearsal 22/22, localdb browser 12/12, mock browser 34/34.
+
+## Hosted alignment (NOT yet aligned)
+- The hosted test project runs the **earlier** file 06: verified read-only 2026-10-20 with `scripts/preview-test/verify-delta-06.sql` Part A, both checks false (column default `'{}'::text[]`; the old insert rule).
+- **Reviewed delta:** `scripts/preview-test/delta-06-restore-fidelity.sql` (SHA-256 `76bab4d5bc31260f4ab71fc3cb60d0a92642cbc9ee0b03386abb48b3757724e9`). Refuses projects without file 06 or without the seeded Preview companies; replaces the trigger function with the final rule, re-revokes it from browser roles, drops the column default; one transaction; no data, accounts or credentials.
+- **Smallest targeted check:** `scripts/preview-test/verify-delta-06.sql` (SHA-256 `68fd6494de1ab2a0377306dbcd3950ab3df665dbe0466426ef7bf4a87c80112a`). Part A (read-only): both rows true. Part B (always rolled back): the error message must read `PASS (rolled back): emptied Admin kept {} after re-insert; omitted list got {cash.count}`.
+- Until Part A and Part B pass on the hosted project, hosted Preview evidence covers the app on the earlier file 06 only.
+- Test environment kept for regression testing (test project, its data, branch-scoped Preview variables, external env file). Local test stack now uses ports 45321/45322/45324 (Windows reserved 55227-55326 after a reboot).

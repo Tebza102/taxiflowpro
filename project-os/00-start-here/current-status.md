@@ -1,6 +1,14 @@
 # Current Status
 
-## Release file 06 acceptance: ALL THREE gaps PASSED (2026-10-19 night); production on hold
+## Release 06 review COMPLETE (2026-10-20): recommendation GO; production on hold
+
+- Review document: `05-build/release-06-review.md`. Final file 06 SHA-256 `09dd1e33112108f0a17d8645ec9fb3294c8139ba56fc391508ab8699d676b30c` (`ac10ed1`); app code tested = `e78e4b3` tree (unchanged at head `c3f6eda`+).
+- All local suites pass on the final file 06, including backup restore of responsibilities and the production-path rehearsal (skip 01-05, apply 06, rollback, re-apply).
+- Separation of duties binds everyone (a second authorized person must verify each count); sign-out unchanged (ends sessions on all devices).
+- **Hosted test backend is NOT aligned:** it runs the earlier file 06. Delta and targeted check ready (`scripts/preview-test/delta-06-restore-fidelity.sql`, `verify-delta-06.sql`).
+- Known limit: backups exclude the permission-audit table and platform_admins.
+
+## Release file 06 acceptance: ALL THREE gaps PASSED (2026-10-19 night); production on hold (history)
 
 - **Hosted proof:** authenticated journey on Preview `taxiflowpro-n8yesi8bq-apprigate.vercel.app` against the isolated test project `sxoonhovoqgcpflhqirb` (never production): full cash workflow; Owner permission changes; Manager route/vehicle/driver saves surviving reload; banking revocation blocking the next direct request; delegated staff management limits with tenant-scoped audit rows; separation of duties by direct API; cross-company refusal. 6/6 passed. Details: change-log 2026-10-19 "Authenticated hosted Preview journey".
 - **Cleanup:** automation bypass secrets 0 (an accidental one created by `vercel curl` at 17:21 UTC was found and revoked); deployment protection on. Test project, its data and the branch-scoped Preview variables remain until Tebogo decides.

@@ -2,7 +2,7 @@
 
 ## Release 06: go/no-go (2026-10-20)
 
-1. **Tebogo (optional, for hosted alignment):** in project `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`) SQL editor run `scripts/preview-test/delta-06-restore-fidelity.sql`, then `scripts/preview-test/verify-delta-06.sql` Part A (both true) and Part B (error message starts `PASS (rolled back)`). Report the result; only then is the hosted backend aligned with the final file 06.
+1. **Tebogo:** delta already applied and Part A passed. In the `taxiflow-preview-test` SQL editor run only Part B of `scripts/preview-test/verify-delta-06.sql`; the error message must start `PASS (rolled back)`.
 2. **Tebogo: go/no-go.** On GO, follow `05-build/release-06-review.md` "Release procedure" (backup, fingerprint, apply-release, verify-release-06, merge, promote, live checks, backup).
 3. Before the first real business: add `member_permission_changes` and `platform_admins` to the backup format.
 

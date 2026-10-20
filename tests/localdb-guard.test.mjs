@@ -207,7 +207,7 @@ test("profiles: the test stack shares no project, volume, workdir, container or 
   for (const key of ["projectId", "workdir", "volume", "containerPrefix", "apiPort", "dbPort", "mailPort", "appPort"]) {
     assert.notEqual(a[key], b[key], key);
   }
-  assert.deepEqual(bindingsFor(b), ["127.0.0.1:55321->8000/tcp", "127.0.0.1:55322->5432/tcp", "127.0.0.1:55324->8025/tcp"]);
+  assert.deepEqual(bindingsFor(b), ["127.0.0.1:45321->8000/tcp", "127.0.0.1:45322->5432/tcp", "127.0.0.1:45324->8025/tcp"]);
   for (const profile of [a, b]) assert.ok(bindingsFor(profile).every((binding) => binding.startsWith("127.0.0.1:")));
   assert.deepEqual(ALLOWED_BINDINGS, bindingsFor(a), "the default profile keeps its exact bindings");
 });
@@ -225,13 +225,13 @@ test("profiles: the test Compose file is fully re-identified; the default templa
   assert.doesNotMatch(rendered, /5432[124]/);
   assert.doesNotMatch(rendered, /taxiflow_localdb_compose_db/);
   assert.doesNotMatch(rendered, /container_name: taxiflow_localdb_(db|auth|rest|kong|mail)/);
-  for (const port of [55321, 55322, 55324]) assert.ok(rendered.includes(`"127.0.0.1:${port}:`), `port ${port} published on loopback`);
+  for (const port of [45321, 45322, 45324]) assert.ok(rendered.includes(`"127.0.0.1:${port}:`), `port ${port} published on loopback`);
   assert.throws(() => renderComposeForProfile(template.replace("name: taxiflow-localdb", "name: other"), LOCAL_PROFILES.test), LocalTargetError);
 });
 
 test("Windows listeners: either profile's loopback ports pass; never a non-loopback address or another port", () => {
-  const ok = [55321, 55322, 55324, 54321].map((port) => ({ address: "127.0.0.1", port, process: "com.docker.backend" }));
+  const ok = [45321, 45322, 45324, 54321].map((port) => ({ address: "127.0.0.1", port, process: "com.docker.backend" }));
   assert.equal(assertWindowsListeners(ok).length, 4);
-  assert.throws(() => assertWindowsListeners([{ address: "0.0.0.0", port: 55321, process: "com.docker.backend" }]), LocalTargetError);
-  assert.throws(() => assertWindowsListeners([{ address: "127.0.0.1", port: 55323, process: "com.docker.backend" }]), LocalTargetError);
+  assert.throws(() => assertWindowsListeners([{ address: "0.0.0.0", port: 45321, process: "com.docker.backend" }]), LocalTargetError);
+  assert.throws(() => assertWindowsListeners([{ address: "127.0.0.1", port: 45323, process: "com.docker.backend" }]), LocalTargetError);
 });

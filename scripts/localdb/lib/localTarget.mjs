@@ -28,9 +28,11 @@ export const LOCAL_PROFILES = Object.freeze({
     name: "test",
     projectId: "taxiflow-localdb-test",
     workdir: "C:\\Users\\appri\\taxiflow-localdb-test",
-    apiPort: 55321,
-    dbPort: 55322,
-    mailPort: 55324,
+    // Below 49152: Windows (Hyper-V/WinNAT) reserves blocks of the dynamic range
+    // at boot; 55321-55324 fell inside one on 2026-10-20 and could not be bound.
+    apiPort: 45321,
+    dbPort: 45322,
+    mailPort: 45324,
     volume: "taxiflow_localdb_test_db",
     containerPrefix: "taxiflow_localdb_test",
     appPort: 5176,

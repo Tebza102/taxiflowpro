@@ -8,8 +8,8 @@ import { buildSyntheticSnapshot } from "../scripts/localdb/seed-data.mjs";
 // Behavioural proof: scripts/localdb/finance-record-tests.mjs.
 const parse = (action, fields) => parseFinanceActionRequest({ action, requestId: "44444444-4444-4444-8444-444444444444", expectedVersion: "2026-10-01T00:00:00Z", fields });
 const owner = { id: "o", role: "Owner" };
-const admin = { id: "a", role: "Admin" };
-const manager = { id: "m", role: "Manager", moduleAccess: { finance: true } };
+const admin = { id: "a", role: "Admin", permissions: ["cash.count"] };
+const manager = { id: "m", role: "Manager", moduleAccess: { finance: true }, permissions: ["cash.bank", "cash.verify"] };
 const driver = { id: "d", role: "Driver", driverStaffId: "uat-drv-01" };
 const changes = (o = {}) => ({ vehicleId: "uat-veh-01", tripDate: "2026-10-02", timeIn: "07:00", timeOut: "09:00", openingOdo: 1080, closingOdo: 1120, tripLogbook: [{ fromLocation: "A", toLocation: "B", passengerCount: 3, amountCollected: 90 }], ...o });
 

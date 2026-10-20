@@ -10,7 +10,23 @@ export const END_MARKER = "taxiflow-backup-complete";
 // database snapshot. Auth rows are exported whole (to_jsonb), including password
 // hashes, so a restore needs no password resets; the bundle is encrypted.
 // The end marker is the last key: truncated output never parses as complete.
-export const EXPORT_SQL = `begin transaction isolation level repeatable read read only;
+// Optional tenant tables, exported only when the database has them (release
+// file 05: platform_admins; release file 06: member_permission_changes, the
+// permission-audit history). A database or an older backup without them stays
+// valid. Rows only: their access rules (RLS forced, no browser grants) belong
+// to the target schema and are never part of a backup.
+export const OPTIONAL_TENANT_TABLES = Object.freeze([
+  Object.freeze({ key: "platform_admins", label: "platformAdmins", table: "public.platform_admins", alias: "p", order: "p.user_id" }),
+  Object.freeze({ key: "permission_changes", label: "permissionChanges", table: "public.member_permission_changes", alias: "c", order: "c.business_id, c.changed_at, c.id" }),
+]);
+export const OPTIONAL_TABLES_PROBE_SQL = `select concat_ws(',', ${OPTIONAL_TENANT_TABLES.map((t) => `case when to_regclass('${t.table}') is not null then '${t.key}' end`).join(", ")});`;
+const optionalPresent = (bundle) => OPTIONAL_TENANT_TABLES.filter((t) => bundle[t.key] !== undefined);
+
+export const buildTenantExportSql = (optionalKeys = []) => {
+  const optional = OPTIONAL_TENANT_TABLES.filter((t) => optionalKeys.includes(t.key))
+    .map((t) => `  '${t.key}', (select coalesce(json_agg(to_jsonb(${t.alias}) order by ${t.order}), '[]'::json) from ${t.table} ${t.alias}),\n`)
+    .join("");
+  return `begin transaction isolation level repeatable read read only;
 select json_build_object(
   'format', '${BACKUP_FORMAT}',
   'exported_at', now(),
@@ -20,10 +36,13 @@ select json_build_object(
   'requests', (select coalesce(json_agg(to_jsonb(q) order by q.business_id, q.request_id), '[]'::json) from public.finance_action_requests q),
   'users', (select coalesce(json_agg(to_jsonb(u) order by u.id), '[]'::json) from auth.users u),
   'identities', (select coalesce(json_agg(to_jsonb(i) order by i.id), '[]'::json) from auth.identities i),
-  'end', '${END_MARKER}'
+${optional}  'end', '${END_MARKER}'
 )::text;
 commit;
 `;
+};
+
+export const EXPORT_SQL = buildTenantExportSql([]);
 
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -87,6 +106,15 @@ export const validateBundle = (bundle) => {
   for (const b of businesses) {
     if (!bundle.workspaces.some((w) => w.business_id === b)) fail(`business ${b} has no snapshot.`);
   }
+  for (const t of optionalPresent(bundle)) {
+    if (!Array.isArray(bundle[t.key])) fail(`${t.key} is not a list.`);
+  }
+  for (const p of bundle.platform_admins ?? []) {
+    if (!users.has(p.user_id)) fail("a platform-admin grant references a missing Auth user.");
+  }
+  for (const c of bundle.permission_changes ?? []) {
+    if (!businesses.has(c.business_id)) fail("a permission-audit row references a missing business.");
+  }
   return bundle;
 };
 
@@ -124,6 +152,8 @@ const buildTenantManifest = (bundle, { plaintextSha256, ciphertextSha256, target
     requestLog: bundle.requests.length,
     authUsers: bundle.users.length,
     authIdentities: bundle.identities.length,
+    // Only when the backup holds them (older backups keep their counts).
+    ...Object.fromEntries(optionalPresent(bundle).map((t) => [t.label, bundle[t.key].length])),
   },
   businesses: bundle.businesses.map((b) => {
     const w = bundle.workspaces.find((row) => row.business_id === b.id);
@@ -132,6 +162,7 @@ const buildTenantManifest = (bundle, { plaintextSha256, ciphertextSha256, target
       snapshotUpdatedAt: w?.updated_at ?? null,
       memberships: bundle.memberships.filter((m) => m.business_id === b.id).length,
       requestLog: bundle.requests.filter((q) => q.business_id === b.id).length,
+      ...(bundle.permission_changes ? { permissionChanges: bundle.permission_changes.filter((c) => c.business_id === b.id).length } : {}),
     };
   }),
 });
@@ -157,17 +188,32 @@ const insertRows = (table, columnsSql, rows, conflict = "") =>
 // memberships, snapshots or request-log rows. A business row the schema
 // migration already created (the mapped legacy business) takes the backed-up
 // values, which is safe because nothing in the empty target references it yet.
-export const buildFullRestoreSql = (bundle, columns) => `begin;
+// Optional tables (platform_admins, member_permission_changes) are restored
+// when the backup holds them; the target must have the table (its release file
+// applied), so their schema-level access rules are already in place.
+export const buildFullRestoreSql = (bundle, columns) => {
+  const optional = optionalPresent(bundle);
+  for (const t of optional) {
+    if (!columns[t.table]) throw new Error(`The target has no ${t.table}; apply the release files before restoring this backup.`);
+  }
+  const rowsOf = (key) => bundle[key] ?? [];
+  const insertOptional = (key) => {
+    const t = optional.find((entry) => entry.key === key);
+    return t ? insertRows(t.table, columns[t.table], rowsOf(key)) : "";
+  };
+  return `begin;
 do $guard$ begin
   if exists (select 1 from auth.users) or exists (select 1 from public.business_memberships)
-     or exists (select 1 from public.workspace_snapshots) or exists (select 1 from public.finance_action_requests) then
+     or exists (select 1 from public.workspace_snapshots) or exists (select 1 from public.finance_action_requests)${optional.map((t) => ` or exists (select 1 from ${t.table})`).join("")} then
     raise exception 'TARGET NOT EMPTY: a full restore only goes into an empty project';
   end if;
 end $guard$;
 ${insertRows("auth.users", columns["auth.users"], bundle.users)}
 ${insertRows("auth.identities", columns["auth.identities"], bundle.identities)}
+${insertOptional("platform_admins")}
 ${insertRows("public.businesses", columns["public.businesses"], bundle.businesses, `on conflict (id) do update set (${columns["public.businesses"]}) = row(${columns["public.businesses"].split(",").map((column) => `excluded.${column}`).join(",")})`)}
 ${insertRows("public.business_memberships", columns["public.business_memberships"], bundle.memberships)}
+${insertOptional("permission_changes")}
 ${bundle.workspaces
   .map(
     (w) =>
@@ -179,12 +225,14 @@ do $check$ begin
   if (select count(*) from public.workspace_snapshots) <> ${bundle.workspaces.length}
      or (select count(*) from public.business_memberships) <> ${bundle.memberships.length}
      or (select count(*) from public.finance_action_requests) <> ${bundle.requests.length}
-     or (select count(*) from auth.users) <> ${bundle.users.length} then
+     or (select count(*) from auth.users) <> ${bundle.users.length}${optional.map((t) => `
+     or (select count(*) from ${t.table}) <> ${rowsOf(t.key).length}`).join("")} then
     raise exception 'RESTORE COUNT MISMATCH';
   end if;
 end $check$;
 commit;
 `;
+};
 
 // ONE business: its snapshot row and its request log, together (so a retried
 // request id can never report "already applied" for a change the restored
@@ -256,7 +304,8 @@ select json_build_object(
 commit;
 `;
 
-export const exportSqlFor = (schema) => (schema === "pre-migration" ? EXPORT_SQL_PRE_MIGRATION : EXPORT_SQL);
+// optionalKeys: the OPTIONAL_TENANT_TABLES keys the database has (OPTIONAL_TABLES_PROBE_SQL).
+export const exportSqlFor = (schema, optionalKeys = []) => (schema === "pre-migration" ? EXPORT_SQL_PRE_MIGRATION : buildTenantExportSql(optionalKeys));
 
 export const validatePreMigrationBundle = (bundle) => {
   if (bundle.end !== END_MARKER) fail("the end marker is missing.");
@@ -282,13 +331,23 @@ export const validatePreMigrationBundle = (bundle) => {
 };
 
 export const columnTablesFor = (bundle) =>
-  bundle.format === PRE_MIGRATION_FORMAT ? ["auth.users", "auth.identities", ...LEGACY_TABLES.map((table) => `public.${table}`)] : COLUMN_TABLES;
+  bundle.format === PRE_MIGRATION_FORMAT
+    ? ["auth.users", "auth.identities", ...LEGACY_TABLES.map((table) => `public.${table}`)]
+    : [...COLUMN_TABLES, ...optionalPresent(bundle).map((t) => t.table)];
 
 // Tables compared after a restore (row hashes).
 export const comparableTables = (bundle) =>
   bundle.format === PRE_MIGRATION_FORMAT
     ? { snapshots: bundle.workspaces, authUsers: bundle.users, authIdentities: bundle.identities, ...Object.fromEntries(LEGACY_TABLES.map((table) => [table, bundle.legacy_tables[table]])) }
-    : { businesses: bundle.businesses, memberships: bundle.memberships, snapshots: bundle.workspaces, requestLog: bundle.requests, authUsers: bundle.users, authIdentities: bundle.identities };
+    : {
+        businesses: bundle.businesses,
+        memberships: bundle.memberships,
+        snapshots: bundle.workspaces,
+        requestLog: bundle.requests,
+        authUsers: bundle.users,
+        authIdentities: bundle.identities,
+        ...Object.fromEntries(optionalPresent(bundle).map((t) => [t.label, bundle[t.key]])),
+      };
 
 // FULL restore of a pre-migration backup, only into an EMPTY pre-migration
 // schema (for example a new project with supabase/schema.sql applied), so the

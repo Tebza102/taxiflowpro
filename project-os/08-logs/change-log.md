@@ -1509,3 +1509,183 @@ What `platform-admin-tests.mjs` covers:
 - www moved from `taxiflowpro` (308 redirect) to `taxiflow-website`. HTTPS, assets, the mobile menu, Log in and the planner were verified live.
 - The app is unchanged. PR #4 is open.
 - Rollback: `05-build/public-website.md`.
+
+### 2026-10-18 — Platform admin released to production (PR #3)
+
+- **Pre-release backup:** PASS (`f04778a7…`, off-machine hashes match).
+- **File 05:** applied; checks PASS.
+- **Grant:** `apprigate@gmail.com`.
+- **Merge:** PR #3 merged as `af3e5ad`. The build `dy1a1k761` was verified (sign-in renders; platform and memberships 401 without a token), then promoted at 16:20 SAST.
+- **Unchanged:** data (membership and snapshot fingerprints) and www.
+- **After-release backup:** PASS (`62345aea…`, off-machine hashes match).
+- **Signed-in checks:** still pending; the pane had no session.
+- **User-verified** (Tebogo, own browser): the Companies button is visible; only TaxiFlow Pro is listed; the role is still Admin; existing records are visible after a refresh.
+- **Unverified in production:** the Owner, Driver, Admin-grant, non-member and Owner-minting restrictions (proven locally only).
+- **Remaining rollout blocker:** DKIM, which blocks real Owner invitations.
+
+### 2026-10-19 — Local company-onboarding rehearsal (synthetic, local stack only)
+
+**Changed by:** Claude Code, with Tebogo's go-ahead. Local machine only; no production, repo code or tests changed.
+
+- **Docker fix (local).** Docker Desktop is installed inside the Claude app's package storage, so it only starts in that context: `Invoke-CommandInDesktopPackage -PackageFamilyName Claude_pzs8sxrjxfjjc -AppId Claude -PreventBreakaway -Command "%LOCALAPPDATA%\Programs\DockerDesktop\Docker Desktop.exe"`. After the Windows build moved to 26300, `wsl.exe --mount` could no longer reach the data disk at the real path (`ERROR_PATH_NOT_FOUND`). Added a reversible junction `%LOCALAPPDATA%\Docker\wsl` → `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Local\Docker\wsl`; nothing deleted, reset or reinstalled. Rollback: `rmdir "%LOCALAPPDATA%\Docker\wsl"`.
+- **Isolation evidence:** `verify.mjs` 14 PASS, 2 FAIL (exact-count baseline only: 16 users, all `@example.com`; 4 snapshots, 0 live traces; extra rows are earlier test data). Auth SMTP is the local Mailpit container, which has no relay configured.
+- **Rehearsal (runbook flow), company "Rehearsal Taxis" (Tenant 5):**
+  1. platform admin `admin@example.com` created the company and Owner; the console states it gives no access to the company's data;
+  2. the Owner set a password from the Mailpit email (the page was branded with the company);
+  3. the Owner added a driver profile plus Driver, Manager and Admin logins;
+  4. set-up data (route RH-01, vehicle RHL 001 GP) loaded with `scripts/localdb/load-business-data.mjs`: dry run, apply, repeat run showed "No changes";
+  5. the Driver captured R300 and sent the day checking;
+  6. the Admin counted R300; the Admin cannot verify, edit or delete;
+  7. the Manager verified it;
+  8. the Manager finished deposit `TFP-MON-1019-01`.
+- **Separation:** Driver and Manager tokens get 403 for another company's workspace and for the platform list; the Driver's memberships call returns only its own role. In the database, the record is `banked`, the 4 memberships are in Rehearsal Taxis only, and the other companies' snapshots are unchanged.
+- **Findings, all expected or minor:**
+  - creating a route in the app's Fleet screen is refused ("not available in the business workspace yet"), so set-up stays loader-only, as Project OS states;
+  - the loader requires `business.name` in the file (refused safely without it);
+  - in this local company, the Manager can finish the deposit without any extra grant.
+
+### 2026-10-19 — Owner permissions findings (inspection only; no code changed)
+
+**Correction to the rehearsal entry above:** loading routes and vehicles with the loader was a rehearsal workaround, not a fix for Add Route. DKIM passing is not the readiness gate on its own (see next-action).
+
+- **Add Route / Add Vehicle refused (by design, unfinished).** Business-workspace (tenant) mode has no whole-snapshot save: `dataGateway.persistSnapshot`, `commitLiveSnapshotMutation` and `callUserLifecycleApi` return `TENANT_UNSUPPORTED_MESSAGE` (`src/App.jsx` ~1104/1182; `src/lib/tenantWorkspace.js:19`; `tenant-design.md` §344). Writes exist only as explicit server actions: `api/business/finance-actions.js` (finance) and `api/business/members.js` (access). There is no route, vehicle or defect action.
+- **Add Driver, local success vs earlier failure.** The code is identical: deployed `af3e5ad` and local `HEAD` differ only in Project OS. Both runs are tenant mode. Two different paths:
+  - Settings → Business access → "Add driver profile" (`driver.save_profile`) works, but only for an **Owner** (`assertOwner`, `tenantOnboarding.js:213`);
+  - Drivers module → "Save driver" (`saveDriver` → snapshot commit or lifecycle API) is refused.
+  - The earlier failure is most likely the Drivers module, or Settings used as an Admin. In production, `apprigate@gmail.com` is an Admin in Tenant 1, so it would get "Only an Owner can manage access". Not yet confirmed with the user's screen or error text.
+- **Permissions that exist:** Owner grants, deactivates or reactivates Admin, Manager or Driver; driver profiles; owner-driver link; role-fixed finance rules (`api/_lib/financeActions.js:22-34`):
+  - hand-in: Owner, Admin;
+  - verify: Owner, Manager;
+  - bank (`deposit.lock`): Owner, or Manager with `moduleAccess.finance` = true;
+  - module view switches are stored in `snapshot.appUsers`, applied by `tenantAuth.js:226-240`, and can only narrow access.
+- **Permissions that are missing:**
+  - per-person count, verify and bank switches;
+  - a fleet (route/vehicle) management permission, and its server actions;
+  - drivers management delegable to a Manager;
+  - delegable staff-permission management;
+  - any screen for `member.update` (the server accepts module switches; the panel has none).
+- **Current Manager banking rule:** a Manager can bank whenever their Money access is on. Since `d3adf04` that is the default, so every Manager can bank unless restricted, and in tenant mode no screen can restrict them.
+- **verify.mjs failures fully explained.** Line 48 expects 11 users (`SEED_USERS` + `TENANT_USERS`) and found 16 before the rehearsal. Line 53 expects 2 snapshot rows and found 4. The extras are 5 users and 2 companies created by `scripts/localdb/platform-admin-tests.mjs` (2026-10-18 11:57–11:58, run without a later reset), plus the rehearsal's 4 users and 1 company. The safety parts pass: 0 non-example.com users, 0 live traces, 0 unmapped rows.
+
+### 2026-10-19 — Owner-assigned responsibilities and tenant route/vehicle/driver saves (release file 06; local + Preview only)
+
+**Changed by:** Agent (Claude), branch `agent/owner-responsibilities` (commit `7f1419b` + docs), from `0b02435`; `origin/main` = `af3e5ad` unchanged.
+
+**Files changed:**
+- Server: `api/_lib/tenantAuth.js`, `api/_lib/financeActions.js`, `api/_lib/financeRecordActions.js`, `api/_lib/fleetActions.js` (new), `api/_lib/tenantOnboarding.js`, `api/business/members.js`, `api/business/workspace.js`
+- Shared: `src/lib/memberPermissions.js` (new), `src/lib/fleetRecordContract.js` (new, verbatim move from `appRuntime.js`, bundle parity proven), `scripts/pilot/business-data-plan.mjs` (shares `normalizeRegistration`)
+- UI: `src/App.jsx`, `src/components/TenantAccessPanel.jsx`, `src/lib/tenantWorkspace.js`
+- Database: `scripts/localdb/migrations/20261019090000_member_permissions.sql` (release file 06), rollback `scripts/localdb/rollback/20261019090000_member_permissions.down.sql`, `scripts/hosted/apply-release.mjs` (06 entry), `scripts/localdb/setup.mjs`
+- Isolated test stack: `scripts/localdb/lib/localTarget.mjs` profiles (`default` = rehearsal 54321-54324/5175; `test` = 55321-55324/5176, own project, volume and containers), `exec.mjs`, `mailpit.mjs`, `dev-tenant.mjs`, `playwright.localdb.config.mjs`
+- Tests: `tests/member-permissions.test.mjs`, `scripts/localdb/member-permissions-tests.mjs`, `scripts/localdb/member-permissions-migration-tests.mjs`, `tests/localdb-browser/tenant-fleet-saves.spec.js`; fixture/locator updates in `tests/finance-actions.test.mjs`, `tests/finance-record-actions.test.mjs`, three localdb browser specs (my new checkbox labels contain "driver profiles", so the loose `getByLabel("Driver profile")` became ambiguous; now the combobox); `tests/localdb-guard.test.mjs` (+5 profile tests)
+- Docs: `04-technical/auth-and-roles.md`, `04-technical/tenant-design.md`
+
+**Summary:** Membership responsibilities `cash.count`, `cash.verify`, `cash.bank`, `drivers.manage`, `fleet.manage`, enforced by the server from the membership row on every request and capped by module access. Only an active Owner changes them (`member.permissions`), never their own, never Owners/Drivers; roles, sign-ins and responsibilities are not delegable. File 06 backfills the pre-06 rules (Admin count; Manager verify + bank), so nobody's effective access changes on migration; before file 06 the server falls back to those defaults. New tenant server actions `route.save`, `vehicle.save`, `driver.save` (same CAS/replay pipeline; same-business ids only; loader integrity rules; money keys verified unchanged; finance statuses untouched; driver profiles accept no email/password/login). `driver.save_profile` is delegable via `drivers.manage`. Owner controls in Business access; Fleet/Drivers forms wired; Money buttons follow responsibilities. Remaining unsupported actions are labelled in the screens (see tenant-design.md).
+
+**One intentional tightening:** an Admin whose Money module is switched off can no longer record a hand-in by direct request (before, only the screen hid it). Required by "a permission must not bypass module access".
+
+**Tests run (all on the isolated `test` stack, fresh reset before each; the rehearsal stack was never reset):**
+- Unit: 36/36 files pass (incl. new `member-permissions.test.mjs` 8/8); `vite build` passes.
+- DB/API with real local Auth: `member-permissions-tests` 72/72 (allowed and refused for every responsibility; removing banking refuses the next direct `deposit.lock` and writes nothing; module off blocks; delegated driver management cannot grant/update/remove sign-ins, link drivers or change responsibilities, Auth and memberships unchanged; no self-escalation; cross-company reads/writes and forged route/vehicle/driver ids refused; Business B byte-identical; stale version writes nothing; replay applied once; Owner protections; Driver privacy).
+- Migration: `member-permissions-migration-tests` 24/24 (backfill preserves per-role rules, idempotent, stale version, cross-business, role-change reset, service-role-only grants, rollback/re-apply, release-06 code on a database without file 06).
+- Regression: finance-action 56/56, finance-record 36/36, finance-capture 43/43, expense-only 32/32, onboarding 64/64, tenant access 36/36, tenant rollback 8/8, server-auth 26/26, business-data-load 46/46, platform-admin 75/75.
+- Hosted copy (exact live schema + release files 01-06): hosted-rehearsal 22/22; permissions suite on that database 72/72.
+- Browser: localdb suite 12/12 (11 in the full run + the fleet spec rerun after locator fixes); new spec proves the Owner grants in Business access, then a Manager's route, vehicle and driver saves survive a full reload and are in the database, attributed to the Manager, with no sign-in created. Mock-mode suite 34/34.
+- Preview `https://taxiflowpro-nifglxqz9-apprigate.vercel.app` (`dpl_3cHiRw19RhdKQ34EyPyXiNWLkJqP`, READY, built from `7f1419b`), read-only via the user's Vercel-authenticated browser: sign-in renders; `/api/business/workspace`, `/members` GET and `finance-actions` `route.save`/`vehicle.save`, `members` `member.permissions` POST return 401 (no token and garbage token), all `no-store`; `driver.save` with an email returns 400 before authorization. Signed-in Preview checks are impossible by design (Preview has no service-role key; fails closed 503).
+- Rehearsal database fingerprint (users 20, memberships `edac9fdb…`, 5 snapshots) identical before and after.
+
+**Expected fixture-count differences (not safety findings):** `verify.mjs` exact counts on the rehearsal stack still differ for the reasons logged earlier today (platform-admin test data + rehearsal company). The test stack is reset before each suite, so its counts are the seed's.
+
+**Result:** Pass.
+
+**Risks remaining:**
+- Production has file 05 only; file 06 and this code are not deployed. Deploying the code before file 06 is safe (defaults), but the Owner controls return 503 until file 06 is applied.
+- No segregation-of-duties rule: the Owner can give one person both counting and verifying.
+- Not available in the business workspace yet: archive vehicle, defects (log/resolve), service/document records, shift allocation page, expense presets, settings/profile saves, role change in the UI, custom roles, driver email edits.
+- Owner and Driver restrictions remain unverified in production (unchanged).
+
+**Next action:**
+- Review the PR; on authorization follow the release steps in next-action.md (backup, file 06, merge, promote, checks).
+
+### 2026-10-19 — Acceptance gaps: delegated staff management, separation of duties, isolated Preview backend (in progress)
+
+**Changed by:** Agent (Claude), branch `agent/owner-responsibilities` (PR #6). Production on hold; nothing deployed or migrated in production.
+
+**Files changed:** release file 06 (`scripts/localdb/migrations/20261019090000_member_permissions.sql`, edited in place: it is unreleased) and its rollback note; `src/lib/memberPermissions.js`; `api/_lib/tenantOnboarding.js`; `api/_lib/financeActions.js`; `api/_lib/financeRecordActions.js`; `src/components/TenantAccessPanel.jsx`; `src/App.jsx`; tests `tests/member-permissions.test.mjs`, `scripts/localdb/member-permissions-tests.mjs`, `scripts/localdb/member-permissions-migration-tests.mjs`; new `scripts/preview-test/` (`build-schema.mjs`, `schema.sql`, `verify-schema.sql`, `seed-hosted-test.mjs`), `tests/preview-test/preview-journey.spec.js`, `playwright.preview-test.config.mjs`; `playwright.config.mjs` (ignores `preview-test`); `04-technical/auth-and-roles.md`, `04-technical/tenant-design.md`.
+
+**Summary:**
+1. **Delegated staff management (`staff.manage`, "Manage staff responsibilities").** Given and removed only by the Owner. A holder may add or remove for another Admin/Manager only responsibilities it currently holds (effective, so module switches also limit it); never `staff.manage`, never its own entry, an Owner, a Driver, another holder of `staff.manage`, or another business; never roles or sign-ins. Enforced by the server (current membership, per request) and again inside `set_member_permissions`. Every change writes one row to the new tenant-scoped audit table `public.member_permission_changes` (business, actor, actor role, target, before, after; RLS forced, no browser access, kept on rollback) plus the business audit entry. Holders can read the access list; the Business access screen shows only the checkboxes they may change.
+2. **Separation of duties.** `cashup.verify` and `income.verify` refuse (403) when the requester recorded that count (`countedBy`), for every role including the Owner. One person may still hold both counting and verifying. Consequence: a business where the Owner works alone needs a second person to verify the Owner's counts.
+3. **Isolated Preview backend.** New free Supabase project `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`, eu-west-1, Tebogo-approved, quoted $0). Vercel Preview variables scoped to branch `agent/owner-responsibilities` only: `VITE_SUPABASE_URL`, `SUPABASE_URL` (test project) and `VITE_SUPABASE_ANON_KEY` (its public anon key). Production variables untouched. Two connector migrations to the test project returned `{"status":"declined"}` from the Supabase MCP server in 1.7-2.3 s with Claude Code permission "accept" and no prompt recorded (assessed as an automatic rejection of its destructive-statement confirmation). Not retried. The first attempt also inserted synthetic accounts by SQL; Tebogo chose no accounts via SQL, and that approach was removed. Instead: `scripts/preview-test/schema.sql` (schema only, generated from release files 01-06, refuses non-empty projects) for Tebogo to run in the SQL editor, and `scripts/preview-test/seed-hosted-test.mjs` (test sign-ins, companies, set-up data and access through the app's own operator functions; secret key from an env file outside the repo; dry run by default; typed ref to apply).
+
+**Tests run:**
+- Unit: all files pass; `member-permissions.test.mjs` 10/10 (delegation limits, separation of duties); `vite build` passes.
+- Isolated local test stack (fresh reset each): `member-permissions-tests` 101/101 (adds 29 checks: delegated limits, direct database-function refusal, audit rows tenant-scoped with before/after, browser cannot read the audit table, removing `staff.manage` blocks the next delegated change, self-verification refused for day and standalone income via direct API, another verifier succeeds); `member-permissions-migration-tests` 25/25 (audit table kept on rollback); finance-action 56/56; finance-record 36/36; onboarding 64/64; localdb browser 12/12.
+- `schema.sql` on a fresh EMPTY local Supabase (no migrations, no seed): applies cleanly; `verify-schema.sql` 10/10 true (6 tables, permissions column, RLS everywhere, only the two intended authenticated SELECT grants, no browser-executable functions, 5 server functions for service_role, no snapshot policies, RLS forced on platform_admins and the audit table, 0 users/businesses/snapshots, no local-only schema); a second run refuses ("TaxiFlow tables already exist").
+- Rehearsal database: not touched.
+
+**Result:** parts 1 and 2 done and proven locally. Part 3 waiting on Tebogo (schema run in the test project's SQL editor; the test project's secret key in an env file outside the repo and in the branch-scoped Vercel variable).
+
+**Risks remaining:** the hosted journey has not run yet. No bypass secret exists yet (to be created for the run and revoked after). Signups are open by default on the new test project (an account without membership has no access).
+
+**Next action:** see next-action.md "Hosted Preview journey".
+
+### 2026-10-19 — Isolated Preview test schema applied (Tebogo) and verified (agent, read-only)
+
+**Changed by:** Tebogo (via ChatGPT) applied `scripts/preview-test/schema.sql` from `cd329d3` to `sxoonhovoqgcpflhqirb` (taxiflow-preview-test) as Supabase migration `preview_test_schema_releases_01_to_06` (version 20261019191640); SHA-256 `e7280981…5431651` matched. Agent: read-only checks only.
+
+**Tests run:** `list_migrations` shows exactly that one migration; `verify-schema.sql` re-run read-only: 10/10 true, users=0 businesses=0 snapshots=0; security advisor: one INFO lint (RLS enabled without policies on finance_action_requests, member_permission_changes, platform_admins, workspace_snapshots — intended: server-only tables).
+
+**Result:** Pass. The schema must not be rerun (it refuses non-empty projects anyway).
+
+**Next action:** Tebogo: the test project's secret key (env file outside the repo; branch-scoped Vercel `SUPABASE_SERVICE_ROLE_KEY`), then `seed-hosted-test.mjs`. Production on hold.
+
+### 2026-10-19 — Authenticated hosted Preview journey on the isolated test backend: PASS
+
+**Changed by:** Agent (Claude), under Tebogo's authorization of 2026-10-19 (test-only seeding, Preview deployment, hosted verification, bypass removal). Branch `agent/owner-responsibilities`. Production untouched (no merge, migration, promotion or onboarding).
+
+**What was done:**
+- `seed-hosted-test.mjs`: added `--confirm-ref` (exact `sxoonhovoqgcpflhqirb`, still behind `--apply` and every target/production guard; a wrong ref was proven refused before any write). Other operator scripts unchanged. Seeded test project `sxoonhovoqgcpflhqirb` through the app's own functions: 6 synthetic `@example.com` sign-ins (password only in git-ignored `.env.preview-test.local`), Preview Company A (Owner, Admin, Manager, Driver `pv-drv-01`; route Rank A to Rank B; vehicles PV TEST 01/02) and Preview Company B (Owner, Manager; route, driver profile, vehicle). Database trigger applied role defaults (Admin cash.count; Manager cash.verify, cash.bank).
+- Defect found and fixed (configuration): the branch-scoped Preview `SUPABASE_SERVICE_ROLE_KEY` held no usable value (server answered "Supabase server configuration is incomplete", 503). Replaced from the external env file by piping, never displayed; still Preview + this branch only. Redeployed: `taxiflowpro-n8yesi8bq-apprigate.vercel.app`.
+- Test fixes (no app code changed): stops on a route with named stops are dropdowns (located by caption); seeded registrations are stored normalized ("PV TEST 01"); the journey re-issues API tokens after each browser sign-out; the fleet test resets the Manager to role defaults so it can be rerun.
+- **Incident (found and closed):** the earlier read-only `vercel curl` attempt (17:21:27 UTC) silently created an automation protection-bypass secret on the project (exposed to deployments as an env var). It existed until this run and was used as the run's temporary bypass, then revoked. The Project OS statement "bypass secrets: 0" was untrue between 17:21 and the revocation. Do not use `vercel curl` on this project.
+- **Observation (not changed, outside scope):** the app's Sign out ends all of that user's sessions on every device (Supabase global sign-out).
+
+**Tests run (Preview `taxiflowpro-n8yesi8bq-apprigate.vercel.app`, dpl via `vercel redeploy` of `e78e4b3`; isolated backend):**
+- Target guard: bundle carries the test project URL and anon key and no production ref; unauthenticated 401; Owner workspace 200; Company B's Manager refused Company A's workspace (403) and a route save into A (403).
+- Full cash workflow in the browser: driver trip + safe-paid expense, refresh, checking sent; Admin records hand-in R380; Manager verifies; Owner finishes the deposit; after reload Finish deposit is disabled. PASS (1.4 min).
+- Owner gives the Manager fleet and driver management in Business access; the Manager creates a route, a vehicle and a driver profile; all survive a full reload and are read back from the server attributed to the Manager. PASS.
+- Owner unticks banking in Business access; the Manager's next direct `deposit.lock` is refused (403, "Bank verified cash") and the version is unchanged. PASS.
+- Delegation: Admin without staff.manage refused; after the Owner gives staff.manage, the Admin adds counting to the Manager (200) but cannot remove fleet management (403, not held), pass on staff.manage (403), raise itself (403), change the Owner (403) or grant a sign-in (403); after removal, the next delegated change is refused. Audit table rows in Company A only: Owner 8, Admin 1. PASS.
+- Separation of duties via direct API: the driver captures a day; the Manager (count + verify) records the hand-in, its own verification is refused (403); the Owner verifies (200). PASS.
+- Totals: 6 hosted tests passed (cash workflow on run 4; the other 5 together on run 7, same deployment).
+
+**Cleanup:** automation bypass secrets now 0 (verified; deployment protection still on); the local bypass copy deleted; Preview without Vercel login now redirects to sign-in (302). Left in place for further testing (Tebogo to decide): test project data, the four branch-scoped Preview variables, the external env file.
+
+**Result:** Pass.
+
+### 2026-10-20 — Release 06 review completed (production on hold)
+
+**Changed by:** Agent (Claude). Branch `agent/owner-responsibilities`, commits `ac10ed1` (file 06 restore-fidelity fix, post-check SQL, review document) and `c3f6eda` (test ports, hosted check).
+
+**Decisions recorded (Tebogo):** separation of duties binds everyone, including the Owner; the cash workflow requires a second authorized person to verify every count. Sign-out (ends that user's sessions on every device) stays unchanged and is documented.
+
+**Defect found and fixed:** file 06's insert trigger gave role defaults to any Admin/Manager row inserted with an empty list, so a full backup restore would have re-granted "Receive and count cash" to an Admin the Owner had emptied. Fixed: no column default after the backfill; defaults only for NULL; add-and-backfill only when the column is new.
+
+**Final release file 06:** `scripts/localdb/migrations/20261019090000_member_permissions.sql`, SHA-256 `09dd1e33112108f0a17d8645ec9fb3294c8139ba56fc391508ab8699d676b30c`; rollback `6ab9f636…a8e51` (full hashes in `05-build/release-06-review.md`).
+
+**Tests on the final file 06 (isolated local stack):** migration 30/30; backup 37/37; permissions 101/101; onboarding 64/64; finance-action 56/56; tenant access 36/36; platform-admin 75/75; backup-premigration 13/13 (second attempt: the first ran after `reset` instead of its required `setup.mjs hosted-pre` and stopped before any assertion); production-path rehearsal 11/11. Production credentials verified by variable names/targets and the live bundle; app source has no test-project reference.
+
+**Interruptions (not code failures):** 2026-10-19 23:37 machine resource exhaustion crashed Docker mid-run (finance-action stopped after 41 passes); after a reboot, Windows reserved ports 55227-55326 so the test stack moved to 45321/45322/45324 (one failed retry where no tests ran). Bypass secrets: 0 throughout this round.
+
+**Hosted alignment:** the hosted test project still runs the earlier file 06 (verified read-only: both `verify-delta-06.sql` Part A checks false). Delta `scripts/preview-test/delta-06-restore-fidelity.sql` (`76bab4d5…724e9`) and targeted check `scripts/preview-test/verify-delta-06.sql` (`68fd6494…0112a`) are ready for Tebogo to run in its SQL editor. Not aligned until verified.
+
+**Known limit:** the backup does not include `member_permission_changes` (audit history) or `platform_admins`; rollback keeps both. Recommended before the first real business: add them to the backup.
+
+**Result:** release review complete; recommendation GO for a controlled release once authorized.
+
+### 2026-10-20 — Release gaps: hosted delta applied; backups cover platform admins and audit history
+
+- Hosted test project `sxoonhovoqgcpflhqirb`: `delta-06-restore-fidelity.sql` applied via the Supabase connector (success). `verify-delta-06.sql` Part A: both true. Part B was automatically declined by the connector (destructive statements) and not run; read-only fingerprint unchanged. Pending: Tebogo runs Part B in the SQL editor (expect "PASS (rolled back)").
+- Backup tool (`scripts/backup`): tenant export now includes `platform_admins` and `member_permission_changes` when present (probe; older backups and pre-06 databases stay valid); full restore inserts them in dependency order with empty-target and count guards; restore comparison and manifest cover them; one-business restore unchanged. Tests: `backup-tool.test.mjs` 10/10; `backup-tests.mjs` 43/43 on the isolated test stack (grant and audit row restored exactly; RLS forced and no browser grants after restore; browser read refused 42501).
+- Production on hold.

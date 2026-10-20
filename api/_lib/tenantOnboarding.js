@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 
+import { PERMISSION_KEYS, PERMISSION_ROLES, changedPermissions, delegablePermissions, hasPermission } from "../../src/lib/memberPermissions.js";
 import { normalizeModuleViewAccess } from "../../src/lib/moduleAccessPolicy.js";
-import { createHttpError, readBusinessSnapshot, serviceClientFor } from "./tenantAuth.js";
+import { buildRequester, createHttpError, readBusinessSnapshot, serviceClientFor } from "./tenantAuth.js";
 
 // Pilot onboarding (Task 18). Business memberships are the ONLY source of
 // access. The business directory (snapshot appUsers) mirrors each member's
@@ -93,12 +94,12 @@ const requireDriverProfile = (snapshot, staffId) => {
   return profile;
 };
 
-const audit = (actorId, title, detail) => ({
+const audit = (actorId, title, detail, actorRole = "Owner") => ({
   id: `audit-${randomUUID()}`,
   timestamp: new Date().toISOString(),
   scope: "settings",
   actorId,
-  actorRole: "Owner",
+  actorRole,
   source: "server",
   title,
   detail,
@@ -173,6 +174,19 @@ const loadMembership = async (service, businessId, userId) => {
     .maybeSingle();
   if (error) throw createHttpError(502, "The membership could not be read.");
   return data ?? null;
+};
+
+// Stored responsibilities of one membership ([] before release file 06).
+const loadMemberPermissions = async (service, businessId, userId) => {
+  const { data, error } = await service
+    .from("business_memberships")
+    .select("permissions")
+    .eq("business_id", businessId)
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error?.code === "42703") return [];
+  if (error) throw createHttpError(502, "The membership could not be read.");
+  return Array.isArray(data?.permissions) ? [...data.permissions].sort() : [];
 };
 
 const emailOf = async (service, userId) => {
@@ -284,6 +298,64 @@ export const MEMBER_ACTIONS = {
     });
   },
 
+  // The responsibilities of an Admin or Manager (release file 06): the Owner,
+  // or a holder of staff.manage within its delegation limits (only
+  // responsibilities it holds itself, never staff.manage, never another staff
+  // manager, never itself). Roles and sign-ins are never delegated. The
+  // database function re-checks every rule and records the change.
+  "member.permissions": async (authorization, fields) => {
+    if (!["Owner", ...PERMISSION_ROLES].includes(authorization.role)) {
+      throw createHttpError(403, 'Only the Owner, or someone given "Manage staff responsibilities", can change responsibilities.');
+    }
+    const userId = text(fields.userId);
+    if (!userId) throw bad("Choose the person whose responsibilities change.");
+    if (userId === authorization.userId) throw createHttpError(403, "You cannot change your own access.");
+    if (!Array.isArray(fields.permissions) || fields.permissions.length > PERMISSION_KEYS.length * 2) throw bad("permissions must be a list of responsibilities.");
+    const requested = [...new Set(fields.permissions.map(text))];
+    const unknown = requested.filter((entry) => !PERMISSION_KEYS.includes(entry));
+    if (unknown.length) throw bad(`Unknown responsibility: ${unknown.join(", ")}.`);
+    const service = serviceClientFor(authorization);
+    const existing = await loadMembership(service, authorization.businessId, userId);
+    if (!existing) throw createHttpError(404, "That person is not a member of this business.");
+    if (existing.role === "Owner") throw createHttpError(403, "Owner access is managed by the operator.");
+    if (!PERMISSION_ROLES.includes(existing.role)) throw createHttpError(403, "Only Admin and Manager access has responsibilities.");
+    const before = await loadMemberPermissions(service, authorization.businessId, userId);
+    const email = await emailOf(service, userId);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const row = await readBusinessSnapshot(authorization);
+      // Delegation limits on the actor's CURRENT effective responsibilities.
+      const requester = buildRequester(authorization, row.snapshot);
+      if (requester.role !== "Owner") {
+        if (!hasPermission(requester, "staff.manage")) {
+          throw createHttpError(403, 'You have not been given the "Manage staff responsibilities" responsibility.');
+        }
+        if (before.includes("staff.manage")) {
+          throw createHttpError(403, "Only the Owner can change the responsibilities of someone who manages staff.");
+        }
+        const beyond = changedPermissions(before, requested).filter((key) => !delegablePermissions(requester).includes(key));
+        if (beyond.length) throw createHttpError(403, `You can only give or remove responsibilities you hold yourself (not: ${beyond.join(", ")}).`);
+      }
+      const detail = `${email} / ${[...requested].sort().join(", ") || "none"} (was ${before.join(", ") || "none"})`;
+      const snapshot = { ...row.snapshot, auditTrail: [audit(authorization.userId, "Responsibilities changed", detail, authorization.role), ...(row.snapshot.auditTrail ?? [])] };
+      const { data, error } = await service.rpc("set_member_permissions", {
+        p_business_id: authorization.businessId,
+        p_actor: authorization.userId,
+        p_user_id: userId,
+        p_permissions: requested,
+        p_expected_updated_at: row.updated_at,
+        p_snapshot: snapshot,
+      });
+      if (error) {
+        if (error.code === "42501") throw createHttpError(403, error.message);
+        if (error.code === "22023") throw bad(error.message);
+        if (error.code === "42883" || error.code === "PGRST202") throw createHttpError(503, "Responsibilities are not available until release file 06 is applied.");
+        throw createHttpError(502, "The responsibilities could not be saved.");
+      }
+      if (data?.status === "applied") return { userId, role: existing.role, permissions: data.permissions ?? requested, version: data.version };
+    }
+    throw createHttpError(409, "The business changed repeatedly while saving; try again.");
+  },
+
   "member.deactivate": async (authorization, fields) => setActive(authorization, fields, false),
   "member.reactivate": async (authorization, fields) => setActive(authorization, fields, true),
 
@@ -318,15 +390,22 @@ const setActive = async (authorization, fields, active) => {
   });
 };
 
-// Driver profile without any sign-in (create or rename). Owner only.
+// Driver profile without any sign-in (create or rename). The Owner, or staff
+// holding drivers.manage (with the Drivers module on). It never touches
+// memberships or sign-ins.
 export const saveDriverProfile = async (authorization, fields) => {
-  assertOwner(authorization);
+  if (!["Owner", ...PERMISSION_ROLES].includes(authorization.role)) throw createHttpError(403, "Only an Owner can manage access for this business.");
   const name = text(fields.name);
   if (!name) throw bad("The driver's name is required.");
+  if (name.length > 80) throw bad("The driver's name is limited to 80 characters.");
   const staffId = text(fields.staffId) || `drv-${randomUUID().slice(0, 8)}`;
   const service = serviceClientFor(authorization);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const row = await readBusinessSnapshot(authorization);
+    const requester = buildRequester(authorization, row.snapshot);
+    if (!hasPermission(requester, "drivers.manage")) {
+      throw createHttpError(403, 'You have not been given the "Manage driver profiles and assignments" responsibility.');
+    }
     const drivers = driverProfiles(row.snapshot);
     const existing = drivers.find((driver) => text(driver?.staffId) === staffId);
     if (text(fields.staffId) && !existing) throw createHttpError(404, "That driver profile does not exist in this business.");
@@ -334,7 +413,7 @@ export const saveDriverProfile = async (authorization, fields) => {
     const snapshot = {
       ...row.snapshot,
       drivers: existing ? drivers.map((driver) => (driver === existing ? profile : driver)) : [...drivers, profile],
-      auditTrail: [audit(authorization.userId, existing ? "Driver profile updated" : "Driver profile added", name), ...(row.snapshot.auditTrail ?? [])],
+      auditTrail: [audit(authorization.userId, existing ? "Driver profile updated" : "Driver profile added", name, authorization.role), ...(row.snapshot.auditTrail ?? [])],
     };
     const version = new Date().toISOString();
     const { data, error } = await service
@@ -349,14 +428,18 @@ export const saveDriverProfile = async (authorization, fields) => {
   throw createHttpError(409, "The business changed repeatedly while saving; try again.");
 };
 
-// Members of ONE business, for an Owner or Admin.
+// Members of ONE business, for an Owner, an Admin, or a holder of
+// staff.manage (who needs the list to manage responsibilities).
 export const listMembers = async (authorization) => {
-  if (!["Owner", "Admin"].includes(authorization.role)) throw createHttpError(403, "Only an Owner or Admin can view business access.");
+  if (!["Owner", "Admin"].includes(authorization.role)) {
+    const requester = PERMISSION_ROLES.includes(authorization.role) ? buildRequester(authorization, (await readBusinessSnapshot(authorization)).snapshot) : null;
+    if (!hasPermission(requester, "staff.manage")) throw createHttpError(403, "Only an Owner or Admin can view business access.");
+  }
   const service = serviceClientFor(authorization);
-  const { data, error } = await service
-    .from("business_memberships")
-    .select("user_id, role, driver_staff_id, active")
-    .eq("business_id", authorization.businessId);
+  const columns = "user_id, role, driver_staff_id, active";
+  let { data, error } = await service.from("business_memberships").select(`${columns}, permissions`).eq("business_id", authorization.businessId);
+  // Before release file 06 there is no permissions column (42703).
+  if (error?.code === "42703") ({ data, error } = await service.from("business_memberships").select(columns).eq("business_id", authorization.businessId));
   if (error) throw createHttpError(502, "Business access could not be read.");
   const row = await readBusinessSnapshot(authorization);
   const users = Array.isArray(row.snapshot.appUsers) ? row.snapshot.appUsers : [];
@@ -364,7 +447,17 @@ export const listMembers = async (authorization) => {
   for (const member of data ?? []) {
     const email = await emailOf(service, member.user_id);
     const entry = users.find((user) => normalizeEmail(user?.email) === email);
-    members.push({ userId: member.user_id, email, name: entry?.name ?? email, role: member.role, active: member.active, driverStaffId: member.driver_staff_id });
+    members.push({
+      userId: member.user_id,
+      email,
+      name: entry?.name ?? email,
+      role: member.role,
+      active: member.active,
+      driverStaffId: member.driver_staff_id,
+      // Stored responsibilities; null before release file 06 (role defaults apply).
+      permissions: Array.isArray(member.permissions) ? member.permissions : null,
+      moduleAccess: normalizeModuleViewAccess(entry?.moduleAccess ?? {}, member.role),
+    });
   }
   const linked = new Set(members.map((member) => member.driverStaffId).filter(Boolean));
   return {

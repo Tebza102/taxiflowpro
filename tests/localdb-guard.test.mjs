@@ -6,6 +6,10 @@ import path from "node:path";
 
 import {
   ALLOWED_BINDINGS,
+  LOCAL_PROFILES,
+  bindingsFor,
+  renderComposeForProfile,
+  resolveLocalProfile,
   CLI_DISABLED_CONFIG,
   LIVE_PROJECT_REF,
   LocalTargetError,
@@ -186,4 +190,48 @@ test("compose template publishes only explicit 127.0.0.1 ports and holds no secr
   const kong = readFileSync("scripts/localdb/compose/kong.template.yml", "utf8");
   assert.match(kong, /__ANON_KEY__/);
   assert.doesNotMatch(kong, /eyJ[A-Za-z0-9_-]{10,}/);
+});
+
+test("profiles: only default and test exist; anything else is refused", () => {
+  assert.equal(resolveLocalProfile(undefined).name, "default");
+  assert.equal(resolveLocalProfile("").name, "default");
+  assert.equal(resolveLocalProfile("test").name, "test");
+  for (const name of ["prod", "live", "Test", "constructor", "__proto__", "default ", "hosted"]) {
+    if (name.trim() === "default") continue;
+    assert.throws(() => resolveLocalProfile(name), LocalTargetError, name);
+  }
+});
+
+test("profiles: the test stack shares no project, volume, workdir, container or port with the default stack", () => {
+  const { default: a, test: b } = LOCAL_PROFILES;
+  for (const key of ["projectId", "workdir", "volume", "containerPrefix", "apiPort", "dbPort", "mailPort", "appPort"]) {
+    assert.notEqual(a[key], b[key], key);
+  }
+  assert.deepEqual(bindingsFor(b), ["127.0.0.1:45321->8000/tcp", "127.0.0.1:45322->5432/tcp", "127.0.0.1:45324->8025/tcp"]);
+  for (const profile of [a, b]) assert.ok(bindingsFor(profile).every((binding) => binding.startsWith("127.0.0.1:")));
+  assert.deepEqual(ALLOWED_BINDINGS, bindingsFor(a), "the default profile keeps its exact bindings");
+});
+
+test("profiles: a binding of the other profile is refused for this project", () => {
+  const lines = ["x|" + bindingsFor(LOCAL_PROFILES.test).join(", ")];
+  assert.throws(() => assertPublishedBindings(lines), LocalTargetError);
+});
+
+test("profiles: the test Compose file is fully re-identified; the default template is untouched", () => {
+  const template = readFileSync(path.join("scripts", "localdb", "compose", "docker-compose.yml"), "utf8");
+  assert.equal(renderComposeForProfile(template, LOCAL_PROFILES.default), template);
+  const rendered = renderComposeForProfile(template, LOCAL_PROFILES.test);
+  assert.match(rendered, /^name: taxiflow-localdb-test$/m);
+  assert.doesNotMatch(rendered, /5432[124]/);
+  assert.doesNotMatch(rendered, /taxiflow_localdb_compose_db/);
+  assert.doesNotMatch(rendered, /container_name: taxiflow_localdb_(db|auth|rest|kong|mail)/);
+  for (const port of [45321, 45322, 45324]) assert.ok(rendered.includes(`"127.0.0.1:${port}:`), `port ${port} published on loopback`);
+  assert.throws(() => renderComposeForProfile(template.replace("name: taxiflow-localdb", "name: other"), LOCAL_PROFILES.test), LocalTargetError);
+});
+
+test("Windows listeners: either profile's loopback ports pass; never a non-loopback address or another port", () => {
+  const ok = [45321, 45322, 45324, 54321].map((port) => ({ address: "127.0.0.1", port, process: "com.docker.backend" }));
+  assert.equal(assertWindowsListeners(ok).length, 4);
+  assert.throws(() => assertWindowsListeners([{ address: "0.0.0.0", port: 45321, process: "com.docker.backend" }]), LocalTargetError);
+  assert.throws(() => assertWindowsListeners([{ address: "127.0.0.1", port: 45323, process: "com.docker.backend" }]), LocalTargetError);
 });

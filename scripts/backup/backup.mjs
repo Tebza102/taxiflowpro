@@ -7,7 +7,8 @@
 //   node scripts/backup/backup.mjs restore --target <local|ref> --file <backup.tfbk> [--business <uuid>] [--env-file <f>] [--passphrase-file <f>]
 //
 // export: one read-only REPEATABLE READ transaction (businesses, memberships,
-//   snapshots, finance request log, Auth users and identities), validated, then
+//   snapshots, finance request log, Auth users and identities, and when present
+//   platform_admins and member_permission_changes), validated, then
 //   encrypted in memory (AES-256-GCM). The file is written as .partial, read
 //   back, decrypted and compared with the export hash and counts; only then is
 //   it renamed and "PASS" appended to <out-dir>/backup-log.txt. Any failure
@@ -27,6 +28,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 
 import {
+  OPTIONAL_TABLES_PROBE_SQL,
   PRE_MIGRATION_FORMAT,
   SCHEMA_PROBE_SQL,
   buildBusinessRestoreSql,
@@ -127,8 +129,13 @@ const probeSchema = (psql) => {
   if (schema !== "pre-migration" && schema !== "tenant") throw new Error(`unexpected schema probe result "${schema}".`);
   return schema;
 };
+// Optional tenant tables the database has (platform_admins from release file
+// 05, member_permission_changes from release file 06) are exported with it.
+const probeOptionalTables = (psql, schema) =>
+  schema === "tenant" ? psql(OPTIONAL_TABLES_PROBE_SQL).trim().split(",").map((key) => key.trim()).filter(Boolean) : [];
 const exportFrom = (psql) => {
-  const text = psql(exportSqlFor(probeSchema(psql))).trim();
+  const schema = probeSchema(psql);
+  const text = psql(exportSqlFor(schema, probeOptionalTables(psql, schema))).trim();
   return { text, bundle: parseAndValidateBundle(text) };
 };
 const rowsHash = (rows) => sha256(rows.map((row) => stableStringify(row)).sort().join("\n"));
@@ -238,7 +245,7 @@ const runRestore = async () => {
     checks = Object.fromEntries(Object.keys(want).map((key) => [key, rowsHash(want[key]) === rowsHash(got[key]) ? "MATCH" : "DIFF"]));
   } else {
     const [want, got] = [comparableTables(bundle), comparableTables(after)];
-    checks = Object.fromEntries(Object.keys(want).map((key) => [key, rowsHash(want[key]) === rowsHash(got[key]) ? "MATCH" : "DIFF"]));
+    checks = Object.fromEntries(Object.keys(want).map((key) => [key, rowsHash(want[key]) === rowsHash(got[key] ?? []) ? "MATCH" : "DIFF"]));
   }
   const ok = Object.values(checks).every((value) => value === "MATCH");
   console.log(`${ok ? "RESTORED" : "FAIL"} ${businessId ? `business ${businessId}` : "full"}: ${JSON.stringify(checks)}`);

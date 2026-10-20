@@ -348,6 +348,18 @@ function App() {
     activeRole === "Driver" || (tenantOwnerDriver && tenantCaptureMode === "driver")
       ? "driver"
       : "management";
+  // Owner-assigned responsibilities (server-computed, membership-based). Only
+  // decides which controls show; every action is re-checked by the server.
+  const tenantCan = (permission) =>
+    !tenantLive || tenantMeta?.role === "Owner" || (tenantMeta?.permissions ?? []).includes(permission);
+  const tenantPanelAccess = tenantLive
+    ? { live: true, fleet: tenantCan("fleet.manage"), drivers: tenantCan("drivers.manage") }
+    : null;
+  // Cash steps: in the business workspace the Owner-assigned responsibilities
+  // decide (server re-checks); elsewhere the original fixed role rules apply.
+  const canCountCashNow = () => (tenantLive ? tenantCan("cash.count") : canRecordCashHandoverForRole(activeRole));
+  const canVerifyCashNow = () => (tenantLive ? tenantCan("cash.verify") : canVerifyCashCheckForRole(activeRole));
+  const canBankCashNow = () => (tenantLive ? tenantCan("cash.bank") : canFinishDepositForRole(activeRole));
 
   const beginLiveSync = () => {
     if (effectiveBackendMode !== "live") {
@@ -1258,10 +1270,89 @@ function App() {
       return {
         ok: true,
         message: typeof successMessage === "function" ? successMessage(result) : successMessage,
+        response: result,
       };
     } finally {
       finishLiveSync();
     }
+  };
+
+  // Business workspace route / vehicle / driver-profile saves: explicit server
+  // actions (api/_lib/fleetActions.js) that rebuild and check the record on the
+  // server; success is confirmed by the fresh read in runTenantFinance. The
+  // driver action accepts no email, password or sign-in fields.
+  const saveFleetRecordInTenant = async (requestKey, action, fields, message, idField) => {
+    const saved = await runTenantFinance(requestKey, action, fields, message);
+    if (!saved.ok) {
+      return { ok: false, error: saved.error };
+    }
+    return { ok: saved.ok, message: saved.message, [idField]: saved.response?.[idField] };
+  };
+
+  const saveRouteInTenant = ({ existingRoute, currentRoutes, name, code, type, primaryOrigin, primaryDestination, isActive }) =>
+    saveFleetRecordInTenant(
+      `route:${existingRoute?.id ?? "new"}`,
+      "route.save",
+      {
+        // Only a route stored in this business is edited by id.
+        ...(existingRoute && currentRoutes.includes(existingRoute) ? { routeId: existingRoute.id } : {}),
+        name,
+        code,
+        type,
+        primaryOrigin,
+        primaryDestination,
+        isActive,
+      },
+      existingRoute ? "Route profile updated." : "Route profile created.",
+      "routeId",
+    );
+
+  const saveVehicleInTenant = (draft, routeSelection, current) =>
+    saveFleetRecordInTenant(
+      `vehicle:${draft.id ?? "new"}`,
+      "vehicle.save",
+      {
+        ...(draft.id ? { vehicleId: draft.id } : {}),
+        registration: draft.registration.trim(),
+        model: draft.model.trim(),
+        routeId: routeSelection.currentRouteId ?? "",
+        currentOdometer: Number(draft.currentOdometer ?? 0),
+        lastServiceOdo: Number(draft.lastServiceOdo ?? 0),
+        serviceIntervalKm: Number(draft.serviceIntervalKm ?? current.profile?.serviceIntervalKm ?? 10000),
+        permitExpiryDate: draft.permitExpiryDate || "",
+        discExpiryDate: draft.discExpiryDate || "",
+        assignedDriverId: draft.assignedDriverId || null,
+        canDoRouteService: Boolean(draft.canDoRouteService ?? true),
+        canDoSpecialTrips: Boolean(draft.canDoSpecialTrips),
+        canDoContracts: Boolean(draft.canDoContracts),
+        seatCapacity: Number(draft.seatCapacity ?? 15),
+      },
+      draft.id ? "Vehicle profile updated." : "Vehicle profile created.",
+      "vehicleId",
+    );
+
+  const saveDriverInTenant = (draft, driverName, current) => {
+    if (draft.enableLogin) {
+      return { ok: false, error: "Sign-ins are given by the Owner in Settings > Business access. Nothing was saved." };
+    }
+    const staffId = String(draft.staffId ?? "").trim();
+    const knownProfile = Boolean(staffId) && (current.drivers ?? []).some((driver) => driver.staffId === staffId);
+    return saveFleetRecordInTenant(
+      `driver:${staffId || "new"}`,
+      "driver.save",
+      {
+        ...(knownProfile ? { staffId } : {}),
+        name: driverName,
+        routeIds: Array.from(new Set((Array.isArray(draft.routeIds) ? draft.routeIds : []).map((value) => String(value ?? "").trim()).filter(Boolean))),
+        licenseNumber: String(draft.licenseNumber ?? "").trim(),
+        licenseCode: String(draft.licenseCode ?? "").trim(),
+        licenseExpiryDate: draft.licenseExpiryDate || "",
+        prdpNumber: String(draft.prdpNumber ?? "").trim(),
+        prdpExpiryDate: draft.prdpExpiryDate || "",
+      },
+      knownProfile ? `${driverName} updated in the driver roster.` : `${driverName} added to the driver roster.`,
+      "staffId",
+    );
   };
 
   const handleTenantBusinessChange = (businessId) => {
@@ -3870,7 +3961,7 @@ function App() {
       }
 
       if (workflowStatus === "pending") {
-        if (!canRecordCashHandoverForRole(activeRole)) {
+        if (!canCountCashNow()) {
           return {
             ok: false,
             error: "Administrator must record the day hand-in before manager verification.",
@@ -3961,7 +4052,7 @@ function App() {
       }
 
       if (workflowStatus === "counted") {
-        if (!canVerifyCashCheckForRole(activeRole)) {
+        if (!canVerifyCashNow()) {
           return {
             ok: false,
             error: "Manager must verify the admin day checking before banking.",
@@ -4075,7 +4166,7 @@ function App() {
     }
 
     if (target.status === "pending") {
-      if (!canRecordCashHandoverForRole(activeRole)) {
+      if (!canCountCashNow()) {
         return {
           ok: false,
           error: "Administrator must record the cash hand-in before manager verification.",
@@ -4151,7 +4242,7 @@ function App() {
     }
 
     if (target.status === "counted") {
-      if (!canVerifyCashCheckForRole(activeRole)) {
+      if (!canVerifyCashNow()) {
         return {
           ok: false,
           error: "Manager must verify the admin cash checking before banking.",
@@ -4334,7 +4425,7 @@ function App() {
     if (!hasModuleUpdateAccess(current, "finance")) {
       return { ok: false, error: getModuleAccessErrorMessage("finance") };
     }
-    if (!canFinishDepositForRole(activeRole)) {
+    if (!canBankCashNow()) {
       return {
         ok: false,
         error: "Only the manager or owner can finalise a verified deposit batch.",
@@ -4547,6 +4638,7 @@ function App() {
     if (draft.assignedDriverId && !assignedDriver) {
       return { ok: false, error: "Select a valid driver for this vehicle." };
     }
+    if (tenantLive) return saveVehicleInTenant(draft, routeSelection, current);
     const now = new Date().toISOString();
     const actorId = resolveCurrentActorId(current);
     const capabilityFields = normalizeVehicleCapabilityHooks({
@@ -4709,6 +4801,10 @@ function App() {
 
     if (duplicateCode) {
       return { ok: false, error: "This route code is already linked to another route." };
+    }
+
+    if (tenantLive) {
+      return saveRouteInTenant({ existingRoute, currentRoutes, name: routeName, code: routeCode, type: routeType, primaryOrigin, primaryDestination, isActive: draft.isActive ?? true });
     }
 
     const now = new Date().toISOString();
@@ -4930,6 +5026,9 @@ function App() {
     if (!driverName) {
       return { ok: false, error: "Driver name is required." };
     }
+
+    // Business workspace: a driver PROFILE only (saveDriverInTenant).
+    if (tenantLive) return saveDriverInTenant(draft, driverName, current);
 
     // Driver PROFILE requires only a name. Email, route, vehicle, and TaxiFlow
     // login are all optional - a driver captured purely as an operational record
@@ -6010,6 +6109,7 @@ function App() {
               onVerifyIncome={verifyIncome}
               onDeleteTransaction={deleteTransaction}
               onLockDeposit={lockDeposit}
+              cashSteps={tenantLive ? { count: canCountCashNow(), verify: canVerifyCashNow(), bank: canBankCashNow() } : null}
             />
           )}
           {activeView === "fleet" && (
@@ -6024,6 +6124,7 @@ function App() {
               onLogDefect={logDefect}
               onResolveDefect={resolveDefect}
               onSelectDriverVehicle={selectDriverVehicle}
+              tenant={tenantPanelAccess}
             />
           )}
           {activeView === "drivers" && (
@@ -6039,6 +6140,7 @@ function App() {
               onSaveExpense={saveExpense}
               onSubmitDriverCashUp={submitDriverCashUp}
               onSaveDriver={saveDriver}
+              tenant={tenantPanelAccess}
               onAllocateDriverShift={allocateDriverShift}
               onRevalidateLiveWorkspace={revalidateLiveWorkspace}
               onSelectDriverVehicle={selectDriverVehicle}
@@ -6058,6 +6160,7 @@ function App() {
             <TenantAccessPanel
               activeRole={activeRole}
               currentUserEmail={authSession?.user?.email ?? ""}
+              actorPermissions={tenantMeta?.permissions ?? []}
               onChanged={reloadCanonicalLiveSnapshot}
             />
           )}
@@ -6733,6 +6836,7 @@ function FinancePanel({
   onVerifyIncome,
   onDeleteTransaction,
   onLockDeposit,
+  cashSteps = null,
 }) {
   const finance = snapshot.finance;
   const defaultVehicle = snapshot.vehicles[0] ?? null;
@@ -6816,9 +6920,9 @@ function FinancePanel({
     permissionControls,
     currentUserRecord,
   );
-  const canRecordCashHandIn = canRecordCashHandoverForRole(activeRole);
-  const canVerifyFinanceChecks = canVerifyCashCheckForRole(activeRole);
-  const canFinishDeposit = canFinishDepositForRole(activeRole) && canEditFinanceUpdates;
+  const canRecordCashHandIn = cashSteps ? cashSteps.count : canRecordCashHandoverForRole(activeRole);
+  const canVerifyFinanceChecks = cashSteps ? cashSteps.verify : canVerifyCashCheckForRole(activeRole);
+  const canFinishDeposit = (cashSteps ? cashSteps.bank : canFinishDepositForRole(activeRole)) && canEditFinanceUpdates;
   const financeAccessStatus = getModuleAccessStatus(permissionControls.finance);
   const autoCheckFinanceEntries = activeRole !== "Driver" && canEditFinanceUpdates;
 
@@ -8606,8 +8710,10 @@ function FleetPanel({
   onLogDefect,
   onResolveDefect,
   onSelectDriverVehicle,
+  tenant = null,
 }) {
   const isDriver = activeRole === "Driver";
+  const tenantLive = Boolean(tenant?.live);
   const linkedVehicles = getDriverLinkedVehicles(snapshot);
   const availableVehicles = isDriver ? linkedVehicles : snapshot.vehicles;
   const canViewVehicleProfile = !isDriver;
@@ -8617,12 +8723,16 @@ function FleetPanel({
     permissionControls,
     currentUserRecord,
   );
+  // Business workspace: route and vehicle saves need the Owner-assigned
+  // "Manage routes and vehicles" responsibility (the server re-checks it);
+  // archiving and defects have no server action yet.
   const canManageVehicles =
-    activeRole === "Owner" ||
-    (PRIVILEGED_ROLES.has(activeRole) && canEditFleetUpdates);
+    (activeRole === "Owner" ||
+      (PRIVILEGED_ROLES.has(activeRole) && canEditFleetUpdates)) &&
+    (!tenantLive || Boolean(tenant?.fleet));
   const fleetAccessStatus = getModuleAccessStatus(permissionControls.fleet);
-  const canArchiveVehicles = PRIVILEGED_ROLES.has(activeRole) && canEditFleetUpdates;
-  const canResolveDefects = PRIVILEGED_ROLES.has(activeRole) && canEditFleetUpdates;
+  const canArchiveVehicles = PRIVILEGED_ROLES.has(activeRole) && canEditFleetUpdates && !tenantLive;
+  const canResolveDefects = PRIVILEGED_ROLES.has(activeRole) && canEditFleetUpdates && !tenantLive;
   const vehicleRouteOptions = useMemo(
     () => snapshot.routes ?? [],
     [snapshot.routes],
@@ -9177,6 +9287,22 @@ function FleetPanel({
             {feedback.message}
           </span>
         </div>
+      )}
+
+      {tenantLive && !isDriver && (
+        <article className="overview-board" data-testid="tenant-fleet-scope">
+          <div className="overview-board-head">
+            <p className="eyebrow">Business workspace</p>
+            <h3>What can be saved here</h3>
+          </div>
+          <p className="panel-note">
+            {canManageVehicles
+              ? "Adding and editing routes and vehicles is saved on the server. "
+              : "You have not been given the \"Manage routes and vehicles\" responsibility, so routes and vehicles are view-only. "}
+            {tenant?.drivers ? "" : "Changing a vehicle's driver also needs \"Manage driver profiles and assignments\". "}
+            Not available yet: archiving vehicles, logging or resolving defects, and service or document records. Nothing is saved for these.
+          </p>
+        </article>
       )}
 
       {PRIVILEGED_ROLES.has(activeRole) && !canEditFleetUpdates && (
@@ -11475,17 +11601,24 @@ function DriversPanel({
   onAllocateDriverShift,
   onRevalidateLiveWorkspace,
   onSelectDriverVehicle,
+  tenant = null,
 }) {
   const isDriver = activeRole === "Driver";
+  const tenantLive = Boolean(tenant?.live);
   const canEditDriverRecords = canEditModuleUpdates(
     activeRole,
     "drivers",
     permissionControls,
     currentUserRecord,
   );
+  // Business workspace: profiles need the Owner-assigned "Manage driver profiles
+  // and assignments" responsibility (re-checked by the server). Shift allocation
+  // has no server action yet; a vehicle's driver is set on the vehicle (Fleet).
   const canManageDrivers =
-    activeRole === "Owner" ||
-    (PRIVILEGED_ROLES.has(activeRole) && canEditDriverRecords);
+    (activeRole === "Owner" ||
+      (PRIVILEGED_ROLES.has(activeRole) && canEditDriverRecords)) &&
+    (!tenantLive || Boolean(tenant?.drivers));
+  const canAllocateShifts = canManageDrivers && !tenantLive;
   const canEditFinanceRecords = canEditModuleUpdates(
     activeRole,
     "finance",
@@ -13267,6 +13400,8 @@ function DriversPanel({
                         <input
                           type="email"
                           value={driverDraft.email}
+                          disabled={tenantLive}
+                          title={tenantLive ? "Sign-in emails are set by the Owner in Settings > Business access." : undefined}
                           onChange={(event) =>
                             setDriverDraft((current) => ({
                               ...current,
@@ -13386,6 +13521,12 @@ function DriversPanel({
                         />
                       </label>
                     </div>
+                    {tenantLive && (
+                      <span className="status-chip" data-tone="neutral">
+                        Profile only. The Owner gives sign-ins in Settings &gt; Business access.
+                      </span>
+                    )}
+                    {!tenantLive && (
                     <div className="finance-form-login-section">
                       {activeRole === "Owner" ? (
                         <>
@@ -13442,6 +13583,7 @@ function DriversPanel({
                         </span>
                       )}
                     </div>
+                    )}
                     <div className="finance-form-meta">
                       <span className="status-chip" data-tone="info">
                         Routes {selectedDriverRouteNames.length}
@@ -13496,7 +13638,21 @@ function DriversPanel({
                 )}
               </article>
             )}
-            {canManageDrivers && (
+            {tenantLive && !isDriver && (
+              <article className="overview-board" data-testid="tenant-drivers-scope">
+                <div className="overview-board-head">
+                  <p className="eyebrow">Business workspace</p>
+                  <h3>What can be saved here</h3>
+                </div>
+                <p className="panel-note">
+                  {canManageDrivers
+                    ? "Driver profiles and their routes are saved on the server. A profile never gives anyone a sign-in: the Owner gives sign-ins in Settings > Business access. "
+                    : "You have not been given the \"Manage driver profiles and assignments\" responsibility, so driver profiles are view-only. "}
+                  Not available yet: shift allocation from this page (set a vehicle's driver on the vehicle in Fleet & Operations).
+                </p>
+              </article>
+            )}
+            {canAllocateShifts && (
               <article ref={allocationFormRef} className="overview-board">
                 <div className="overview-board-head">
                   <p className="eyebrow">Shift allocation</p>

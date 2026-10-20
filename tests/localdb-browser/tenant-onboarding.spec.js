@@ -62,7 +62,7 @@ test("operator onboards a business; the Owner grants, links and removes access i
   // Driver access linked to that profile.
   await access.getByLabel("Email", { exact: true }).fill(DRIVER);
   await access.getByRole("combobox", { name: "Access", exact: true }).selectOption("Driver");
-  await access.getByLabel("Driver profile").selectOption({ label: "Browser Driver" });
+  await access.getByRole("combobox", { name: /^Driver profile/ }).selectOption({ label: "Browser Driver" });
   await access.getByRole("button", { name: "Grant access" }).click();
   await expect(status(owner)).toContainText(`${DRIVER} can now sign in as Driver. A password setup email was sent.`);
   await expect(owner.getByTestId("driver-profile-row").filter({ hasText: "Browser Driver" })).toContainText("Has a sign-in");

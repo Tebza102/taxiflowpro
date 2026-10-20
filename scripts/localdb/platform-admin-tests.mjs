@@ -22,6 +22,7 @@ import { createClient } from "@supabase/supabase-js";
 
 import { assertLocalDatabase, assertLoopbackOnlyOrStop, psql } from "./lib/exec.mjs";
 import { activateViaEmail as activateViaEmailWith } from "./lib/mailpit.mjs";
+import { LOCAL_MAIL_PORT } from "./lib/localTarget.mjs";
 import { BUSINESS_A_ID, BUSINESS_B_ID, LOCAL_TEST_PASSWORD } from "./seed-data.mjs";
 
 const status = assertLocalDatabase();
@@ -68,7 +69,7 @@ const passwordHash = (email) => sql(`select coalesce((select encrypted_password 
 const businessCount = () => Number(sql("select count(*) from public.businesses;"));
 const version = (businessId) => sql(`select to_char(updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') from public.workspace_snapshots where business_id = '${businessId}';`);
 const mailCount = async (email) => {
-  const search = await fetch(`http://127.0.0.1:54324/api/v1/search?query=${encodeURIComponent(`to:"${email}"`)}`).then((r) => r.json());
+  const search = await fetch(`http://127.0.0.1:${LOCAL_MAIL_PORT}/api/v1/search?query=${encodeURIComponent(`to:"${email}"`)}`).then((r) => r.json());
   return search.messages?.length ?? 0;
 };
 

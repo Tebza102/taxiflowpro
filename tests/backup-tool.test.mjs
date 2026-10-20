@@ -161,3 +161,57 @@ test("the backup CLI writes only encrypted data, passes secrets via the environm
   assert.ok(exportBody.indexOf("renameSync") < exportBody.indexOf("PASS ${path.basename"), "rename before PASS");
   assert.match(exportBody, /catch \(error\) \{\s*rmSync\(partialFile/);
 });
+
+test("platform_admins and the permission-audit history are backed up and restored when present", async () => {
+  const core = await import("../scripts/backup/lib/backupCore.mjs");
+  // Older databases and backups without them stay valid and unchanged.
+  assert.equal(core.exportSqlFor("tenant"), EXPORT_SQL);
+  assert.doesNotMatch(EXPORT_SQL, /platform_admins|member_permission_changes/);
+  assert.match(core.OPTIONAL_TABLES_PROBE_SQL, /to_regclass\('public\.platform_admins'\)/);
+  assert.match(core.OPTIONAL_TABLES_PROBE_SQL, /to_regclass\('public\.member_permission_changes'\)/);
+  const both = core.exportSqlFor("tenant", ["platform_admins", "permission_changes"]);
+  assert.ok(both.includes("from public.platform_admins p") && both.includes("from public.member_permission_changes c"));
+  assert.ok(both.indexOf("'end'") > both.indexOf("member_permission_changes"), "the end marker stays last");
+  assert.doesNotMatch(core.exportSqlFor("tenant", ["permission_changes"]), /platform_admins/);
+
+  const withOptional = () => ({
+    ...bundle(),
+    platform_admins: [{ user_id: U, active: true, granted_by: "operator" }],
+    permission_changes: [{ id: "c1", business_id: B, actor_user_id: U, actor_role: "Owner", target_user_id: U, permissions_before: ["cash.count"], permissions_after: [] }],
+  });
+  assert.equal(validateBundle(withOptional()).permission_changes.length, 1);
+  assert.equal(validateBundle(bundle()).platform_admins, undefined, "an older backup without the keys is accepted");
+  const badAdmin = withOptional();
+  badAdmin.platform_admins[0].user_id = "missing";
+  assert.throws(() => validateBundle(badAdmin), /platform-admin grant references a missing Auth user/);
+  const badAudit = withOptional();
+  badAudit.permission_changes[0].business_id = "missing";
+  assert.throws(() => validateBundle(badAudit), /permission-audit row references a missing business/);
+  const notList = withOptional();
+  notList.permission_changes = {};
+  assert.throws(() => validateBundle(notList), /permission_changes is not a list/);
+
+  const manifest = core.buildManifest(withOptional(), {});
+  assert.equal(manifest.counts.platformAdmins, 1);
+  assert.equal(manifest.counts.permissionChanges, 1);
+  assert.equal(manifest.businesses[0].permissionChanges, 1);
+  assert.equal(core.buildManifest(bundle(), {}).counts.platformAdmins, undefined, "older manifests keep their counts");
+
+  const columns = {
+    "auth.users": "id,email", "auth.identities": "id,user_id", "public.businesses": "id,slug,name",
+    "public.business_memberships": "business_id,user_id,role,active", "public.finance_action_requests": "business_id,request_id",
+    "public.platform_admins": "user_id,active,granted_by", "public.member_permission_changes": "id,business_id,actor_user_id,actor_role,target_user_id,permissions_before,permissions_after",
+  };
+  const sql = core.buildFullRestoreSql(withOptional(), columns);
+  assert.match(sql, /or exists \(select 1 from public\.platform_admins\) or exists \(select 1 from public\.member_permission_changes\) then/);
+  assert.ok(sql.indexOf("insert into public.platform_admins") > sql.indexOf("insert into auth.users"), "grants after their Auth users");
+  assert.ok(sql.indexOf("insert into public.member_permission_changes") > sql.indexOf("insert into public.businesses"), "audit after its businesses");
+  assert.match(sql, /select count\(\*\) from public\.member_permission_changes\) <> 1/);
+  assert.doesNotMatch(sql, /grant |revoke |row level security|policy/i, "a restore never changes access rules");
+  assert.throws(() => core.buildFullRestoreSql(withOptional(), { ...columns, "public.member_permission_changes": "" }), /apply the release files/);
+  assert.doesNotMatch(core.buildFullRestoreSql(bundle(), columns), /platform_admins|member_permission_changes/);
+  assert.deepEqual(Object.keys(core.comparableTables(withOptional())).slice(-2), ["platformAdmins", "permissionChanges"]);
+  assert.ok(core.columnTablesFor(withOptional()).includes("public.member_permission_changes"));
+  // A one-business restore never touches platform grants or audit history.
+  assert.doesNotMatch(buildBusinessRestoreSql(withOptional(), B, columns), /platform_admins|member_permission_changes/);
+});

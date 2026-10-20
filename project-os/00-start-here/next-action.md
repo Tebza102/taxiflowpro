@@ -1,5 +1,58 @@
 # Next Action
 
+## Release 06: go/no-go (2026-10-20)
+
+1. **Tebogo:** delta already applied and Part A passed. In the `taxiflow-preview-test` SQL editor run only Part B of `scripts/preview-test/verify-delta-06.sql`; the error message must start `PASS (rolled back)`.
+2. **Tebogo: go/no-go.** On GO, follow `05-build/release-06-review.md` "Release procedure" (backup, fingerprint, apply-release, verify-release-06, merge, promote, live checks, backup).
+3. Before the first real business: add `member_permission_changes` and `platform_admins` to the backup format.
+
+## After the hosted journey (2026-10-19): review and release decision (history)
+
+1. **Tebogo decides** whether separation of duties should also bind the Owner (current behaviour) or allow a sole Owner to verify their own count (would need a rule change and retest).
+2. **Review PR #6.** On authorization, run the release-06 procedure below (backup, file 06 via `apply-release.mjs`, merge, promote, live checks, backup). File 06 now also adds `staff.manage` and `member_permission_changes`.
+3. **Test environment cleanup when no longer needed:** remove the four branch-scoped Preview variables (`vercel env rm … preview agent/owner-responsibilities`), delete or pause `taxiflow-preview-test`, delete `C:\Users\appri\taxiflow-preview-test.env.txt` and revoke its secret key in Supabase.
+4. Do not use `vercel curl` on this project (it creates a bypass secret).
+
+## Hosted Preview journey (isolated test backend): DONE 2026-10-19 (history)
+
+1. ~~Schema~~ **DONE 2026-10-19:** `schema.sql` from `cd329d3` (SHA-256 matched) applied by Tebogo (via ChatGPT, Supabase migration `preview_test_schema_releases_01_to_06`, version 20261019191640). The agent re-ran only the read-only `verify-schema.sql`: 10/10 true, users=0 businesses=0 snapshots=0. Security advisor: INFO only (RLS on, no policies, for the 4 server-only tables, as designed). **Do not rerun the schema.**
+2. **Tebogo:** create a secret key (`sb_secret_…`) in that project. Put it (a) in an env file OUTSIDE the repo with `SUPABASE_URL=https://sxoonhovoqgcpflhqirb.supabase.co` and `SUPABASE_SECRET_KEY=…`, and (b) in Vercel: `vercel env add SUPABASE_SERVICE_ROLE_KEY preview agent/owner-responsibilities`.
+3. **Tebogo:** `node scripts/preview-test/seed-hosted-test.mjs --target sxoonhovoqgcpflhqirb --env-file <that file>` (dry run), then add `--apply` and type the ref.
+4. **Agent:** redeploy the branch Preview; create a temporary Protection Bypass for Automation secret (stored only in `.env.preview-test.local`); run `PREVIEW_URL=<preview> npx playwright test -c playwright.preview-test.config.mjs`; revoke the bypass secret (back to 0); report.
+5. Afterwards: remove the branch-scoped Vercel variables and pause or delete the test project when Tebogo says.
+
+## Release file 06 (Owner-assigned responsibilities): review, then a controlled release
+
+Built and tested on `agent/owner-responsibilities`; Preview `taxiflowpro-nifglxqz9`. Nothing is deployed.
+
+1. **Review** the PR (draft) and the Preview (sign-in screen only; signed-in Preview calls fail closed by design).
+2. **On authorization** (same pattern as file 05, `05-build/platform-admin-release.md`):
+   - pre-release backup (Tebogo types the passphrase);
+   - apply file 06 with `scripts/hosted/apply-release.mjs` (01-05 are skipped by their markers); post-check: every Admin has `{cash.count}`, every Manager `{cash.verify,cash.bank}`, Owner/Driver `{}`; `set_member_permissions` executable by `service_role` only;
+   - merge and promote; live checks: Business access shows responsibilities to the Owner; an Admin sees count only; 401s unauthenticated;
+   - after-release backup.
+3. **Rollback:** re-promote the current production deployment `taxiflowpro-dy1a1k761` (`af3e5ad`) first, then `scripts/localdb/rollback/20261019090000_member_permissions.down.sql`. The code also runs safely without file 06 (pre-06 rules).
+4. Production checks by real people: an Owner changes a Manager's responsibilities; that Manager's next banking is refused; a Driver sees only their own records.
+
+
+## After the local rehearsal (2026-10-19)
+
+**Readiness gate for the first real business (all required, not DKIM alone):**
+1. DKIM passes on a repeat test (send `05-build/email-dkim-hosting-ticket.md`).
+2. Owner-assigned responsibilities are built and verified: count, verify, bank, manage drivers, manage routes and vehicles, and manage staff permissions, each separately controllable (fix plan in change-log 2026-10-19).
+3. Add Route, Add Vehicle and Save driver work in the app (server actions), not only through the loader.
+4. Owner and Driver restrictions are verified in production.
+
+Do not onboard a real business, deploy, or change production until authorized. To start Docker for local work, use the package-context command in change-log 2026-10-19.
+
+## Platform admin live (2026-10-18): release closed; remaining rollout items
+
+1. **Done (user-verified):** Companies is visible; only TaxiFlow Pro is listed; the role is still Admin; records survive a refresh.
+2. **Optional:** production checks of the Owner and Driver restrictions, which are unverified in production and proven only locally. Done by the Owner and a Driver signing in themselves.
+3. Confirm that Drive for Desktop has uploaded both 2026-10-18 backups.
+3. **No real Owner invitations** until DKIM passes (send `05-build/email-dkim-hosting-ticket.md`, then retest).
+
+
 ## Public website (2026-10-18): live on www; remaining items
 
 - Content decisions: the preview strip, the "Website prototype" footer, pricing and privacy wording.

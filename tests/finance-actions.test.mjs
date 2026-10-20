@@ -10,8 +10,9 @@ import { buildSyntheticSnapshot } from "../scripts/localdb/seed-data.mjs";
 const RID = "11111111-1111-4111-8111-111111111111";
 const envelope = (action, fields, extra = {}) => ({ action, requestId: RID, expectedVersion: "2026-10-01T16:30:00Z", fields, ...extra });
 const parse = (...args) => parseFinanceActionRequest(envelope(...args));
-const admin = { id: "u-admin", role: "Admin" };
-const manager = { id: "u-manager", role: "Manager" };
+// Requesters as buildRequester produces them with the role-default responsibilities.
+const admin = { id: "u-admin", role: "Admin", permissions: ["cash.count"] };
+const manager = { id: "u-manager", role: "Manager", permissions: ["cash.bank", "cash.verify"] };
 const owner = { id: "u-owner", role: "Owner" };
 const driver = { id: "u-driver", role: "Driver", driverStaffId: "uat-drv-01" };
 
@@ -20,9 +21,13 @@ test("supported actions and roles match the existing workflow plus the approved 
   // may submit their own day checking; the linkage is still required.
   assert.deepEqual(FINANCE_ACTIONS["cashup.submit"].roles, ["Driver", "Owner"]);
   assert.equal(FINANCE_ACTIONS["cashup.submit"].requiresDriverLink, true);
-  assert.deepEqual(FINANCE_ACTIONS["cashup.record_handin"].roles, ["Owner", "Admin"]);
-  assert.deepEqual(FINANCE_ACTIONS["cashup.verify"].roles, ["Owner", "Manager"]);
-  assert.deepEqual(FINANCE_ACTIONS["deposit.lock"].roles, ["Owner", "Manager"]);
+  // Staff cash steps are decided by the membership responsibility (release file 06).
+  assert.deepEqual(FINANCE_ACTIONS["cashup.record_handin"].roles, ["Owner", "Admin", "Manager"]);
+  assert.equal(FINANCE_ACTIONS["cashup.record_handin"].permission, "cash.count");
+  assert.deepEqual(FINANCE_ACTIONS["cashup.verify"].roles, ["Owner", "Admin", "Manager"]);
+  assert.equal(FINANCE_ACTIONS["cashup.verify"].permission, "cash.verify");
+  assert.deepEqual(FINANCE_ACTIONS["deposit.lock"].roles, ["Owner", "Admin", "Manager"]);
+  assert.equal(FINANCE_ACTIONS["deposit.lock"].permission, "cash.bank");
   assert.equal(FINANCE_ACTIONS["deposit.lock"].requiresFinanceEdit, true);
 });
 

@@ -1683,3 +1683,9 @@ What `platform-admin-tests.mjs` covers:
 **Known limit:** the backup does not include `member_permission_changes` (audit history) or `platform_admins`; rollback keeps both. Recommended before the first real business: add them to the backup.
 
 **Result:** release review complete; recommendation GO for a controlled release once authorized.
+
+### 2026-10-20 — Release gaps: hosted delta applied; backups cover platform admins and audit history
+
+- Hosted test project `sxoonhovoqgcpflhqirb`: `delta-06-restore-fidelity.sql` applied via the Supabase connector (success). `verify-delta-06.sql` Part A: both true. Part B was automatically declined by the connector (destructive statements) and not run; read-only fingerprint unchanged. Pending: Tebogo runs Part B in the SQL editor (expect "PASS (rolled back)").
+- Backup tool (`scripts/backup`): tenant export now includes `platform_admins` and `member_permission_changes` when present (probe; older backups and pre-06 databases stay valid); full restore inserts them in dependency order with empty-target and count guards; restore comparison and manifest cover them; one-business restore unchanged. Tests: `backup-tool.test.mjs` 10/10; `backup-tests.mjs` 43/43 on the isolated test stack (grant and audit row restored exactly; RLS forced and no browser grants after restore; browser read refused 42501).
+- Production on hold.

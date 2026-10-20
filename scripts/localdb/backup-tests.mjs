@@ -105,10 +105,24 @@ record(res.status === 200, "setup: a finance action in business B is committed",
 // defaults: an emptied Admin and a Manager limited to fleet. A restore must
 // bring back exactly these, never re-grant the defaults.
 const permissionsOf = () => psql(`select string_agg(role || '=' || array_to_string(permissions, '+'), ' ' order by role) from public.business_memberships where business_id = '${BUSINESS_A_ID}' and role in ('Admin', 'Manager') and active;`).stdout.trim();
-psql(`update public.business_memberships set permissions = '{}' where business_id = '${BUSINESS_A_ID}' and role = 'Admin';
-update public.business_memberships set permissions = array['fleet.manage'] where business_id = '${BUSINESS_A_ID}' and role = 'Manager' and active;`);
+// The Admin is emptied through the real function, so the permission-audit
+// history (release file 06) holds a row; an operator platform-admin grant
+// (release file 05) is added too. Both must survive a full restore.
+const userIdOf = (email) => `(select id from auth.users where email = '${email}')`;
+psql(`select public.set_member_permissions('${BUSINESS_A_ID}', ${userIdOf("owner@example.com")}, ${userIdOf("admin@example.com")}, '{}'::text[], null, null);
+update public.business_memberships set permissions = array['fleet.manage'] where business_id = '${BUSINESS_A_ID}' and role = 'Manager' and active;
+insert into public.platform_admins (user_id, note) values (${userIdOf("owner@example.com")}, 'backup test grant');`);
 const permissionsBefore = permissionsOf();
 record(permissionsBefore === "Admin= Manager=fleet.manage", "setup: Owner-set responsibilities differ from the role defaults", permissionsBefore);
+const optionalRows = () => psql(`select json_build_object(
+  'platform_admins', (select coalesce(json_agg(to_jsonb(p) order by p.user_id), '[]'::json) from public.platform_admins p),
+  'permission_changes', (select coalesce(json_agg(to_jsonb(c) order by c.id), '[]'::json) from public.member_permission_changes c))::text;`).stdout.trim();
+const optionalBefore = optionalRows();
+const optionalCounts = JSON.parse(optionalBefore);
+record(optionalCounts.platform_admins.length === 1 && optionalCounts.permission_changes.length === 1, "setup: one platform-admin grant and one permission-audit row exist", `admins=${optionalCounts.platform_admins.length} audit=${optionalCounts.permission_changes.length}`);
+const accessRules = () => psql(`select string_agg(c.relname || ':' || c.relrowsecurity || ':' || c.relforcerowsecurity || ':' || (select count(*) from information_schema.role_table_grants g where g.table_schema = 'public' and g.table_name = c.relname and g.grantee in ('anon', 'authenticated', 'PUBLIC')), ' ' order by c.relname) from pg_class c where c.relnamespace = 'public'::regnamespace and c.relname in ('platform_admins', 'member_permission_changes');`).stdout.trim();
+const accessBefore = accessRules();
+record(accessBefore === "member_permission_changes:true:true:0 platform_admins:true:true:0", "setup: both tables have RLS forced and no browser grants", accessBefore);
 
 // 2. Export ---------------------------------------------------------------------
 const original = dbState();
@@ -174,6 +188,17 @@ const want = tableHashes(original);
 const got = tableHashes(restored);
 record(Object.keys(want).every((key) => want[key] === got[key]), "independent comparison: Auth users, identities, businesses, memberships, snapshots and request log equal the pre-backup database", JSON.stringify(Object.fromEntries(Object.keys(want).map((key) => [key, want[key] === got[key] ? "MATCH" : "DIFF"]))));
 record(permissionsOf() === permissionsBefore, "responsibilities restore exactly (an emptied list is not re-granted)", permissionsOf());
+record(/"platformAdmins":"MATCH"/.test(run.out) && /"permissionChanges":"MATCH"/.test(run.out), "the tool's own comparison covers platform admins and the permission-audit history", run.out.trim().split("\n").pop().slice(0, 240));
+record(optionalRows() === optionalBefore, "platform-admin grants and the permission-audit history restore exactly (row for row)");
+record(accessRules() === accessBefore, "after the restore both tables still have RLS forced and no browser grants", accessRules());
+{
+  const ownerToken = await tokenFor("owner@example.com");
+  const browser = createClient(status.apiUrl, status.ANON_KEY, { auth: { persistSession: false }, global: { headers: { Authorization: `Bearer ${ownerToken}` } } });
+  const admins = await browser.from("platform_admins").select("user_id");
+  const audit = await browser.from("member_permission_changes").select("id");
+  const blocked = (result) => Boolean(result.error) || (result.data ?? []).length === 0;
+  record(blocked(admins) && blocked(audit), "after the restore a signed-in browser (even the Owner) still cannot read either table", `${admins.error?.code ?? `${(admins.data ?? []).length} rows`} / ${audit.error?.code ?? `${(audit.data ?? []).length} rows`}`);
+}
 
 const signIns = [];
 for (const user of [...SEED_USERS, ...TENANT_USERS]) {

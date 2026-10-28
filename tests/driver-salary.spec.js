@@ -54,7 +54,8 @@ test("schedule adds no expense; payment adds one; duplicate blocked; report reco
   await scheduleForm.getByLabel("Driver").selectOption({ label: DRIVER_NAME });
   await scheduleForm.getByLabel("Salary amount (R)").fill("6500");
   await scheduleForm.getByLabel("Usually paid by").selectOption("bank");
-  await scheduleForm.getByLabel("Starts on").fill("2026-01-01");
+  // Starts this month, so the next payment is this month's (nothing overdue).
+  await scheduleForm.getByLabel("Starts on").fill(`${new Date().toLocaleDateString("en-CA").slice(0, 7)}-01`);
   await scheduleForm.getByRole("button", { name: "Save schedule" }).click();
   await expect(panel.getByText(`Salary schedule saved for ${DRIVER_NAME}. No expense was added.`)).toBeVisible();
   const row = panel.getByTestId("salary-schedule-row").filter({ hasText: DRIVER_NAME });
@@ -74,6 +75,9 @@ test("schedule adds no expense; payment adds one; duplicate blocked; report reco
 
   // 3. Same period again: blocked with an explanation.
   await row.getByRole("button", { name: "Record payment" }).click();
+  // The button moves on to the next unpaid month; choosing the paid month again is blocked.
+  await expect(paymentForm.getByLabel("Pay month")).not.toHaveValue(new Date().toLocaleDateString("en-CA").slice(0, 7));
+  await paymentForm.getByLabel("Pay month").fill(new Date().toLocaleDateString("en-CA").slice(0, 7));
   await expect(paymentForm.getByTestId("salary-duplicate-warning")).toContainText("Already recorded");
   await expect(paymentForm.getByRole("button", { name: "Record payment" })).toBeDisabled();
   await paymentForm.getByRole("button", { name: "Cancel" }).click();
@@ -103,4 +107,49 @@ test("salary section follows Money access: driver never sees it", async ({ page 
   await signIn(page, "driver.one@taxiflow.local");
   await expect(page.locator("button.module-button").filter({ hasText: "Money" })).toHaveCount(0);
   await expect(page.getByTestId("driver-salaries")).toHaveCount(0);
+});
+
+test("manual payment from the driver's takings lowers that driver's cash to hand in for the day, once", async ({ page }) => {
+  await signIn(page, "owner@taxiflow.local");
+  const panel = await openSalaries(page);
+  const totalBefore = await reportTotal(page);
+
+  await panel.getByRole("button", { name: "Record a manual payment" }).click();
+  const form = page.getByRole("form", { name: "Record salary payment" });
+  await expect(form.getByText("Manual payment (no schedule needed)")).toBeVisible();
+  await form.locator("label.finance-field").filter({ has: page.locator("span", { hasText: /^Driver$/ }) }).locator("select").selectOption({ label: DRIVER_NAME });
+  await form.getByLabel("Pay frequency").selectOption("daily");
+  await form.getByLabel("Amount paid (R)").fill("250");
+  await form.getByLabel("Cash", { exact: true }).check();
+  await form.getByLabel("Driver's takings for the day").check();
+  await expect(form.getByTestId("salary-takings-note")).toContainText(`lowers ${DRIVER_NAME}'s cash to hand in`);
+  await form.getByRole("button", { name: "Record payment" }).click();
+  await expect(panel.getByText(`Salary payment recorded for ${DRIVER_NAME} and added to expenses once.`)).toBeVisible();
+  const row = panel.getByTestId("salary-payment-row").filter({ hasText: DRIVER_NAME });
+  await expect(row).toContainText("from driver's takings for the day / manual");
+  await expect(row).toContainText("pending");
+  expect(await reportTotal(page)).toBeCloseTo(totalBefore + 250, 2);
+
+  await page.getByRole("button", { name: "Sign out" }).click();
+  await signIn(page, "driver.one@taxiflow.local");
+  await page.locator("button.module-button").filter({ hasText: "Overview" }).first().click();
+  const board = page.locator("article.overview-board").filter({ has: page.getByRole("heading", { name: "Day cash activity" }) }).first();
+  await expect(board.locator(".info-pair").filter({ hasText: /^Cash expenses/ }).first()).toContainText("250");
+});
+
+test("a schedule shows the next payment date and what is due", async ({ page }) => {
+  await signIn(page, "owner@taxiflow.local");
+  const panel = await openSalaries(page);
+  const scheduleForm = page.getByRole("form", { name: "Salary schedule" });
+  await scheduleForm.getByLabel("Driver").selectOption({ label: DRIVER_NAME });
+  await scheduleForm.getByLabel("Salary amount (R)").fill("300");
+  await scheduleForm.getByLabel("How often").selectOption("daily");
+  // Started two days ago: two finished days are due, today is the next unpaid day after them.
+  const start = new Date(Date.now() - 2 * 86_400_000).toLocaleDateString("en-CA");
+  await scheduleForm.getByLabel("Starts on").fill(start);
+  await scheduleForm.getByRole("button", { name: "Save schedule" }).click();
+  const row = panel.getByTestId("salary-schedule-row").filter({ hasText: DRIVER_NAME });
+  await expect(row.getByTestId("salary-next-payment")).toContainText(`due ${start}`);
+  await expect(row.getByTestId("salary-due")).toContainText("Due now: 3 periods");
+  await expect(row.getByTestId("salary-due")).toContainText("900");
 });

@@ -168,9 +168,19 @@ const buildDriverDayCashUp = (snapshot, record) => {
   const standardRecords = summary.incomeRecords.filter((item) => item.incomeKind === "standard");
   const specialRecords = summary.incomeRecords.filter((item) => item.incomeKind === "special");
   const counted = toFiniteNumber(cashUpEntry?.actualCashReceived);
+  // Salaries paid out of this day's takings are cash expenses of the day; list
+  // them so the netted figure is explained line by line.
+  const salaryFromTakings = summary.expenseRecords
+    .filter((item) => item.salaryPayment)
+    .map((item) => ({
+      driverName: item.salaryPayment.driverName ?? null,
+      period: item.salaryPayment.periodLabel ?? item.salaryPayment.period ?? null,
+      amount: roundAmount(item.amount) ?? 0,
+    }));
 
   return {
     basis: "driver-day",
+    salaryFromTakings,
     basisLabel: "Driver day cash-up",
     submitted: Boolean(cashUpEntry),
     status: cashUpEntry

@@ -187,7 +187,7 @@ const buildManagementGuide = ({ role, views, cash, tenant }) => {
         "mgmt-expenses",
         "finance",
         "Record expenses",
-        "In Money, Expenses, choose the vehicle, the category and how it was paid. Cash paid out of takings lowers the cash to bank. For driver salaries use Driver salaries: the schedule is only a plan, so record each payment once, when it is actually paid.",
+        "In Money, Expenses, choose the vehicle, the category and how it was paid. Cash paid out of takings lowers the cash to bank. For driver salaries use Driver salaries: the schedule is only a plan, so record each payment once, when it is actually paid, and say where the money came from (bank, business cash or the driver's takings).",
         "Example: R 450 tyre repair on JHB 457 GP, paid in cash.",
       ),
     );

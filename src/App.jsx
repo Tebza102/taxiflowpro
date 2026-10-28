@@ -3855,7 +3855,7 @@ function App() {
     const fields = reference?.trim() ? { ...rest, reference: reference.trim() } : rest;
     if (tenantLive) {
       return runTenantFinance(
-        `salary-payment:${draft.driverStaffId}:${draft.period}`,
+        `salary-payment:${draft.driverStaffId}:${draft.frequency}:${draft.period}`,
         "salary.payment_record",
         fields,
         "Salary payment recorded and added to expenses once.",

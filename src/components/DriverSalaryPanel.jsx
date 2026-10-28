@@ -1,9 +1,13 @@
 import { useMemo, useState } from "react";
 import { ArrowDownToLine, Banknote } from "lucide-react";
 import {
-  SALARY_METHODS,
+  SALARY_FREQUENCIES,
+  SALARY_FREQUENCY_LABELS,
+  SALARY_SOURCE_LABELS,
   buildMonthlyExpenseReport,
+  describeSalarySchedule,
   findSalaryPayment,
+  formatRand,
   formatSalaryPeriod,
   getSalaryArrangements,
   getSalaryPayments,
@@ -11,13 +15,12 @@ import {
   salaryPeriodForDate,
 } from "../lib/salaryContract";
 
-// Money > Expenses: driver salary schedules, salary payments and the monthly
-// expense report. A schedule is a plan only; each payment is recorded once, as
-// one "Salary" expense, when it is actually paid (rules: src/lib/salaryContract.js).
+// Money > Expenses: driver salary schedules, salary payments (scheduled or
+// manual) and the monthly expense report. A schedule is a plan only; each
+// payment is recorded once, as one "Salary" expense, when it is actually paid
+// (rules: src/lib/salaryContract.js).
 
 const today = () => new Date().toLocaleDateString("en-CA");
-const rand = (amount) =>
-  `R ${Number(amount ?? 0).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const methodLabel = (method) => (method === "bank" ? "Bank" : "Cash");
 
 const emptySchedule = (driverStaffId = "") => ({
@@ -26,7 +29,9 @@ const emptySchedule = (driverStaffId = "") => ({
   frequency: "monthly",
   payMethod: "bank",
   startDate: today(),
+  effectiveFrom: "",
   active: true,
+  isChange: false,
 });
 
 export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArrangement, onRecordPayment }) {
@@ -44,8 +49,12 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
   const report = useMemo(() => buildMonthlyExpenseReport(snapshot, reportMonth || today().slice(0, 7)), [snapshot, reportMonth]);
 
   const arrangementFor = (staffId) => arrangements.find((item) => item.driverStaffId === staffId) ?? null;
-  const paymentArrangement = paymentDraft ? arrangementFor(paymentDraft.driverStaffId) : null;
-  const duplicate = paymentDraft ? findSalaryPayment(snapshot, paymentDraft.driverStaffId, paymentDraft.period) : null;
+  const driverName = (staffId) => drivers.find((driver) => driver.staffId === staffId)?.name ?? staffId;
+  const paymentSchedule = paymentDraft ? arrangementFor(paymentDraft.driverStaffId) : null;
+  const scheduledPayment = Boolean(paymentSchedule && paymentSchedule.frequency === paymentDraft?.frequency);
+  const duplicate = paymentDraft?.period
+    ? findSalaryPayment(snapshot, paymentDraft.driverStaffId, paymentDraft.frequency, paymentDraft.period)
+    : null;
 
   const editSchedule = (arrangement) => {
     setPaymentDraft(null);
@@ -55,21 +64,47 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
       frequency: arrangement.frequency,
       payMethod: arrangement.payMethod,
       startDate: arrangement.startDate,
+      effectiveFrom: today(),
       active: arrangement.active !== false,
+      isChange: true,
     });
   };
 
-  const startPayment = (arrangement) => {
+  const startPayment = (arrangement, period, amount) => {
     setFeedback(null);
     setPaymentDraft({
       driverStaffId: arrangement.driverStaffId,
-      period: salaryPeriodForDate(arrangement.frequency, today()),
+      frequency: arrangement.frequency,
+      period,
       paidDate: today(),
-      amount: String(arrangement.amount),
+      amount: String(amount ?? arrangement.amount),
       method: arrangement.payMethod,
+      source: arrangement.payMethod === "bank" ? "business_bank" : "business_cash",
       reference: "",
     });
   };
+
+  const startManualPayment = () => {
+    setFeedback(null);
+    const staffId = drivers[0]?.staffId ?? "";
+    setPaymentDraft({
+      driverStaffId: staffId,
+      frequency: "daily",
+      period: today(),
+      paidDate: today(),
+      amount: "",
+      method: "cash",
+      source: "business_cash",
+      reference: "",
+    });
+  };
+
+  const setMethod = (method) =>
+    setPaymentDraft((draft) => ({
+      ...draft,
+      method,
+      source: method === "bank" ? "business_bank" : draft.source === "driver_takings" ? "driver_takings" : "business_cash",
+    }));
 
   const run = async (action, onDone) => {
     setSaving(true);
@@ -84,8 +119,13 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
 
   const saveSchedule = (event) => {
     event.preventDefault();
-    run(
-      () => onSaveArrangement({ ...scheduleDraft, amount: Number(scheduleDraft.amount) }),
+    const { isChange, effectiveFrom, ...fields } = scheduleDraft;
+    run(() =>
+      onSaveArrangement({
+        ...fields,
+        amount: Number(fields.amount),
+        ...(isChange && effectiveFrom ? { effectiveFrom } : {}),
+      }),
     );
   };
 
@@ -109,6 +149,14 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
     URL.revokeObjectURL(url);
   };
 
+  const periodInputType = paymentDraft?.frequency === "monthly" ? "month" : "date";
+  const periodLabel = {
+    daily: "Day this pay is for",
+    weekly: "Week starting (Monday)",
+    fortnightly: "Fortnight starting (Monday)",
+    monthly: "Pay month",
+  }[paymentDraft?.frequency ?? "monthly"];
+
   return (
     <section className="content-stack" data-testid="driver-salaries" aria-labelledby="driver-salaries-heading">
       <article className="overview-board">
@@ -117,8 +165,9 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
           <h3 id="driver-salaries-heading">Driver salaries</h3>
         </div>
         <p className="panel-note">
-          A salary schedule is a plan, not a payment. When you actually pay a driver, record the payment
-          here: it is added to expenses once. Salaries never change a driver's cash hand-in.
+          A salary schedule is a plan, not a payment. When you actually pay a driver, record the payment here: it
+          is added to expenses once. Bank and business-cash payments do not change a driver's cash hand-in; a salary
+          paid from a driver's takings lowers that day's cash to hand in, once.
         </p>
 
         {feedback && (
@@ -128,32 +177,47 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
         )}
 
         {arrangements.length === 0 ? (
-          <p className="panel-note">No salary schedules yet.{canEdit ? " Set one below." : ""}</p>
+          <p className="panel-note">No salary schedules yet.{canEdit ? " Set one below, or record a manual payment." : ""}</p>
         ) : (
           <div className="finance-ledger">
             {arrangements.map((arrangement) => {
-              const currentPeriod = salaryPeriodForDate(arrangement.frequency, today());
-              const paidNow = findSalaryPayment(snapshot, arrangement.driverStaffId, currentPeriod);
+              const status = describeSalarySchedule(snapshot, arrangement, today());
               return (
                 <article key={arrangement.id} className="ledger-row" data-testid="salary-schedule-row">
                   <div className="ledger-copy">
                     <strong>{arrangement.driverName}</strong>
                     <span>
-                      {rand(arrangement.amount)} {arrangement.frequency} / usually {methodLabel(arrangement.payMethod)}
-                      {arrangement.active === false ? " / paused" : ""}
+                      {formatRand(arrangement.amount)} {arrangement.frequency} / usually {methodLabel(arrangement.payMethod)}
+                      {status.active ? "" : " / paused"}
                     </span>
+                    {status.active && (
+                      <span data-testid="salary-next-payment">
+                        Next payment: {status.next.label}, due {status.next.dueDate}, scheduled{" "}
+                        {formatRand(status.next.scheduledAmount)}
+                      </span>
+                    )}
                   </div>
                   <div className="ledger-meta">
-                    <span className="status-chip" data-tone={paidNow ? "success" : "info"}>
-                      {formatSalaryPeriod(arrangement.frequency, currentPeriod)}: {paidNow ? "paid" : "not paid yet"}
+                    <span className="status-chip" data-tone={status.current.payment ? "success" : "info"}>
+                      {status.current.label}: {status.current.payment ? "paid" : "not paid yet"}
                     </span>
+                    {status.active && status.due.length > 0 && (
+                      <span className="status-chip" data-tone="warning" data-testid="salary-due">
+                        Due now: {status.due.length} {status.due.length === 1 ? "period" : "periods"},{" "}
+                        {formatRand(status.dueAmount)}
+                      </span>
+                    )}
                     {canEdit && (
                       <>
                         <button type="button" className="action-button" onClick={() => editSchedule(arrangement)}>
                           Change schedule
                         </button>
-                        {arrangement.active !== false && (
-                          <button type="button" className="action-button primary" onClick={() => startPayment(arrangement)}>
+                        {status.active && (
+                          <button
+                            type="button"
+                            className="action-button primary"
+                            onClick={() => startPayment(arrangement, status.next.period, status.next.scheduledAmount)}
+                          >
                             Record payment
                           </button>
                         )}
@@ -165,18 +229,56 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
             })}
           </div>
         )}
+        {canEdit && drivers.length > 0 && (
+          <button type="button" className="action-button" onClick={startManualPayment}>
+            Record a manual payment
+          </button>
+        )}
       </article>
 
-      {canEdit && paymentDraft && paymentArrangement && (
+      {canEdit && paymentDraft && (
         <form className="finance-form overview-board" onSubmit={savePayment} aria-label="Record salary payment">
           <div className="overview-board-head">
-            <p className="eyebrow">Record payment</p>
-            <h3>{paymentArrangement.driverName}</h3>
+            <p className="eyebrow">{scheduledPayment ? "Record payment" : "Manual payment (no schedule needed)"}</p>
+            <h3>{driverName(paymentDraft.driverStaffId)}</h3>
           </div>
+          {!scheduledPayment && (
+            <>
+              <label className="finance-field">
+                <span>Driver</span>
+                <select
+                  value={paymentDraft.driverStaffId}
+                  onChange={(event) => setPaymentDraft((draft) => ({ ...draft, driverStaffId: event.target.value }))}
+                >
+                  {drivers.map((driver) => (
+                    <option key={driver.staffId} value={driver.staffId}>
+                      {driver.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="finance-field">
+                <span>Pay frequency</span>
+                <select
+                  value={paymentDraft.frequency}
+                  onChange={(event) => {
+                    const frequency = event.target.value;
+                    setPaymentDraft((draft) => ({ ...draft, frequency, period: salaryPeriodForDate(frequency, today()) }));
+                  }}
+                >
+                  {SALARY_FREQUENCIES.map((frequency) => (
+                    <option key={frequency} value={frequency}>
+                      {SALARY_FREQUENCY_LABELS[frequency]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
+          )}
           <label className="finance-field">
-            <span>{paymentArrangement.frequency === "monthly" ? "Pay month" : "Week starting (Monday)"}</span>
+            <span>{periodLabel}</span>
             <input
-              type={paymentArrangement.frequency === "monthly" ? "month" : "date"}
+              type={periodInputType}
               value={paymentDraft.period ?? ""}
               onChange={(event) => setPaymentDraft((draft) => ({ ...draft, period: event.target.value }))}
               required
@@ -205,19 +307,40 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
           </label>
           <fieldset className="finance-field">
             <legend>Paid by</legend>
-            {SALARY_METHODS.map((method) => (
+            {["bank", "cash"].map((method) => (
               <label key={method} className="salary-choice">
                 <input
                   type="radio"
                   name="salary-method"
                   value={method}
                   checked={paymentDraft.method === method}
-                  onChange={() => setPaymentDraft((draft) => ({ ...draft, method }))}
+                  onChange={() => setMethod(method)}
                 />
-                {method === "bank" ? "Bank transfer" : "Cash from the business"}
+                {method === "bank" ? "Bank transfer" : "Cash"}
               </label>
             ))}
           </fieldset>
+          <fieldset className="finance-field">
+            <legend>Paid from</legend>
+            {(paymentDraft.method === "bank" ? ["business_bank"] : ["business_cash", "driver_takings"]).map((source) => (
+              <label key={source} className="salary-choice">
+                <input
+                  type="radio"
+                  name="salary-source"
+                  value={source}
+                  checked={paymentDraft.source === source}
+                  onChange={() => setPaymentDraft((draft) => ({ ...draft, source }))}
+                />
+                {SALARY_SOURCE_LABELS[source]}
+              </label>
+            ))}
+          </fieldset>
+          {paymentDraft.source === "driver_takings" && (
+            <p className="finance-form-note" data-tone="warning" data-testid="salary-takings-note">
+              This lowers {driverName(paymentDraft.driverStaffId)}'s cash to hand in for {paymentDraft.paidDate} by the
+              amount paid, once. It goes through that day's checking, so the day must not be counted yet.
+            </p>
+          )}
           <label className="finance-field">
             <span>Payment reference (optional)</span>
             <input
@@ -225,16 +348,16 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
               onChange={(event) => setPaymentDraft((draft) => ({ ...draft, reference: event.target.value }))}
             />
           </label>
-          {Number(paymentDraft.amount) > 0 && Number(paymentDraft.amount) !== paymentArrangement.amount && (
+          {scheduledPayment && Number(paymentDraft.amount) > 0 && Number(paymentDraft.amount) !== paymentSchedule.amount && (
             <p className="finance-form-note" data-tone="info">
-              The schedule says {rand(paymentArrangement.amount)}. The amount you enter is what is recorded as paid.
+              The schedule says {formatRand(paymentSchedule.amount)}. The amount you enter is what is recorded as paid.
             </p>
           )}
           {duplicate ? (
             <p className="finance-form-note" data-tone="warning" data-testid="salary-duplicate-warning">
-              Already recorded: {paymentArrangement.driverName}'s salary for{" "}
-              {formatSalaryPeriod(paymentArrangement.frequency, paymentDraft.period)} was paid on {duplicate.expenseDate} (
-              {rand(duplicate.amount)}). Recording it again would count the expense twice, so it is blocked. If that
+              Already recorded: {driverName(paymentDraft.driverStaffId)}'s salary for{" "}
+              {formatSalaryPeriod(paymentDraft.frequency, paymentDraft.period)} was paid on {duplicate.expenseDate} (
+              {formatRand(duplicate.amount)}). Recording it again would count the expense twice, so it is blocked. If that
               payment was wrong, correct it before recording a new one.
             </p>
           ) : null}
@@ -292,8 +415,11 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
               value={scheduleDraft.frequency}
               onChange={(event) => setScheduleDraft((draft) => ({ ...draft, frequency: event.target.value }))}
             >
-              <option value="monthly">Monthly</option>
-              <option value="weekly">Weekly</option>
+              {SALARY_FREQUENCIES.map((frequency) => (
+                <option key={frequency} value={frequency}>
+                  {SALARY_FREQUENCY_LABELS[frequency]}
+                </option>
+              ))}
             </select>
           </label>
           <label className="finance-field">
@@ -303,7 +429,7 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
               onChange={(event) => setScheduleDraft((draft) => ({ ...draft, payMethod: event.target.value }))}
             >
               <option value="bank">Bank transfer</option>
-              <option value="cash">Cash from the business</option>
+              <option value="cash">Cash</option>
             </select>
           </label>
           <label className="finance-field">
@@ -315,6 +441,16 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
               required
             />
           </label>
+          {scheduleDraft.isChange && (
+            <label className="finance-field">
+              <span>Changes apply from</span>
+              <input
+                type="date"
+                value={scheduleDraft.effectiveFrom}
+                onChange={(event) => setScheduleDraft((draft) => ({ ...draft, effectiveFrom: event.target.value }))}
+              />
+            </label>
+          )}
           <label className="salary-choice">
             <input
               type="checkbox"
@@ -346,15 +482,20 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
                     {record.salaryPayment.driverName} / {record.salaryPayment.periodLabel ?? record.salaryPayment.period}
                   </strong>
                   <span>
-                    Paid {record.expenseDate} by {methodLabel(record.salaryPayment.method)}
+                    Paid {record.expenseDate} by {methodLabel(record.salaryPayment.method)} from{" "}
+                    {(SALARY_SOURCE_LABELS[record.salaryPayment.source] ?? "").toLowerCase()}
+                    {record.salaryPayment.manual ? " / manual" : ""}
                     {record.reference ? ` / Ref ${record.reference}` : ""}
                   </span>
                 </div>
                 <div className="ledger-meta">
-                  <strong>{rand(record.amount)}</strong>
-                  {record.amount !== record.salaryPayment.scheduledAmount && (
-                    <span>Scheduled {rand(record.salaryPayment.scheduledAmount)}</span>
+                  <strong>{formatRand(record.amount)}</strong>
+                  {record.salaryPayment.scheduledAmount != null && record.amount !== record.salaryPayment.scheduledAmount && (
+                    <span>Scheduled {formatRand(record.salaryPayment.scheduledAmount)}</span>
                   )}
+                  <span className="status-chip" data-tone={record.status === "pending" ? "info" : "success"}>
+                    {record.status}
+                  </span>
                 </div>
               </article>
             ))}
@@ -372,10 +513,10 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
           <input type="month" value={reportMonth} onChange={(event) => setReportMonth(event.target.value)} />
         </label>
         <div className="finance-form-meta">
-          <span className="status-chip" data-tone="info">Salaries {rand(report.totals.salaries)}</span>
-          <span className="status-chip" data-tone="info">Other expenses {rand(report.totals.otherExpenses)}</span>
+          <span className="status-chip" data-tone="info">Salaries {formatRand(report.totals.salaries)}</span>
+          <span className="status-chip" data-tone="info">Other expenses {formatRand(report.totals.otherExpenses)}</span>
           <span className="status-chip" data-tone="navy" data-testid="expense-report-total">
-            Total {rand(report.totals.expenses)}
+            Total {formatRand(report.totals.expenses)}
           </span>
         </div>
         <button type="button" className="action-button" onClick={downloadReport} disabled={!reportMonth}>

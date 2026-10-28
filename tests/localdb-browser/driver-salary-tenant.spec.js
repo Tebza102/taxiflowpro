@@ -71,7 +71,7 @@ test("Owner B: schedule, one payment, duplicate refused by the server, persisted
         action: "salary.payment_record",
         requestId: crypto.randomUUID(),
         expectedVersion: workspace.version,
-        fields: { driverStaffId: "uat-drv-b-01", period: "2026-09", paidDate: "2026-10-01", amount: 5200, method: "bank" },
+        fields: { driverStaffId: "uat-drv-b-01", period: "2026-09", paidDate: "2026-10-01", amount: 5200, method: "bank", source: "business_bank" },
       }),
     });
     return { status: response.status, body: await response.json() };
@@ -80,7 +80,40 @@ test("Owner B: schedule, one payment, duplicate refused by the server, persisted
   expect(JSON.stringify(status.body)).toContain("already recorded");
 });
 
-test("Driver B never receives salary schedules or salary payments", async ({ page }) => {
+// API helper as the signed-in person: always sends the version just loaded.
+const act = (page, action, fields) =>
+  page.evaluate(async ({ action, fields }) => {
+    const raw = Object.entries(window.localStorage).find(([key]) => key.startsWith("sb-") && key.endsWith("-auth-token"));
+    const token = JSON.parse(raw[1]).access_token;
+    const workspace = await fetch("/api/business/workspace", { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json());
+    const response = await fetch("/api/business/finance-actions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ action, requestId: crypto.randomUUID(), expectedVersion: workspace.version, fields }),
+    });
+    return { status: response.status, body: await response.json() };
+  }, { action, fields });
+
+test("Owner B: a salary paid from Driver B's takings lowers that day's expected cash once", async ({ page }) => {
+  await signIn(page, "owner.b@example.com");
+  const takings = { driverStaffId: "uat-drv-b-01", frequency: "daily", period: "2026-10-01", paidDate: "2026-10-01", amount: 250, method: "cash", source: "driver_takings" };
+  const first = await act(page, "salary.payment_record", takings);
+  expect(first.status).toBe(200);
+  const again = await act(page, "salary.payment_record", { ...takings, amount: 100 });
+  expect(again.status).toBe(409);
+  expect(again.body.error).toContain("already recorded");
+  // Business B's synthetic day checking for 2026-10-01 expects R 700; the hand-in now expects R 450.
+  const handIn = await act(page, "cashup.record_handin", { cashUpId: "uat-cu-1-b", actualCashReceived: 450 });
+  expect(handIn.status).toBe(200);
+  expect(handIn.body.expectedCashIn).toBe(450);
+  expect(handIn.body.variance).toBe(0);
+  // Taking from a counted day is now refused.
+  const late = await act(page, "salary.payment_record", { ...takings, period: "2026-10-02", amount: 50 });
+  expect(late.status).toBe(409);
+  expect(JSON.stringify(late.body)).toContain("counted");
+});
+
+test("Driver B never receives salary schedules, and sees only their own takings-funded salary", async ({ page }) => {
   await signIn(page, "driver.b@example.com");
   await expect(page.locator("button.module-button").filter({ hasText: "Money" })).toHaveCount(0);
   const leaked = await page.evaluate(async () => {
@@ -90,8 +123,8 @@ test("Driver B never receives salary schedules or salary payments", async ({ pag
     const snapshot = workspace.snapshot ?? {};
     return {
       arrangements: snapshot.finance?.salaryArrangements ?? null,
-      salaryRecords: (snapshot.financeTransactions ?? []).filter((record) => record.salaryPayment).length,
+      salarySources: (snapshot.financeTransactions ?? []).filter((record) => record.salaryPayment).map((record) => record.salaryPayment.source),
     };
   });
-  expect(leaked).toEqual({ arrangements: null, salaryRecords: 0 });
+  expect(leaked).toEqual({ arrangements: null, salarySources: ["driver_takings"] });
 });

@@ -388,6 +388,12 @@ export function ReportsPanel({ snapshot, activeRole, canAccessReports, accessTok
                     {formatRand(report.cashUp.totalExpenses)} ({formatRand(report.cashUp.cashExpenses)})
                   </strong>
                 </div>
+                {(report.cashUp.salaryFromTakings ?? []).map((salary, index) => (
+                  <div className="info-pair" key={`salary-${index}`} data-testid="reports-salary-from-takings">
+                    <span>Salary from takings ({salary.driverName} / {salary.period}), in cash expenses</span>
+                    <strong>{formatRand(salary.amount)}</strong>
+                  </div>
+                ))}
                 <div className="info-pair">
                   <span>Workflow</span>
                   <strong>

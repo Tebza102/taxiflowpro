@@ -37,6 +37,7 @@ import { ReportsPanel } from "./components/ReportsPanel";
 import PlatformCompaniesPanel from "./components/PlatformCompaniesPanel";
 import TenantAccessPanel from "./components/TenantAccessPanel";
 import { UserGuideSheet } from "./components/UserGuideSheet";
+import { DriverSalaryPanel } from "./components/DriverSalaryPanel";
 const formatSignedMoney = (value) => {
   const amount = Number(value ?? 0);
   if (amount === 0) return formatMoney(0);
@@ -44,6 +45,13 @@ const formatSignedMoney = (value) => {
 };
 import { buildZeroCashClosure, getDayCashSettlement, getDriverCashUpWorkflowStatus as getDayWorkflowStatus, isClosedWithoutDeposit } from "./lib/cashUpContract";
 import { repository } from "./lib/dataGateway";
+import {
+  applySalaryArrangement,
+  buildSalaryPaymentRecord,
+  isSalaryPayment,
+  parseSalaryArrangement,
+  parseSalaryPayment,
+} from "./lib/salaryContract";
 import {
   buildUserGuide,
   getUserGuideStorageKey,
@@ -3456,6 +3464,12 @@ function App() {
         error: "Add a note explaining why you are updating this expense.",
       };
     }
+    if (isSalaryPayment(existing)) {
+      return {
+        ok: false,
+        error: "Recorded salary payments keep the amount that was paid and cannot be edited as a normal expense.",
+      };
+    }
     if (!draft.category?.trim()) {
       return { ok: false, error: "Enter an expense category." };
     }
@@ -3785,6 +3799,79 @@ function App() {
         ? "Checking updated. Management can now record one day hand-in from the latest total."
         : "Checking sent. Management can now record one day hand-in for this shift.",
     };
+  };
+
+  // Driver salaries (rules: src/lib/salaryContract.js). Business workspace: the
+  // server actions decide. Demo/legacy: the same rules applied locally.
+  const runLocalSalaryChange = async (build) => {
+    const current = currentSnapshot;
+    if (!current) {
+      return { ok: false, error: "No data available." };
+    }
+    if (!PRIVILEGED_ROLES.has(activeRole) || !hasModuleUpdateAccess(current, "finance")) {
+      return { ok: false, error: getModuleAccessErrorMessage("finance") };
+    }
+    let change;
+    try {
+      change = build(current, { id: resolveCurrentActorId(current), role: activeRole }, new Date().toISOString());
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+    const nextSnapshot = {
+      ...current,
+      ...change.patch,
+      auditTrail: appendAuditTrail(current.auditTrail, [
+        buildCurrentAuditEvent(current, { timestamp: change.now, ...change.audit }),
+      ]),
+    };
+    const commitResult = await commitLiveSnapshotMutation(current, nextSnapshot);
+    return commitResult.ok
+      ? { ok: true, message: change.message }
+      : { ok: false, error: commitResult.error ?? "The change could not be saved. Nothing was recorded." };
+  };
+
+  const saveSalaryArrangement = async (draft) => {
+    if (tenantLive) {
+      return runTenantFinance(
+        `salary-schedule:${draft.driverStaffId}`,
+        "salary.arrangement_save",
+        draft,
+        "Salary schedule saved. No expense was added.",
+      );
+    }
+    return runLocalSalaryChange((current, actor, now) => {
+      const { finance, arrangement, audit } = applySalaryArrangement(current, parseSalaryArrangement(draft), actor, now);
+      return {
+        now,
+        patch: { finance },
+        audit,
+        message: `Salary schedule saved for ${arrangement.driverName}. No expense was added.`,
+      };
+    });
+  };
+
+  const recordSalaryPayment = async (draft) => {
+    const { reference, ...rest } = draft;
+    const fields = reference?.trim() ? { ...rest, reference: reference.trim() } : rest;
+    if (tenantLive) {
+      return runTenantFinance(
+        `salary-payment:${draft.driverStaffId}:${draft.period}`,
+        "salary.payment_record",
+        fields,
+        "Salary payment recorded and added to expenses once.",
+      );
+    }
+    return runLocalSalaryChange((current, actor, now) => {
+      const { record, audit } = buildSalaryPaymentRecord(current, parseSalaryPayment(fields), actor, now, {
+        timestamp: createTimestampFromDateInput(fields.paidDate, now),
+      });
+      return {
+        now,
+        patch: { financeTransactions: [record, ...(current.financeTransactions ?? [])] },
+        audit,
+        message: `Salary payment recorded for ${record.salaryPayment.driverName} and added to expenses once.`,
+      };
+    });
   };
 
   const saveExpensePreset = (draft) => {
@@ -6145,6 +6232,8 @@ function App() {
               onSaveSpecialIncome={saveSpecialIncome}
               onSaveExpense={saveExpense}
               onSaveExpensePreset={saveExpensePreset}
+              onSaveSalaryArrangement={saveSalaryArrangement}
+              onRecordSalaryPayment={recordSalaryPayment}
               onVerifyIncome={verifyIncome}
               onDeleteTransaction={deleteTransaction}
               onLockDeposit={lockDeposit}
@@ -6896,6 +6985,8 @@ function FinancePanel({
   onSaveSpecialIncome,
   onSaveExpense,
   onSaveExpensePreset,
+  onSaveSalaryArrangement,
+  onRecordSalaryPayment,
   onVerifyIncome,
   onDeleteTransaction,
   onLockDeposit,
@@ -8355,6 +8446,14 @@ function FinancePanel({
               </div>
             </article>
           </div>
+
+          <DriverSalaryPanel
+            snapshot={snapshot}
+            canEdit={canEditFinanceUpdates}
+            businessName={snapshot.profile?.fleetName ?? ""}
+            onSaveArrangement={onSaveSalaryArrangement}
+            onRecordPayment={onRecordSalaryPayment}
+          />
         </div>
       )}
 

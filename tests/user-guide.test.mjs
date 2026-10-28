@@ -77,3 +77,10 @@ test("fleet and driver edit rights change the wording, not the visibility", () =
   assert.match(guide.steps.find((step) => step.id === "mgmt-fleet").body, /Owner decides/);
   assert.match(guide.steps.find((step) => step.id === "mgmt-drivers").body, /Owner decides/);
 });
+
+test("management expenses step explains the driver salary workflow", () => {
+  const guide = buildUserGuide({ role: "Owner", views: MANAGEMENT_VIEWS });
+  const body = guide.steps.find((step) => step.id === "mgmt-expenses").body;
+  assert.match(body, /Driver salaries/);
+  assert.match(body, /record each payment once/);
+});

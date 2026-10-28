@@ -190,6 +190,7 @@ test("a salary from the driver's takings lowers that day's expected cash exactly
   assert.equal(record.driverStaffId, DRIVER);
   assert.equal(record.cashExpense, true);
   assert.equal(record.status, "pending");
+  assert.equal(record.timestamp, "2026-10-01T10:00:00.000Z"); // 12:00 SAST on the paid date, like other server captures
   const after = expected(snapshot);
   assert.equal(after.expectedCashIn, 450);
   assert.equal(after.cashExpenses, 250);

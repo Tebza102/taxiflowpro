@@ -7,6 +7,7 @@ import {
   parseSalaryArrangement,
   parseSalaryPayment,
 } from "../../src/lib/salaryContract.js";
+import { sastTimestamp } from "./financeCapture.js";
 import { createHttpError } from "./tenantAuth.js";
 
 // Driver salary actions (rules in src/lib/salaryContract.js). Management only,
@@ -49,7 +50,12 @@ const saveArrangement = (stored, fields, requester, now, requestId) => {
 };
 
 const recordPayment = (stored, fields, requester, now, requestId) => {
-  const { record, audit } = buildSalaryPaymentRecord(stored, fields, requester, now, { source: "server", requestId });
+  const { record, audit } = buildSalaryPaymentRecord(stored, fields, requester, now, {
+    // Same rule as the other server captures: the record sorts by its own date.
+    timestamp: sastTimestamp(fields.paidDate),
+    source: "server",
+    requestId,
+  });
   return {
     snapshot: {
       ...stored,

@@ -1744,3 +1744,21 @@ What `platform-admin-tests.mjs` covers:
 
 **Result:** Pass locally. Not merged, not deployed.
 
+### 2026-10-28 — Hosted Preview check of driver salaries: PASS; cleaned up
+
+**Changed by:** Agent (Claude), under Tebogo's approvals of 2026-10-28 (restore only the isolated test project; branch-scoped Preview variables; temporary bypass; hosted runs; cleanup).
+
+**Cost check before restoring:** organization Apprigate is on the Free plan; Supabase does not bill paused projects or restores; 2 active free projects allowed and only production was active. No plan change, no charge.
+
+**Steps and evidence:**
+- Restored `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`) to ACTIVE_HEALTHY. Read-only checks 13/13: 6 tables, release-06 permissions column, RLS on (forced on the 2 server-only tables), no browser grants, no anon-executable functions, 5 service-role functions, delta-06 rules (no default; defaults only for NULL), only synthetic `@example.com` users (6) and Preview Company A/B.
+- Added 4 Preview variables scoped to `agent/driver-salary` (URL x2, public anon key, server key piped from the external env file, never displayed). Redeployed `e46ba96` -> `taxiflowpro-nry1tv6fk`; later auto-build of `4370dce` -> `taxiflowpro-fcuys737n`.
+- Temporary automation bypass created from a locally generated value (stored only in the git-ignored `.env.preview-test.local`, never printed); baseline 0 -> 1.
+- Target guard first (before any sign-in): bundle carries `sxoonhovoqgcpflhqirb.supabase.co`, no production ref, the salary build; 401 unauthenticated. PASS on both Previews.
+- Runs: on `nry1tv6fk` salary 4/4; release-06 journey failed at its fixed day 2026-10-08 ("day checking ... is banked; new work for that day cannot be added", correct app behaviour) and then because the driver board shows the most recent unbanked day. Fixes (test-only): the journey now picks the day after the driver's latest activity. Found and fixed an app gap: server salary records lacked `timestamp` (now 12:00 SAST on the paid date, like other server captures). On `fcuys737n` (`4370dce`): release-06 journey 6/6; salary journey 4/4 after a test-only fix (the driver legitimately sees takings salaries from earlier runs too).
+- Cleanup: bypass revoked (0 entries; protection on; Previews 302 to login); local bypass copy deleted; 4 branch variables removed; test project paused.
+
+**Not changed:** production (project `vfxftviwteypasredjgm` only listed, never queried), PR #6/#7 branches, billing. Nothing merged or promoted.
+
+**Outstanding:** real Android phone; a real user opening the CSV in a spreadsheet app; optional Preview-scope decision (general Preview variables equal production sign-in).
+

@@ -101,7 +101,12 @@ test("bank salary: one expense, duplicate refused, never in the driver's hand-in
   // Scoped views: the driver sees only the takings salary; no schedules.
   const driverView = await workspace(request, "driver@example.com");
   const salaries = (driverView.json.snapshot?.financeTransactions ?? []).filter((record) => record.salaryPayment);
-  expect(salaries.map((record) => record.salaryPayment.source)).toEqual(["driver_takings"]);
+  // Hosted data persists across runs: every salary the driver can see is a
+  // takings-funded one (never a bank or business-cash salary), including this run's.
+  expect(salaries.length).toBeGreaterThan(0);
+  expect(salaries.every((record) => record.salaryPayment.source === "driver_takings")).toBe(true);
+  expect(salaries.some((record) => record.id === fromTakings.json.recordId)).toBe(true);
+  expect(salaries.some((record) => record.id === first.json.recordId)).toBe(false);
   expect(driverView.json.snapshot?.finance?.salaryArrangements).toBeUndefined();
 });
 

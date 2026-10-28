@@ -9,14 +9,16 @@
   3. PR #8 driver salaries: `agent/driver-salary` (`bd063c5`) -> `agent/user-guide`. Uses the guide (salary sentence) and release 06's finance-action permissions.
 - Merge order: #6, #7, #8, retargeting each to `main` as the one below merges.
 
-## Driver salaries (2026-10-28): draft PR #8, not deployed; hosted check pending approval
+## Driver salaries (2026-10-28): draft PR #8, not deployed; hosted check PASSED
 
-- Commits on `agent/driver-salary`: `bd063c5` (first version), `ea7e571` (Project OS), `a8dac17` (reconciled with the original requirements).
+- Commits on `agent/driver-salary`: `bd063c5` (first version), `ea7e571` (Project OS), `a8dac17` (reconciled with the original requirements), `e46ba96` (Project OS), `4370dce` (server salary timestamp; hosted journey picks a fresh day), plus the hosted-results commit.
 - Money > Expenses: schedules (daily, weekly, fortnightly, monthly; changes apply from an effective date) that add no expense and show the next payment date, scheduled amount and what is due; payments with or without a schedule; payment method (bank/cash) separate from source (business bank, business cash, driver's takings). Bank and business cash never change a driver's hand-in; a salary from a driver's takings lowers that day's expected cash once and goes through that day's checking. One expense per driver, frequency and period. Data model and report audit: `04-technical/data-model.md`.
 - Reports checked: monthly expense CSV (new) and the daily finance report PDF/preview (lists salaries from takings). No other financial download exists.
 - Tests on `a8dac17`: Node 385/385 (17 salary); mock Playwright 47/47; local tenant suite 18/18 on a fresh reset; sync guards; build.
-- Hosted: `tests/preview-test/salary-journey.spec.js` written, NOT run. Branch Previews other than release 06 use the production sign-in project with no server key (server calls fail closed); a hosted salary check needs the isolated test backend's variables scoped to `agent/driver-salary` (awaiting Tebogo's approval).
-- Outstanding: hosted Preview check; real Android phone; a real user opening the CSV in a spreadsheet app.
+- Hosted (2026-10-28, approved by Tebogo): PASS. Preview `taxiflowpro-fcuys737n-apprigate.vercel.app` (auto-built from `4370dce`, branch `agent/driver-salary`) against the isolated test project `sxoonhovoqgcpflhqirb` only: target guard (bundle carries the test project, no production ref; 401 unauthenticated) before any sign-in; existing release-06 journey 6/6; salary journey 4/4 (Driver refused 403; bank salary once, duplicate 409; takings salary makes the driver's day -250 exactly once with the bank salary excluded; driver sees only takings salaries and no schedules; Owner's downloaded CSV lists both salaries once and reconciles). First Preview `taxiflowpro-nry1tv6fk` (redeploy of `e46ba96`) passed the guards and salary 4/4 and exposed two test-reuse issues (fixed day already banked; one-salary assumption) and a missing server `timestamp` on salary records (fixed in `4370dce`).
+- Cleanup done: temporary bypass revoked (project bypass entries 0; protection still on; Previews redirect to login 302); the four `agent/driver-salary` Preview variables removed; test project paused again; Free plan, no charge (paused projects are not billed; 2 active projects allowed and only 2 were active during the test).
+- Remaining configuration risk (not changed, Tebogo to decide): the general Preview variables equal production's sign-in project, so any new push to a branch other than `agent/owner-responsibilities` builds a Preview using production sign-in with no server key (server calls fail closed, behind Vercel login). The retained test Previews keep their build-time test variables and cannot switch to production settings.
+- Outstanding: real Android phone; a real user opening the CSV in a spreadsheet app.
 
 ## In-app guide "How to use TaxiFlow" (2026-10-28): draft PR #7, branch `agent/user-guide` (stacked on release 06); not deployed
 

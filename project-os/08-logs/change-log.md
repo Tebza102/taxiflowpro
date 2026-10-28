@@ -1692,7 +1692,7 @@ What `platform-admin-tests.mjs` covers:
 
 ### 2026-10-28 — In-app "How to use TaxiFlow" guide (post-login)
 
-**Changed by:** Agent (Claude). Branch `agent/owner-responsibilities`, uncommitted (kept out of release 06 / PR #6).
+**Changed by:** Agent (Claude). Branch `agent/user-guide` (stacked on `agent/owner-responsibilities`), draft PR #7; PR #6 unchanged.
 
 **Finding:** no onboarding or help guide existed in the app code; only the sign-in "forgot password" help toggle and a "Fleet & Operations onboarding" panel title.
 
@@ -1712,5 +1712,5 @@ What `platform-admin-tests.mjs` covers:
 
 **Risks remaining:** not tried on a physical low-spec Android phone; hosted UAT and preview-test suites not run (they include the skip handler). Completion is per browser, so a new phone shows the guide once more.
 
-**Next action:** Tebogo decides where to commit (recommended: own branch/PR after release 06).
+**Next action:** review PR #7; merge after #6, then retarget to `main`.
 

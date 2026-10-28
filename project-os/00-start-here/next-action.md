@@ -1,8 +1,8 @@
 # Next Action
 
-## In-app guide "How to use TaxiFlow" (2026-10-28): built, uncommitted
+## In-app guide "How to use TaxiFlow" (2026-10-28): draft PR #7
 
-1. **Tebogo:** decide where it lands. It is NOT part of release 06 and is left uncommitted on `agent/owner-responsibilities` so PR #6 stays as reviewed. Recommended: commit it on its own branch (`agent/user-guide`) and its own PR after release 06.
+1. **Review draft PR #7** (`agent/user-guide`, stacked on `agent/owner-responsibilities`). Merge only after PR #6; then retarget #7 to `main`. PR #6 is unchanged.
 2. Before release: one look on a real low-spec Android phone (open, scroll, Skip, Help). Not yet checked on a device; proven in Chromium mobile emulation only.
 3. Not run: the hosted UAT and preview-test suites (need a deployed Preview); they now skip the guide through `tests/user-guide-helpers.mjs`.
 

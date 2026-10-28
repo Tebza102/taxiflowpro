@@ -4,7 +4,7 @@
 
 1. **Review in order:** PR #6 (release 06), then PR #7 (guide, base `agent/owner-responsibilities`), then PR #8 (driver salaries, base `agent/user-guide`). Merge only in that order, retargeting to `main` each time. Nothing here authorises a merge or deployment.
 2. **Hosted salary check: DONE 2026-10-28** (PASS; bypass 0; branch variables removed; test project paused).
-3. **Tebogo: approve the Preview configuration correction** in `05-build/preview-config-correction.md`: remove Preview from the three shared production records (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `SUPABASE_URL`; no value changes), then verify; and choose A (delete the 18 production-connected Preview deployments listed there) or B (keep them behind Vercel Authentication). Until applied, every push to a branch other than release 06 builds a production-connected Preview, so the latest local commit on `agent/driver-salary` is held back (not pushed).
+3. **Preview configuration correction: DONE 2026-10-28** (`05-build/preview-config-correction.md`): unconfigured branch Previews no longer receive production Supabase settings; verified (no Supabase reference in assets, 503 fail-closed, clear "unavailable" screen, production unchanged); bypass 0. The 18 historically production-connected Previews (inferred) stay behind Vercel login.
 4. **Not performed:** real low-spec Android phone and a real spreadsheet app. Steps and expected results: `06-quality/manual-checks-guide-and-salary.md`.
 5. **Decision for Tebogo (optional):** the original salary prompt was not available to the agent; PR #8 follows the requirements given on 2026-10-28 (frequencies, method vs source, manual pay, next/due, reports).
 

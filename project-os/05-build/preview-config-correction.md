@@ -1,4 +1,16 @@
-# Preview configuration correction (prepared 2026-10-28, NOT applied)
+# Preview configuration correction (prepared and APPLIED 2026-10-28)
+
+## Result (applied 2026-10-28 ~18:24 UTC, approved by Tebogo)
+
+- The three records `GI8rLthQfc03IvSJ`, `vtTUkEj1aZ8NBahD`, `Wfm4tf0xNpI9a5uy` now target **Production only** (PATCH of `target` only; no value sent or re-entered). All 9 records and ids otherwise unchanged; release-06 overrides unchanged; production server key unchanged.
+- Verification Preview: `taxiflowpro-6ngbg58jb-apprigate.vercel.app` (redeploy of `agent/user-guide` `99cf0c6`, inspect id `3BKsLDHzW5GFh2mVnUiZZ3BZWjih`), checked with a temporary bypass:
+  - built browser assets (index.html + 8 files): 0 production refs, 0 test refs, 0 `*.supabase.co` URLs, 0 key-like JWTs;
+  - server endpoints: unauthenticated 401; with a token 503 (`/api/business/workspace`, `/memberships`, `/finance-actions`, `/api/admin/daily-log/:id/report-view`);
+  - browser: "Startup problem: Secure sign-in is unavailable. TaxiFlow live mode requires Supabase authentication. Please contact the system administrator." No sign-in form, no demo data, no request to any host outside vercel.app;
+  - production `taxiflow.co.za`: 200, normal Supabase sign-in page (no sign-in attempted).
+- Bypass revoked: 0 entries; protection on; Preview 302 without Vercel login.
+- Observation (not changed): `taxiflow.apprigate.com`, attached to this project, answers with an "Index of /" page served from elsewhere; unrelated to this change.
+- The 18 historical Previews below are **kept behind Vercel login** (Tebogo's decision, option B).
 
 Vercel project `apprigate/taxiflowpro` (`prj_vYaxObYXR8imyMKRr951yLJ0XAh7`). Names, scopes and record ids only; no values were read or printed.
 
@@ -50,7 +62,7 @@ Verification after applying:
 
 Rollback: tick Preview again on the same three records (no values involved).
 
-## Existing builds are not changed by this
+## Existing builds are not changed by this (classification INFERRED from configuration history)
 
 Vercel fixes a deployment's variables at build time. These existing Preview deployments were built with the production values (from the build times against the variables' history above), and keep them until removed:
 
@@ -75,7 +87,7 @@ Vercel fixes a deployment's variables at build time. These existing Preview depl
 | agent/public-website | fa732cf | taxiflowpro-94zztcsy9-apprigate.vercel.app | 2026-10-18 13:50 |
 | agent/tenant-db-foundation | e59417a | taxiflowpro-301dw9v3b-apprigate.vercel.app | 2026-10-11 08:16 |
 
-18 deployments. All are behind Vercel Authentication today. Options (Tebogo decides; deletion cannot be undone):
+18 deployments, **inferred** production-connected from build times against the variables' history (not read from their built files). Decision 2026-10-28: **B, keep them behind Vercel Authentication; do not delete.** Options considered:
 - **A. Delete all 18** (recommended): `vercel remove <deployment url> --yes` per row. Their branches stay in Git; a new Preview can be built later and, after the change above, will not connect to production. Note PR #4 (public website) and PR #5 (platform release log) would lose their Preview links in this project; the public website itself is deployed from the separate `taxiflow-website` project and is not affected.
 - **B. Keep them** and rely on Vercel Authentication (access restricted to the Vercel team). Lower effort; the production-connected bundles remain.
 

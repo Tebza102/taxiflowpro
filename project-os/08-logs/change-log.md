@@ -1762,3 +1762,15 @@ What `platform-admin-tests.mjs` covers:
 
 **Outstanding:** real Android phone; a real user opening the CSV in a spreadsheet app; optional Preview-scope decision (general Preview variables equal production sign-in).
 
+### 2026-10-28 — Preview configuration corrected: production Supabase settings are Production-only
+
+**Changed by:** Agent (Claude), approved by Tebogo. Vercel project `taxiflowpro` configuration only; no code, no production deploy.
+
+**Change:** removed the Preview environment from `VITE_SUPABASE_URL` (`GI8rLthQfc03IvSJ`), `VITE_SUPABASE_ANON_KEY` (`vtTUkEj1aZ8NBahD`) and `SUPABASE_URL` (`Wfm4tf0xNpI9a5uy`) via PATCH of `target` only (no values sent). Production scope and values, the production server key, `VITE_BACKEND_MODE` and release 06's four Preview overrides unchanged.
+
+**Verification:** redeployed `agent/user-guide` `99cf0c6` -> `taxiflowpro-6ngbg58jb`; with a temporary bypass: built assets contain no Supabase URL, no production or test ref, no key-like JWT; endpoints 401 unauthenticated and 503 with a token; the browser shows "Secure sign-in is unavailable" with no sign-in form or demo data and contacts no external host; production `taxiflow.co.za` loads its normal sign-in (200). Bypass revoked: 0 remain.
+
+**Kept (Tebogo):** the 18 older Previews inferred (from build times vs variable history) to carry production settings stay behind Vercel login; not deleted.
+
+**Outstanding:** real Android and spreadsheet checks (`06-quality/manual-checks-guide-and-salary.md`).
+

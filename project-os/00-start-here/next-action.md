@@ -3,9 +3,10 @@
 ## Open stack: PR #6 -> #7 -> #8 (2026-10-28)
 
 1. **Review in order:** PR #6 (release 06), then PR #7 (guide, base `agent/owner-responsibilities`), then PR #8 (driver salaries, base `agent/user-guide`). Merge only in that order, retargeting to `main` each time. Nothing here authorises a merge or deployment.
-2. **Hosted salary check: DONE 2026-10-28** (PASS; bypass 0; branch variables removed; test project paused). **Optional decision for Tebogo:** the general Preview variables point at production's sign-in project, so new pushes to other branches build Previews on production sign-in (server calls fail closed). Consider removing Preview from the production variables' scope, or limiting automatic branch Previews.
-3. **Not performed:** real low-spec Android phone (guide; salary schedule, payment and CSV download); a real user opening the CSV in a spreadsheet app.
-4. **Decision for Tebogo (optional):** the original salary prompt was not available to the agent; PR #8 follows the requirements given on 2026-10-28 (frequencies, method vs source, manual pay, next/due, reports).
+2. **Hosted salary check: DONE 2026-10-28** (PASS; bypass 0; branch variables removed; test project paused).
+3. **Tebogo: approve the Preview configuration correction** in `05-build/preview-config-correction.md`: remove Preview from the three shared production records (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `SUPABASE_URL`; no value changes), then verify; and choose A (delete the 18 production-connected Preview deployments listed there) or B (keep them behind Vercel Authentication). Until applied, every push to a branch other than release 06 builds a production-connected Preview, so the latest local commit on `agent/driver-salary` is held back (not pushed).
+4. **Not performed:** real low-spec Android phone and a real spreadsheet app. Steps and expected results: `06-quality/manual-checks-guide-and-salary.md`.
+5. **Decision for Tebogo (optional):** the original salary prompt was not available to the agent; PR #8 follows the requirements given on 2026-10-28 (frequencies, method vs source, manual pay, next/due, reports).
 
 ## In-app guide "How to use TaxiFlow" (2026-10-28): draft PR #7
 

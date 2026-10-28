@@ -3,8 +3,9 @@
 ## Open stack: PR #6 -> #7 -> #8 (2026-10-28)
 
 1. **Review in order:** PR #6 (release 06), then PR #7 (guide, base `agent/owner-responsibilities`), then PR #8 (driver salaries, base `agent/user-guide`). Merge only in that order, retargeting to `main` each time. Nothing here authorises a merge or deployment.
-2. **Real-device and hosted checks (not performed):** on a low-spec Android phone, the guide (open, scroll, Skip, Help) and salaries (schedule, record payment, CSV download); hosted Preview UAT and the preview-test journey.
-3. **Decision for Tebogo (optional):** the salary prompt referenced as "previously supplied" was not available in the repository or the session; PR #8 follows the financial rules given on 2026-10-28. Confirm the weekly/monthly periods, and that cash salaries are paid from the business (not deducted from a driver's hand-in).
+2. **Tebogo: approve the hosted salary check (needed before it can run).** The agent would: add the four isolated-test-backend variables (`SUPABASE_URL`, `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`) scoped to Preview + `agent/driver-salary` only (server key piped from `C:/Users/appri/taxiflow-preview-test.env.txt`, never displayed); redeploy that branch's Preview; create a temporary automation bypass; run `tests/preview-test/salary-journey.spec.js` and the existing journey; revoke the bypass (back to 0). Without the scoped variables the branch Preview uses the production sign-in project and fails closed.
+3. **Not performed:** real low-spec Android phone (guide; salary schedule, payment and CSV download); a real user opening the CSV in a spreadsheet app.
+4. **Decision for Tebogo (optional):** the original salary prompt was not available to the agent; PR #8 follows the requirements given on 2026-10-28 (frequencies, method vs source, manual pay, next/due, reports).
 
 ## In-app guide "How to use TaxiFlow" (2026-10-28): draft PR #7
 

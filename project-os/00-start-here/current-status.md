@@ -9,11 +9,14 @@
   3. PR #8 driver salaries: `agent/driver-salary` (`bd063c5`) -> `agent/user-guide`. Uses the guide (salary sentence) and release 06's finance-action permissions.
 - Merge order: #6, #7, #8, retargeting each to `main` as the one below merges.
 
-## Driver salaries (2026-10-28): draft PR #8, not deployed
+## Driver salaries (2026-10-28): draft PR #8, not deployed; hosted check pending approval
 
-- Money > Expenses: per-driver salary schedule (no expense), Record payment (one verified Salary expense per driver and period; duplicates refused), and a monthly expense report CSV with salary lines and reconciled totals. Salaries never change a driver's cash hand-in; bank payments are not cash expenses. Data model: `04-technical/data-model.md`.
-- Tests on the final code: Node 381/381 (13 salary); mock Playwright 44 passed + 1 timeout loading the sign-in page on the first test of the run (`branding.spec.js` desktop; passed 6/6 on two reruns); local tenant suite 17/17 on a fresh reset (2 salary); sync guards; build.
-- Outstanding: real Android phone check; hosted Preview UAT/preview-test; a real user opening the CSV in a spreadsheet app.
+- Commits on `agent/driver-salary`: `bd063c5` (first version), `ea7e571` (Project OS), `a8dac17` (reconciled with the original requirements).
+- Money > Expenses: schedules (daily, weekly, fortnightly, monthly; changes apply from an effective date) that add no expense and show the next payment date, scheduled amount and what is due; payments with or without a schedule; payment method (bank/cash) separate from source (business bank, business cash, driver's takings). Bank and business cash never change a driver's hand-in; a salary from a driver's takings lowers that day's expected cash once and goes through that day's checking. One expense per driver, frequency and period. Data model and report audit: `04-technical/data-model.md`.
+- Reports checked: monthly expense CSV (new) and the daily finance report PDF/preview (lists salaries from takings). No other financial download exists.
+- Tests on `a8dac17`: Node 385/385 (17 salary); mock Playwright 47/47; local tenant suite 18/18 on a fresh reset; sync guards; build.
+- Hosted: `tests/preview-test/salary-journey.spec.js` written, NOT run. Branch Previews other than release 06 use the production sign-in project with no server key (server calls fail closed); a hosted salary check needs the isolated test backend's variables scoped to `agent/driver-salary` (awaiting Tebogo's approval).
+- Outstanding: hosted Preview check; real Android phone; a real user opening the CSV in a spreadsheet app.
 
 ## In-app guide "How to use TaxiFlow" (2026-10-28): draft PR #7, branch `agent/user-guide` (stacked on release 06); not deployed
 

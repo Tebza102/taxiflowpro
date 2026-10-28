@@ -1730,3 +1730,17 @@ What `platform-admin-tests.mjs` covers:
 
 **Outstanding:** real Android phone; hosted Preview UAT/preview-test; spreadsheet check of the CSV by a real user. The "previously supplied" salary prompt was not available; the rules given on 2026-10-28 were implemented.
 
+### 2026-10-28 — Driver salaries reconciled with the original requirements (`a8dac17`, PR #8)
+
+**Changed by:** Agent (Claude). Branch `agent/driver-salary` (base `agent/user-guide`); PR #6 still `51a0f5d`, PR #7 still `99cf0c6`.
+
+**Gaps closed:** daily and fortnightly frequencies with period start/end/next (leap years, year end, Sunday-to-Monday, fortnight anchoring); payment method separate from source; salary from a driver's takings lowers that day's expected cash exactly once (linked to the driver day, pending, refused on a counted/closed day); manual payments without a schedule; schedule changes with an effective date; next payment date, scheduled and due amounts; salary lines in the daily finance report (PDF and preview) as well as the monthly CSV; `record.edit` refuses salaries.
+
+**Reports/exports checked:** monthly expense CSV (Money > Expenses); daily finance report PDF `/api/admin/daily-log/:id/report-pdf` and preview `/report-view`. No other financial download exists in the app or API (the backup tool is a restore format).
+
+**Tests (final code):** Node 385/385 (17 salary); mock Playwright 47/47 (4 salary); local tenant suite 18/18 on a fresh reset (3 salary, incl. server-side takings hand-in 700 -> 450 and counted-day refusal); sync guards; build.
+
+**Hosted:** not run. General Preview variables use production's sign-in project (only `agent/owner-responsibilities` has the isolated test backend), so the auto-built Previews for `agent/user-guide` and `agent/driver-salary` use production sign-in with no server key and fail closed. The hosted salary spec needs branch-scoped test variables for `agent/driver-salary`: awaiting Tebogo's approval.
+
+**Result:** Pass locally. Not merged, not deployed.
+

@@ -1689,3 +1689,28 @@ What `platform-admin-tests.mjs` covers:
 - Hosted test project `sxoonhovoqgcpflhqirb`: `delta-06-restore-fidelity.sql` applied via the Supabase connector (success). `verify-delta-06.sql` Part A: both true. Part B was automatically declined by the connector (destructive statements) and not run; read-only fingerprint unchanged. Pending: Tebogo runs Part B in the SQL editor (expect "PASS (rolled back)").
 - Backup tool (`scripts/backup`): tenant export now includes `platform_admins` and `member_permission_changes` when present (probe; older backups and pre-06 databases stay valid); full restore inserts them in dependency order with empty-target and count guards; restore comparison and manifest cover them; one-business restore unchanged. Tests: `backup-tool.test.mjs` 10/10; `backup-tests.mjs` 43/43 on the isolated test stack (grant and audit row restored exactly; RLS forced and no browser grants after restore; browser read refused 42501).
 - Production on hold.
+
+### 2026-10-28 — In-app "How to use TaxiFlow" guide (post-login)
+
+**Changed by:** Agent (Claude). Branch `agent/owner-responsibilities`, uncommitted (kept out of release 06 / PR #6).
+
+**Finding:** no onboarding or help guide existed in the app code; only the sign-in "forgot password" help toggle and a "Fleet & Operations onboarding" panel title.
+
+**Files changed:**
+- `src/lib/userGuide.js` (new): role/module/permission-aware content; per-user, per-business completion in localStorage via `browserRuntime` helpers.
+- `src/components/UserGuideSheet.jsx` (new); `src/components/MobileBottomSheet.jsx` (optional `className`, `closeLabel`).
+- `src/App.jsx`: guide key/open state, Help button, sheet render. Role routing, auth, snapshot keys, status values and `dataGateway.js` untouched.
+- `src/styles.css`: scoped `.user-guide-*` styles (44px targets, centred on wide screens, reduced motion).
+- Tests: `tests/user-guide.spec.js`, `tests/user-guide.test.mjs`, `tests/localdb-browser/user-guide-tenant.spec.js` (new); `tests/user-guide-helpers.mjs` registers a skip handler in every existing suite's sign-in helper so other journeys are unaffected.
+- `project-os/11-client-delivery/client-training-notes.md`: what users see, by role.
+
+**Defect found during testing and fixed:** keying the business on `snapshot.meta.businessId` made the guide vanish for Drivers (a local driver-terminal update replaces `snapshot.meta`, so the key went null). Evidence: instrumented sign-ins on the local tenant stack. Fix: key on `tenantMeta.businessId`, the same source as the business bar. One earlier local-suite failure was an artifact clash from a parallel Playwright run (shared `test-results`), not a code fault.
+
+**Tests run:** mock Playwright 43/43; local tenant browser suite (isolated test profile, fresh reset) 15/15; `node --test tests/*.test.mjs` 367/367; `test:sync-guards`; `npm run build`. Visual check by screenshots at 1280px and 360px.
+
+**Result:** Pass locally. Not deployed.
+
+**Risks remaining:** not tried on a physical low-spec Android phone; hosted UAT and preview-test suites not run (they include the skip handler). Completion is per browser, so a new phone shows the guide once more.
+
+**Next action:** Tebogo decides where to commit (recommended: own branch/PR after release 06).
+

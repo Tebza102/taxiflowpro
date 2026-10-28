@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { vercelBypassHeaders } from "../../playwright.uat.config.mjs";
+import { skipUserGuideWhenShown } from "../user-guide-helpers.mjs";
 
 // Preview release-gate suite. Runs against a live deployed Preview URL (real
 // Supabase Auth, real workspace_snapshots data) - see playwright.uat.config.mjs.
@@ -45,6 +46,7 @@ const RECOVERY_ACTION_LINK = required("UAT_RECOVERY_ACTION_LINK");
 const capturedClientSupabaseHosts = new Set();
 
 const signIn = async (page, email, password) => {
+  await skipUserGuideWhenShown(page);
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
   await page.getByLabel("Email").fill(email);

@@ -5,6 +5,7 @@ import { expect, test } from "@playwright/test";
 import { assertLocalDatabase } from "../../scripts/localdb/lib/exec.mjs";
 import { activateViaEmail } from "../../scripts/localdb/lib/mailpit.mjs";
 import { LOCAL_TEST_PASSWORD } from "../../scripts/localdb/seed-data.mjs";
+import { skipUserGuideWhenShown } from "../user-guide-helpers.mjs";
 
 // Business access role check (2026-10-11 release row 12): the access dropdown
 // showed Manager but the grant recorded Admin. Cause: browser automation changed
@@ -30,6 +31,7 @@ const activate = async (email) => {
   expect(result.error ?? null).toBeNull();
 };
 const signIn = async (page, email) => {
+  await skipUserGuideWhenShown(page);
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
   await page.getByLabel("Email").fill(email);

@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 
 import { expect, test } from "@playwright/test";
+import { skipUserGuideWhenShown } from "./user-guide-helpers.mjs";
 
 // TaxiFlow branding smoke checks (Task 19), demo mode: approved logo shown at
 // its own proportions without clipping, icons referenced and sized correctly on
@@ -14,6 +15,7 @@ const SHOTS = "test-results/branding";
 mkdirSync(SHOTS, { recursive: true });
 
 const signIn = async (page, email) => {
+  await skipUserGuideWhenShown(page);
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
   await page.getByLabel("Email").fill(email);

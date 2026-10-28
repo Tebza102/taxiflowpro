@@ -2860,3 +2860,147 @@ button {
   gap: 0.5rem;
   align-items: center;
 }
+
+/* "How to use TaxiFlow" guide: reuses the bottom sheet; every control is at
+   least 44px tall for touch, and the sheet is centred on wider screens. */
+.user-guide-root .mobile-sheet-close {
+  width: 2.75rem;
+  height: 2.75rem;
+}
+
+.user-guide-root .mobile-sheet-body {
+  margin-top: 0;
+  border-top: 0;
+}
+
+.user-guide-body {
+  display: grid;
+  gap: 1rem;
+}
+
+.user-guide-body h4 {
+  margin: 0 0 0.5rem;
+  color: var(--navy);
+  font-size: 1rem;
+}
+
+.user-guide-body p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.user-guide-first {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.85rem 1rem;
+  border-radius: 1rem;
+  background: rgba(253, 184, 1, 0.14);
+  border: 1px solid rgba(253, 184, 1, 0.45);
+  color: var(--navy);
+}
+
+.user-guide-steps {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding-left: 1.4rem;
+}
+
+.user-guide-step {
+  color: var(--text);
+}
+
+.user-guide-step > * + * {
+  margin-top: 0.3rem;
+}
+
+.user-guide-step-action {
+  display: flex;
+}
+
+.user-guide-step strong {
+  color: var(--navy);
+}
+
+.user-guide-example {
+  color: var(--subtext);
+  font-size: 0.9rem;
+}
+
+.user-guide-step-action,
+.user-guide-footer .action-button,
+.user-guide-trigger {
+  min-height: 2.75rem;
+}
+
+
+.user-guide-warning {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.6rem;
+  border-radius: 1rem;
+  border: 1px solid rgba(155, 93, 0, 0.3);
+  background: rgba(243, 156, 18, 0.08);
+}
+
+.user-guide-warning strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--warning-strong);
+}
+
+.user-guide-warning dl {
+  display: grid;
+  gap: 0.15rem;
+  margin: 0;
+}
+
+.user-guide-warning dt {
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: var(--navy);
+}
+
+.user-guide-warning dd {
+  margin: 0 0 0.35rem;
+  line-height: 1.45;
+}
+
+.user-guide-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+  gap: 0.55rem;
+}
+
+.user-guide-footer .action-button {
+  width: 100%;
+}
+
+.user-guide-primary {
+  background: var(--navy);
+  border-color: var(--navy);
+  color: var(--white);
+}
+
+@media (min-width: 720px) {
+  .user-guide-root {
+    align-items: center;
+  }
+
+  .user-guide-root .mobile-sheet-grab {
+    display: none;
+  }
+
+  .user-guide-root .mobile-sheet {
+    border-radius: 1.4rem;
+    max-height: min(88vh, 48rem);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .user-guide-root .mobile-sheet {
+    animation: none;
+  }
+}

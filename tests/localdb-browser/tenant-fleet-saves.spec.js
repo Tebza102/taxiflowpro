@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
 
 import { BUSINESS_A_ID, LOCAL_TEST_PASSWORD } from "../../scripts/localdb/seed-data.mjs";
+import { skipUserGuideWhenShown } from "../user-guide-helpers.mjs";
 
 // Release 06, LOCAL TEST stack (TAXIFLOW_LOCALDB_PROFILE=test, after a reset):
 // the Owner gives a Manager route/vehicle and driver management in Business
@@ -14,6 +15,7 @@ const sql = (text) =>
   execFileSync(process.execPath, ["--input-type=module", "-e", `const { psql } = await import("./scripts/localdb/lib/exec.mjs"); process.stdout.write(psql(${JSON.stringify(text)}).stdout);`], { encoding: "utf8" }).trim();
 
 const signIn = async (page, email) => {
+  await skipUserGuideWhenShown(page);
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
   await page.getByLabel("Email").fill(email);

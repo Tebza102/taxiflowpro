@@ -16,6 +16,7 @@ import {
   Eye,
   EyeOff,
   FileText,
+  HelpCircle,
   LayoutDashboard,
   Loader2,
   Lock,
@@ -35,6 +36,7 @@ import { TripLegOptionalFields } from "./components/TripLegOptionalFields";
 import { ReportsPanel } from "./components/ReportsPanel";
 import PlatformCompaniesPanel from "./components/PlatformCompaniesPanel";
 import TenantAccessPanel from "./components/TenantAccessPanel";
+import { UserGuideSheet } from "./components/UserGuideSheet";
 const formatSignedMoney = (value) => {
   const amount = Number(value ?? 0);
   if (amount === 0) return formatMoney(0);
@@ -42,6 +44,12 @@ const formatSignedMoney = (value) => {
 };
 import { buildZeroCashClosure, getDayCashSettlement, getDriverCashUpWorkflowStatus as getDayWorkflowStatus, isClosedWithoutDeposit } from "./lib/cashUpContract";
 import { repository } from "./lib/dataGateway";
+import {
+  buildUserGuide,
+  getUserGuideStorageKey,
+  isUserGuideComplete,
+  markUserGuideComplete,
+} from "./lib/userGuide";
 import {
   TENANT_UNSUPPORTED_MESSAGE,
   isTenantMode,
@@ -1062,6 +1070,27 @@ function App() {
       setActiveView(allowedViews[0]?.id ?? "overview");
     }
   }, [activeRole, activeView, allowedViews]);
+
+  // "How to use TaxiFlow": opens on the first sign-in of this user to this
+  // workspace (business), then only from Help.
+  // In the business workspace the key follows tenantMeta (the business bar's
+  // source): a Driver's local terminal update replaces snapshot.meta.
+  const userGuideKey = getUserGuideStorageKey({
+    userKey: authIdentity ? authSession?.user?.id ?? authIdentity.email : null,
+    workspaceKey: tenantLive
+      ? snapshot?.meta?.tenantNeedsSelection
+        ? null
+        : tenantMeta?.businessId ?? null
+      : effectiveBackendMode,
+  });
+  const [userGuideOverride, setUserGuideOverride] = useState({ key: null, open: false });
+  const userGuideSeen = useMemo(() => isUserGuideComplete(userGuideKey), [userGuideKey]);
+  const userGuideOpen = Boolean(userGuideKey) &&
+    (userGuideOverride.key === userGuideKey ? userGuideOverride.open : !userGuideSeen);
+  const closeUserGuide = () => {
+    markUserGuideComplete(userGuideKey);
+    setUserGuideOverride({ key: userGuideKey, open: false });
+  };
 
   useEffect(() => {
     if (loading || authLoading) {
@@ -5976,6 +6005,16 @@ function App() {
                 )}
                 <button
                   type="button"
+                  className="role-pill compact user-guide-trigger"
+                  onClick={() => setUserGuideOverride({ key: userGuideKey, open: true })}
+                  aria-haspopup="dialog"
+                  title="Show the How to use TaxiFlow guide again"
+                >
+                  <HelpCircle size={14} />
+                  <span>Help</span>
+                </button>
+                <button
+                  type="button"
                   className="role-pill compact"
                   onClick={handleSignOut}
                   disabled={authSubmitting}
@@ -6207,6 +6246,30 @@ function App() {
           </button>
         ))}
       </nav>
+
+      <UserGuideSheet
+        open={userGuideOpen}
+        getGuide={() => buildUserGuide({
+          role: activeRole,
+          views: allowedViews.map((item) => item.id),
+          linkedVehicleCount:
+            activeRole === "Driver"
+              ? currentSnapshot.driverTerminal?.linkedVehicleIds?.length ?? 0
+              : null,
+          cash: { count: canCountCashNow(), verify: canVerifyCashNow(), bank: canBankCashNow() },
+          tenant: {
+            live: tenantLive,
+            ownerDriver: tenantOwnerDriver,
+            fleetManage: tenantPanelAccess?.fleet ?? true,
+            driversManage: tenantPanelAccess?.drivers ?? true,
+          },
+        })}
+        onClose={closeUserGuide}
+        onNavigate={(view) => {
+          closeUserGuide();
+          setActiveView(view);
+        }}
+      />
     </div>
   );
 }

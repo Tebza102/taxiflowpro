@@ -4,6 +4,7 @@ import { mkdirSync } from "node:fs";
 import { expect, test } from "@playwright/test";
 
 import { BUSINESS_A_ID, LOCAL_TEST_PASSWORD } from "../../scripts/localdb/seed-data.mjs";
+import { skipUserGuideWhenShown } from "../user-guide-helpers.mjs";
 
 // Branding in tenant mode (Task 19), LOCAL stack: business picker, finance
 // (Money) and Business access show the approved logo at its own proportions,
@@ -14,6 +15,7 @@ const SHOTS = "test-results/branding-tenant";
 mkdirSync(SHOTS, { recursive: true });
 
 const signIn = async (page, email) => {
+  await skipUserGuideWhenShown(page);
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
   await page.getByLabel("Email").fill(email);

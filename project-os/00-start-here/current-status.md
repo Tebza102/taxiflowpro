@@ -1,5 +1,20 @@
 # Current Status
 
+## Repository context and open stack (verified 2026-10-28)
+
+- Repository: `Tebza102/taxiflowpro`. In this repository PR #6 is TaxiFlow's release 06 (`agent/owner-responsibilities`, open draft, unchanged at `51a0f5d`). It is not the separate client-workspace project's PR #6, which lives in another repository and is not touched from here. No `feature/client-centred-workspace` branch exists here.
+- Stack (each a draft PR; nothing merged or deployed; production is `main` `af3e5ad`):
+  1. PR #6 release 06: `agent/owner-responsibilities` -> `main`.
+  2. PR #7 in-app guide: `agent/user-guide` (`8b7c0cb`, `99cf0c6`) -> `agent/owner-responsibilities`. Depends on release 06 code (`tenantCan`, cash-step and panel-access helpers).
+  3. PR #8 driver salaries: `agent/driver-salary` (`bd063c5`) -> `agent/user-guide`. Uses the guide (salary sentence) and release 06's finance-action permissions.
+- Merge order: #6, #7, #8, retargeting each to `main` as the one below merges.
+
+## Driver salaries (2026-10-28): draft PR #8, not deployed
+
+- Money > Expenses: per-driver salary schedule (no expense), Record payment (one verified Salary expense per driver and period; duplicates refused), and a monthly expense report CSV with salary lines and reconciled totals. Salaries never change a driver's cash hand-in; bank payments are not cash expenses. Data model: `04-technical/data-model.md`.
+- Tests on the final code: Node 381/381 (13 salary); mock Playwright 44 passed + 1 timeout loading the sign-in page on the first test of the run (`branding.spec.js` desktop; passed 6/6 on two reruns); local tenant suite 17/17 on a fresh reset (2 salary); sync guards; build.
+- Outstanding: real Android phone check; hosted Preview UAT/preview-test; a real user opening the CSV in a spreadsheet app.
+
 ## In-app guide "How to use TaxiFlow" (2026-10-28): draft PR #7, branch `agent/user-guide` (stacked on release 06); not deployed
 
 - Before this, no post-login guide existed (only a sign-in "forgot password" help toggle).

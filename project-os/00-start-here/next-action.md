@@ -1,5 +1,11 @@
 # Next Action
 
+## Open stack: PR #6 -> #7 -> #8 (2026-10-28)
+
+1. **Review in order:** PR #6 (release 06), then PR #7 (guide, base `agent/owner-responsibilities`), then PR #8 (driver salaries, base `agent/user-guide`). Merge only in that order, retargeting to `main` each time. Nothing here authorises a merge or deployment.
+2. **Real-device and hosted checks (not performed):** on a low-spec Android phone, the guide (open, scroll, Skip, Help) and salaries (schedule, record payment, CSV download); hosted Preview UAT and the preview-test journey.
+3. **Decision for Tebogo (optional):** the salary prompt referenced as "previously supplied" was not available in the repository or the session; PR #8 follows the financial rules given on 2026-10-28. Confirm the weekly/monthly periods, and that cash salaries are paid from the business (not deducted from a driver's hand-in).
+
 ## In-app guide "How to use TaxiFlow" (2026-10-28): draft PR #7
 
 1. **Review draft PR #7** (`agent/user-guide`, stacked on `agent/owner-responsibilities`). Merge only after PR #6; then retarget #7 to `main`. PR #6 is unchanged.

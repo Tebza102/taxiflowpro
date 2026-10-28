@@ -1714,3 +1714,19 @@ What `platform-admin-tests.mjs` covers:
 
 **Next action:** review PR #7; merge after #6, then retarget to `main`.
 
+### 2026-10-28 — Repository context corrected; driver salaries (draft PR #8)
+
+**Changed by:** Agent (Claude). Branch `agent/driver-salary`, commit `bd063c5`, draft PR #8 (base `agent/user-guide`). PR #6 / `agent/owner-responsibilities` untouched at `51a0f5d`.
+
+**Context:** a correction suggested PR #6 belonged to a separate client-workspace project. Verified here: `Tebza102/taxiflowpro` PR #6 is TaxiFlow release 06, open draft; no client-workspace branch exists. Tebogo confirmed the repository evidence takes precedence; the stack #6 -> #7 -> #8 stays.
+
+**Files changed:** `src/lib/salaryContract.js` (new, shared rules), `api/_lib/salaryActions.js` (new), `api/_lib/financeActions.js` (registers 2 actions), `src/components/DriverSalaryPanel.jsx` (new), `src/App.jsx` (handlers, panel, edit guard for recorded salaries), `src/styles.css`, `src/lib/userGuide.js` (one sentence), tests `tests/salary.test.mjs`, `tests/driver-salary.spec.js`, `tests/localdb-browser/driver-salary-tenant.spec.js`, `tests/user-guide.test.mjs`; `project-os/04-technical/data-model.md`.
+
+**Financial rules proven:** schedule adds no expense and stays out of totals; one expense per driver and period (form block + server 409); paid and scheduled amounts kept after schedule changes; bank and cash salaries leave a driver's expected cash unchanged; report lines and totals count each payment once and reconcile; drivers and no-Money managers receive no salary data.
+
+**Tests (final code):** Node 381/381; mock Playwright 44 passed + 1 timeout loading the sign-in page on the first test of the run (branding desktop; 6/6 on two reruns); local tenant suite 17/17 (fresh reset, isolated test profile); sync guards; build.
+
+**Result:** Pass locally. Not merged, not deployed.
+
+**Outstanding:** real Android phone; hosted Preview UAT/preview-test; spreadsheet check of the CSV by a real user. The "previously supplied" salary prompt was not available; the rules given on 2026-10-28 were implemented.
+

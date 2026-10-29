@@ -329,6 +329,35 @@ export function PeriodReportSection({ snapshot, accessToken, isDemo, demoBody = 
             rows={report.expenseBreakdown.map((group) => [group.category, group.count, rand(group.amountCents)])}
           />
 
+          {report.commitments && (
+            <>
+              <div className="queue-stats" data-testid="period-report-commitments-summary">
+                <Stat label="Scheduled commitments (not expenses)" value={`${rand(report.commitments.scheduledCents)} (${report.commitments.count})`} />
+                <Stat label="Recorded as paid" value={`${rand(report.commitments.paidCents)} (${report.commitments.paidCount})`} />
+                <Stat
+                  label={`Not recorded (${report.commitments.overdueCount} overdue)`}
+                  value={`${rand(report.commitments.unpaidCents)} (${report.commitments.unpaidCount})`}
+                  testId="period-report-commitments-unpaid"
+                  tone={report.commitments.overdueCount ? "danger" : undefined}
+                />
+              </div>
+              <Table
+                caption={`Scheduled commitments: recurring expenses due in these dates, as at ${report.commitments.asOf} (not in the totals above)`}
+                testId="period-report-commitments"
+                empty="No recurring expenses fall due in these dates."
+                columns={[{ label: "Due" }, { label: "Description" }, { label: "Vehicle" }, { label: "Scheduled", align: "end" }, { label: "Status" }, { label: "Recorded payment", align: "end" }]}
+                rows={report.commitments.items.map((item) => [
+                  item.dueDate,
+                  `${item.description} (${item.periodLabel})`,
+                  item.vehicle ?? "No vehicle",
+                  rand(item.scheduledCents),
+                  item.statusLabel,
+                  item.paidCents == null ? "-" : `${rand(item.paidCents)} on ${item.paidDate}`,
+                ])}
+              />
+            </>
+          )}
+
           {report.kind === "business" && (
             <>
               <Table

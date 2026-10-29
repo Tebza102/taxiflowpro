@@ -9,6 +9,13 @@
   3. PR #8 driver salaries: `agent/driver-salary` (`bd063c5`) -> `agent/user-guide`. Uses the guide (salary sentence) and release 06's finance-action permissions.
 - Merge order: #6, #7, #8, retargeting each to `main` as the one below merges.
 
+## Recurring fixed expenses (Prompt 3, 2026-10-29): branch `agent/recurring-expenses` (stacked on `agent/driver-salary-profile`); not merged or deployed
+
+- Money > Expenses > Recurring fixed expenses: schedules (description, category, amount, business-wide or one vehicle, daily/weekly/fortnightly/monthly, first due date, optional end date) with Due / Overdue / Paid / Upcoming occurrences calculated when the app opens (no background process), Record payment prefilled from the occurrence, Edit future (effective-dated), Pause, Resume, Stop (payments and history kept).
+- Server actions with Money-edit permission; duplicates refused across refreshes, retries and concurrent requests; method separate from source (only a named driver's takings lowers that driver's expected cash, on an open day).
+- Reports: payments counted once as expenses; scheduled commitments shown separately (not in totals) on screen, CSV and PDF; business-wide costs stay unallocated; vehicle-linked schedules appear in their vehicle report.
+- Evidence: change-log 2026-10-29 (Prompt 3). Not checked: real phone, spreadsheet app, hosted Preview.
+
 ## Salary settings in the driver profile (Prompt 2, 2026-10-29): branch `agent/driver-salary-profile` (stacked on `agent/period-reports`); not merged or deployed
 
 - Drivers > Add driver / Edit profile has an optional Salary section (amount, frequency, start/effective date, payment timing, Active/Paused) on the one existing arrangement model; it shows the current arrangement, next/due and amount history, and never records a payment. Money > Driver salaries keeps payments (scheduled and manual), duplicates, sources and history, with "Salary settings" links into the profile and a link back.

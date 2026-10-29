@@ -73,3 +73,16 @@ Date: ______  Checked by: ______  Device: ______
 | D4 | Money > Driver salaries > Salary settings on that driver. | Opens the driver's profile at Salary. "Record or review salary payments in Money" goes back. | |
 | D5 | As a Manager whose Money is off: Drivers > Edit profile. | Profile fields editable (if given driver management); no Salary section anywhere. | |
 | D6 | On the phone: the Salary section fields and buttons are easy to tap; nothing cut off sideways. | | |
+
+## E. Recurring fixed expenses (added 2026-10-29, branch `agent/recurring-expenses`)
+
+Date: ______  Checked by: ______  Device/app: ______
+
+| # | Steps | Expected result | Result |
+|---|---|---|---|
+| E1 | As Owner: Money > Expenses > Recurring fixed expenses > Add recurring expense. "Office rent", Rent, R 1 500, Business-wide, Monthly, first due date two months ago. Save schedule. | "Recurring expense saved ... No expense was added." The row shows Overdue occurrences and the next due date. | |
+| E2 | Record payment on the oldest Overdue line. | The form shows R 1 500, today's date, Bank. After saving, that line shows Paid with the amount and date; no Record payment button on it. | |
+| E3 | Refresh the page. | Still one Paid line; nothing added twice. | |
+| E4 | Pause, then Resume, then Stop (keep today). | Status chip changes Paused / Active / Stopped; the Paid line stays. | |
+| E5 | Reports > Overall business > Custom dates covering the two months > View report; download PDF and CSV. | "Scheduled commitments" lists each due date with Paid/Overdue; the rent payment appears once under Transactions; totals unchanged by commitments; the CSV opens in columns and reconciles. | |
+| E6 | Add a recurring expense linked to JHB 457 GP; Reports > Individual vehicle > JHB 457 GP. | Its commitments appear there; the business-wide rent does not. | |

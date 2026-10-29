@@ -19,6 +19,9 @@ const TRIP_LEG_FIELDS = [
   "openingOdo", "opening_odo", "closingOdo", "closing_odo", "route", "routeId", "routeName",
 ];
 const EDIT_FIELDS = ["actorId", "actorName", "actorRole", "timestamp", "reason", "summary", "changes", "lastEditedAt"];
+const RECURRING_PAYMENT_FIELDS = ["scheduleId", "frequency", "period", "periodLabel", "dueDate", "scheduledAmount", "method", "source"];
+const RECURRING_VERSION_FIELDS = ["effectiveFrom", "amount", "description", "category", "vehicleId", "vehicle"];
+const RECURRING_SCHEDULE_FIELDS = ["id", "description", "category", "amount", "vehicleId", "vehicle", "frequency", "startDate", "endDate", "status", "revision"];
 const SALARY_FIELDS = ["arrangementId", "manual", "driverStaffId", "driverName", "frequency", "period", "periodLabel", "periodStart", "periodEnd", "scheduledAmount", "method", "source"];
 
 // Top-level fields per list; nested lists/objects have their own allowlists.
@@ -58,6 +61,7 @@ const transaction = (record) => {
   if (Array.isArray(record.tripLogbook)) out.tripLogbook = pickList(record.tripLogbook, TRIP_LEG_FIELDS);
   if (Array.isArray(record.editHistory)) out.editHistory = pickList(record.editHistory, EDIT_FIELDS);
   if (isRecord(record.salaryPayment)) out.salaryPayment = pick(record.salaryPayment, SALARY_FIELDS);
+  if (isRecord(record.recurringPayment)) out.recurringPayment = pick(record.recurringPayment, RECURRING_PAYMENT_FIELDS);
   return out;
 };
 const cashUp = (entry) => {
@@ -77,7 +81,14 @@ const person = (item) => ({
 
 export const sanitizeDemoReportSnapshot = (snapshot = {}) => ({
   profile: { fleetName: text(snapshot.profile?.fleetName) || null, legalEntity: text(snapshot.profile?.legalEntity) || null },
-  finance: {},
+  // Recurring schedules: only what the commitments in reports need.
+  finance: {
+    recurringExpenses: list(snapshot.finance?.recurringExpenses).filter(isRecord).map((schedule) => ({
+      ...pick(schedule, RECURRING_SCHEDULE_FIELDS),
+      versions: pickList(schedule.versions, RECURRING_VERSION_FIELDS),
+      pauses: pickList(schedule.pauses, ["from", "to"]),
+    })),
+  },
   financeTransactions: list(snapshot.financeTransactions).filter(isRecord).map(transaction),
   vehicles: pickList(snapshot.vehicles, DEMO_REPORT_FIELDS.vehicles),
   dailyCashUps: list(snapshot.dailyCashUps).filter(isRecord).map(cashUp),

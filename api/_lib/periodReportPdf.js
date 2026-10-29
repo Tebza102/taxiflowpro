@@ -191,6 +191,19 @@ const breakdowns = (ctx) => {
     report.vehicles.map((row) => [row.label, String(row.trips), amount(row.incomeCents), amount(row.expenseCents), amount(row.netCents)]));
 };
 
+const commitments = (ctx) => {
+  const c = ctx.report.commitments;
+  if (!c) return;
+  section(ctx, `Scheduled commitments (not expenses; as at ${c.asOf})`);
+  table(ctx, [
+    { label: "Due", width: 0.12 }, { label: "Description", width: 0.3 }, { label: "Vehicle", width: 0.13 },
+    { label: "Scheduled", width: 0.15, align: "right" }, { label: "Status", width: 0.12 }, { label: "Recorded", width: 0.18, align: "right" },
+  ], [
+    ...c.items.map((item) => [item.dueDate, `${item.description} (${item.periodLabel})`, item.vehicle ?? "No vehicle", amount(item.scheduledCents), item.statusLabel, item.paidCents == null ? "-" : `${amount(item.paidCents)} on ${item.paidDate}`]),
+    ...(c.count ? [["Total", `${c.count} in these dates; ${c.paidCount} recorded, ${c.unpaidCount} not (${c.overdueCount} overdue)`, "", amount(c.scheduledCents), "", amount(c.paidCents)]] : []),
+  ], { emptyMessage: "No recurring expenses fall due in these dates.", bold: (index) => index === c.items.length });
+};
+
 const checking = (ctx) => {
   const { report } = ctx;
   section(ctx, "Verification status");
@@ -294,6 +307,7 @@ export const renderPeriodReportPdf = (report, { source = "live" } = {}) =>
       summary(ctx);
       if (report.kind === "vehicle") vehicleDetails(ctx);
       breakdowns(ctx);
+      commitments(ctx);
       checking(ctx);
       transactions(ctx);
       notes(ctx);

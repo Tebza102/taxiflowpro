@@ -187,7 +187,7 @@ const buildManagementGuide = ({ role, views, cash, tenant }) => {
         "mgmt-expenses",
         "finance",
         "Record expenses",
-        "In Money, Expenses, choose the vehicle, the category and how it was paid. Cash paid out of takings lowers the cash to bank. Driver salaries are set in each driver's profile (Drivers, Edit profile, Salary): amount, how often, from when and whether it is paid at the start or end of the period. That schedule is only a plan, so record each payment once here in Driver salaries, when it is actually paid, and say where the money came from (bank, business cash or the driver's takings).",
+        "In Money, Expenses, choose the vehicle, the category and how it was paid. Cash paid out of takings lowers the cash to bank. Driver salaries are set in each driver's profile (Drivers, Edit profile, Salary): amount, how often, from when and whether it is paid at the start or end of the period. That schedule is only a plan, so record each payment once here in Driver salaries, when it is actually paid, and say where the money came from (bank, business cash or the driver's takings). Fixed costs such as rent, insurance or tracking go under Recurring fixed expenses: TaxiFlow shows what is due or overdue whenever it opens (nothing runs in the background); use Record payment when each one is actually paid.",
         "Example: R 450 tyre repair on JHB 457 GP, paid in cash.",
       ),
     );

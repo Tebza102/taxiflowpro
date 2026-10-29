@@ -93,3 +93,11 @@ test("guide: salary settings live in the driver profile; payments in Money; Repo
   assert.match(body("mgmt-drivers"), /Salary section appears only for people with Money access/);
   if (MANAGEMENT_VIEWS.includes("reports")) assert.match(body("mgmt-reports"), /business and vehicle reports/);
 });
+
+test("guide: recurring fixed expenses are explained honestly (calculated on open, recorded only when paid)", () => {
+  const guide = buildUserGuide({ role: "Owner", views: MANAGEMENT_VIEWS });
+  const body = guide.steps.find((step) => step.id === "mgmt-expenses").body;
+  assert.match(body, /Recurring fixed expenses/);
+  assert.match(body, /nothing runs in the background/);
+  assert.match(body, /Record payment when each one is actually paid/);
+});

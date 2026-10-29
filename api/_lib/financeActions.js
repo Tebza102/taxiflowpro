@@ -12,6 +12,7 @@ import { CAPTURE_ACTIONS } from "./financeCapture.js";
 import { FLEET_ACTIONS } from "./fleetActions.js";
 import { RECORD_ACTIONS } from "./financeRecordActions.js";
 import { SALARY_ACTIONS } from "./salaryActions.js";
+import { RECURRING_ACTIONS } from "./recurringActions.js";
 import { hasPermission, permissionLabel } from "../../src/lib/memberPermissions.js";
 import { createHttpError } from "./tenantAuth.js";
 
@@ -48,6 +49,8 @@ export const FINANCE_ACTIONS = Object.freeze({
   ...Object.fromEntries(Object.entries(FLEET_ACTIONS).map(([name, spec]) => [name, { roles: spec.roles, permission: spec.permission, fields: spec.fields, record: spec }])),
   // Driver salary schedule and payments (salaryActions.js): management with Money edit.
   ...Object.fromEntries(Object.entries(SALARY_ACTIONS).map(([name, spec]) => [name, { roles: spec.roles, requiresFinanceEdit: true, fields: spec.fields, record: spec }])),
+  // Recurring fixed expenses (recurringActions.js): management with Money edit.
+  ...Object.fromEntries(Object.entries(RECURRING_ACTIONS).map(([name, spec]) => [name, { roles: spec.roles, requiresFinanceEdit: true, fields: spec.fields, record: spec }])),
 });
 
 export const SELF_VERIFY_MESSAGE = "You counted this hand-in, so another authorized person must verify it.";

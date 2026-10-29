@@ -38,6 +38,7 @@ import PlatformCompaniesPanel from "./components/PlatformCompaniesPanel";
 import TenantAccessPanel from "./components/TenantAccessPanel";
 import { UserGuideSheet } from "./components/UserGuideSheet";
 import { DriverSalaryPanel } from "./components/DriverSalaryPanel";
+import { RecurringExpensesPanel } from "./components/RecurringExpensesPanel";
 import { DriverProfileSalary, createSalaryDraft, salaryFieldsFromDraft } from "./components/DriverProfileSalary";
 const formatSignedMoney = (value) => {
   const amount = Number(value ?? 0);
@@ -54,6 +55,14 @@ import {
   parseSalaryPayment,
   salaryArrangementForDriver,
 } from "./lib/salaryContract";
+import {
+  applyRecurringSchedule,
+  applyRecurringStatusChange,
+  buildRecurringPaymentRecord,
+  parseRecurringPayment,
+  parseRecurringSchedule,
+  parseRecurringStatusChange,
+} from "./lib/recurringExpenseContract";
 import {
   buildUserGuide,
   getUserGuideStorageKey,
@@ -3484,6 +3493,12 @@ function App() {
         error: "Recorded salary payments keep the amount that was paid and cannot be edited as a normal expense.",
       };
     }
+    if (existing?.recurringPayment) {
+      return {
+        ok: false,
+        error: "Recorded recurring expense payments keep the amount that was paid and cannot be edited as a normal expense.",
+      };
+    }
     if (!draft.category?.trim()) {
       return { ok: false, error: "Enter an expense category." };
     }
@@ -3865,6 +3880,46 @@ function App() {
         message: `Salary schedule saved for ${arrangement.driverName}. No expense was added.`,
       };
     }, base);
+  };
+
+  // Recurring fixed expenses (rules: src/lib/recurringExpenseContract.js).
+  // Business workspace: the server actions decide; demo/legacy: the same rules locally.
+  const saveRecurringExpense = async (fields) => {
+    if (tenantLive) {
+      return runTenantFinance(`recurring-schedule:${fields.scheduleId ?? "new"}`, "recurring.schedule_save", fields, "Recurring expense saved. No expense was added.");
+    }
+    return runLocalSalaryChange((current, actor, now) => {
+      const { finance, schedule, audit } = applyRecurringSchedule(current, parseRecurringSchedule(fields), actor, now, createRecordId("r").slice(2));
+      return { now, patch: { finance }, audit, message: `Recurring expense saved: ${schedule.description}. No expense was added.` };
+    });
+  };
+
+  const changeRecurringExpenseStatus = async (fields) => {
+    const done = { pause: "paused", resume: "resumed", stop: "stopped" }[fields.change] ?? "updated";
+    if (tenantLive) {
+      return runTenantFinance(`recurring-status:${fields.scheduleId}:${fields.change}`, "recurring.schedule_status", fields, `Recurring expense ${done}. Recorded payments are unchanged.`);
+    }
+    return runLocalSalaryChange((current, actor, now) => {
+      const { finance, schedule, audit } = applyRecurringStatusChange(current, parseRecurringStatusChange(fields), actor, now);
+      return { now, patch: { finance }, audit, message: `${schedule.description} ${done}. Recorded payments are unchanged.` };
+    });
+  };
+
+  const recordRecurringPayment = async (fields) => {
+    if (tenantLive) {
+      return runTenantFinance(`recurring-payment:${fields.scheduleId}:${fields.period}`, "recurring.payment_record", fields, "Payment recorded and added to expenses once.");
+    }
+    return runLocalSalaryChange((current, actor, now) => {
+      const { record, audit } = buildRecurringPaymentRecord(current, parseRecurringPayment(fields), actor, now, {
+        timestamp: createTimestampFromDateInput(fields.paidDate, now),
+      });
+      return {
+        now,
+        patch: { financeTransactions: [record, ...(current.financeTransactions ?? [])] },
+        audit,
+        message: `Payment recorded for ${record.description} and added to expenses once.`,
+      };
+    });
   };
 
   // Driver profile with its optional salary settings: the profile first (needs
@@ -6281,6 +6336,9 @@ function App() {
               onSaveExpense={saveExpense}
               onSaveExpensePreset={saveExpensePreset}
               onRecordSalaryPayment={recordSalaryPayment}
+              onSaveRecurringExpense={saveRecurringExpense}
+              onChangeRecurringExpenseStatus={changeRecurringExpenseStatus}
+              onRecordRecurringPayment={recordRecurringPayment}
               onOpenDriverSalary={(staffId) => {
                 setDriverProfileIntent({ staffId, nonce: Date.now() });
                 setActiveView("drivers");
@@ -7046,6 +7104,9 @@ function FinancePanel({
   onSaveExpense,
   onSaveExpensePreset,
   onRecordSalaryPayment,
+  onSaveRecurringExpense,
+  onChangeRecurringExpenseStatus,
+  onRecordRecurringPayment,
   onOpenDriverSalary,
   viewIntent = null,
   onViewIntentHandled,
@@ -8524,6 +8585,14 @@ function FinancePanel({
             businessName={snapshot.profile?.fleetName ?? ""}
             onOpenDriverSalary={onOpenDriverSalary}
             onRecordPayment={onRecordSalaryPayment}
+          />
+
+          <RecurringExpensesPanel
+            snapshot={snapshot}
+            canEdit={canEditFinanceUpdates}
+            onSaveSchedule={onSaveRecurringExpense}
+            onChangeStatus={onChangeRecurringExpenseStatus}
+            onRecordPayment={onRecordRecurringPayment}
           />
         </div>
       )}

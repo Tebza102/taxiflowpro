@@ -1825,3 +1825,17 @@ The monthly expense CSV alone did not meet the reporting requirement. Reports no
 **Risks remaining:** real phone, real spreadsheet app and hosted Preview not checked; a deployed demo (none exists) could not post session data.
 
 **Next action:** review the draft PR; Prompt 3 (recurring fixed expenses) when supplied.
+
+### 2026-10-29 — Recurring fixed expenses (Prompt 3), branch `agent/recurring-expenses`
+
+**Changed by:** Agent (Claude Code)
+
+**Files:** `src/lib/recurringExpenseContract.js` (new rules), `api/_lib/recurringActions.js` (new server actions, registered in `financeActions.js`), `src/components/RecurringExpensesPanel.jsx` (new), `src/App.jsx` (handlers, panel, local edit guard), `src/lib/periodReport.js` + `api/_lib/periodReportPdf.js` + `src/components/PeriodReportSection.jsx` (commitments), `src/lib/demoReportSnapshot.js` + `api/_lib/reportSnapshot.js` (demo allowlist + shape checks), `src/lib/salaryContract.js` (day-open check exported), `api/_lib/financeRecordActions.js` (payments not editable), `src/lib/userGuide.js`, `src/styles.css`; tests `tests/recurring-expenses.test.mjs` (9), `tests/recurring-expenses.spec.js` (3), `tests/localdb-browser/recurring-expenses-tenant.spec.js` (4), guide test (+1); Project OS.
+
+**Summary:** recurring fixed expenses on the existing expense, permission and finance-action workflows (details: `04-technical/data-model.md`). Occurrences are calculated when the app opens or a report is built (no background process, stated in the app and the reports). Record payment is prefilled; each payment is one expense, once. Reports show scheduled commitments separately from recorded expenses.
+
+**Tests run:** `scripts/verify-all.mjs` run `2026-10-29T07-47-49-202Z`: Node 426/426; sync guards pass; build pass; demo browser 61/61; tenant 31/31 after a fresh reset of the isolated test stack. After a one-string PDF wording change: Node 426/426, build, recurring demo spec 3/3 rerun. Sample PDFs (business 3 pages, vehicle 2 pages, `uat-reports/recurring-samples/`) rendered to images: 0 text outside the page, 0 overlaps, inspected visually. Sample CSV parsed independently: lines = totals, split and net reconcile; commitments section sums match its totals and are outside the expense totals.
+
+**Result:** Pass. Not merged or deployed.
+
+**Limitations:** no background job (occurrences appear when TaxiFlow is opened); frequency and first due date cannot be edited (stop and start a new schedule); real phone, spreadsheet app and hosted Preview not checked.

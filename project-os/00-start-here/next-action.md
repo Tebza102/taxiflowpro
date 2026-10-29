@@ -1,5 +1,12 @@
 # Next Action
 
+## Business and vehicle reports (2026-10-29): draft PR on `agent/period-reports`
+
+1. **Review the draft PR** (base `agent/driver-salary`, PR #8). Merge order becomes #6, #7, #8, then this one. Nothing authorises a merge or deployment.
+2. **Look at a sample PDF and CSV by eye** (demo data): open Reports, choose Overall business / Monthly / March 2026, View report, download both. The agent could not render the PDF to an image on this machine; its content is test-asserted only.
+3. **Manual checks still outstanding:** real Android phone and a spreadsheet app, now including the new report CSV (`06-quality/manual-checks-guide-and-salary.md`, section C).
+4. Optional: a hosted Preview check against the isolated test project needs the same approvals as on 2026-10-28 (branch variables, temporary bypass, restore the paused test project).
+
 ## Open stack: PR #6 -> #7 -> #8 (2026-10-28)
 
 1. **Review in order:** PR #6 (release 06), then PR #7 (guide, base `agent/owner-responsibilities`), then PR #8 (driver salaries, base `agent/user-guide`). Merge only in that order, retargeting to `main` each time. Nothing here authorises a merge or deployment.

@@ -1774,3 +1774,30 @@ What `platform-admin-tests.mjs` covers:
 
 **Outstanding:** real Android and spreadsheet checks (`06-quality/manual-checks-guide-and-salary.md`).
 
+
+### 2026-10-29 — Business and vehicle reports (Prompt 1), branch `agent/period-reports`
+
+**Changed by:** Agent (Claude Code)
+
+**Files changed:**
+- `src/lib/periodReport.js` (new, shared calculations), `api/admin/reports/period.js` (new endpoint: json/csv/pdf), `api/_lib/periodReportPdf.js` (new PDF), `api/_lib/dailyFinanceReportPdf.js` (exports brand helpers only), `src/components/PeriodReportSection.jsx` (new), `src/components/ReportsPanel.jsx`, `src/styles.css`, `vite.config.js` (dev route)
+- Tests: `tests/period-report.test.mjs` (13), `tests/period-reports.spec.js` (7), `tests/localdb-browser/period-reports-tenant.spec.js` (4), `tests/vercel-routing.test.mjs` (+1)
+- Project OS: current-status, next-action, `04-technical/data-model.md`, `06-quality/manual-checks-guide-and-salary.md` (section C)
+
+**Summary:**
+The monthly expense CSV alone did not meet the reporting requirement. Reports now has Business and vehicle reports (scope Overall business / Individual vehicle; Daily, Weekly Mon-Sun, Monthly, Custom dates; View report; applied scope and dates shown; PDF and CSV of exactly the report shown). One server-built report per request feeds screen, CSV and PDF. Business costs without a vehicle and driver salaries are shown separately and never allocated to vehicles. Net result labelled "recorded income less recorded expenses", not profit. Historical limits disclosed in each report. The daily cash report is kept and its narrower purpose explained. Access is checked server-side before the request is read (Owner, or Admin/Manager with Money on; Driver/Viewer 403; no session 401; other business 403).
+
+**Tests run:**
+- Node unit suite: 399/399 (13 new period-report: periods incl. leap year and year-end week, invalid/reversed/over-long refused, first/last-day boundaries, SAST capture-time fallback, cents reconciliation, business expense without a vehicle counted once and in no vehicle report, salaries never in vehicle reports, cash checking/banking, legacy Salary disclosure, CSV figures and formula neutralising, permissions by role and Money access, HTTP 401/400, JSON/CSV/PDF agreement, PDF A4 + DEMO marking).
+- Sync guards: pass. Build: pass.
+- Mock Playwright: 54/54 (7 new: screen/CSV/PDF agree for the monthly business report; vehicle scope excludes shared costs; custom dates and stale-filter warning; Manager/Admin allowed, Driver/Viewer no Reports; daily cash report kept; endpoint 401 live; 360px width with no sideways scroll and 44px buttons).
+- Local tenant suite (isolated test stack, fresh reset): 21/22 on the first run; the failure was the new spec navigating before sign-out finished (test defect, fixed by waiting for the sign-in screen); rerun of the new spec 4/4 (Owner/Admin/Manager 200 in all formats; Driver 403; business B Owner 403 on business A, 200 on B; Owner A's on-screen report is business A's live data).
+
+**Result:** Pass.
+
+**Risks remaining:**
+- PDF layout not inspected by eye by the agent (no renderer on this machine); content asserted by tests. Samples sent to Tebogo.
+- Not checked on a real phone, in a real spreadsheet app, or on a hosted Preview.
+
+**Next action:**
+- Tebogo reviews the sample PDF and the draft PR; Prompt 2 (salary settings in the driver profile) on request.

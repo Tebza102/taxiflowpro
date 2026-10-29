@@ -17,7 +17,8 @@ const reportApiDevRoutes = () => ({
       // Vercel's api/business/<name>.js and api/platform/<name>.js routing.
       const businessMatch =
         /^\/api\/(business)\/(workspace|memberships|members|finance-actions)$/.exec(url.pathname) ??
-        /^\/api\/(platform)\/(businesses)$/.exec(url.pathname);
+        /^\/api\/(platform)\/(businesses)$/.exec(url.pathname) ??
+        /^\/api\/(admin\/reports)\/(period)$/.exec(url.pathname);
 
       if (businessMatch) {
         try {

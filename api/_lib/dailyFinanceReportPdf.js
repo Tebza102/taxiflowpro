@@ -9,7 +9,7 @@ import { formatOperatingDate, formatSastDateTime, formatSastTimestamp } from "./
 // Brand values live here so they can be corrected without touching layout code.
 // Colours are the app's own tokens (src/styles.css); the app's Aptos/Bahnschrift
 // fonts are licensed system fonts that can't be embedded, so Helvetica is used.
-const BRAND = {
+export const BRAND = {
   name: "TaxiFlow Pro",
   // Approved brand palette (Task 19). Orange is a chart fill only, never text.
   navy: "#0A1925",
@@ -21,7 +21,7 @@ const BRAND = {
   panel: "#F5F7FA",
   alert: "#B03A2E",
 };
-const LOGO_PATH = path.join(
+export const LOGO_PATH = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "..",
   "..",
@@ -50,7 +50,7 @@ const MAX_NOTES_LENGTH = 1500;
 // its unaccented base letter where possible, otherwise replaced with "?", so a
 // stray emoji in a note can never corrupt the page.
 const WIN_ANSI_EXTRAS = new Set("€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ");
-const toPdfText = (value) =>
+export const toPdfText = (value) =>
   Array.from(String(value ?? ""))
     .map((char) => {
       const code = char.codePointAt(0);

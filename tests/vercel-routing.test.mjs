@@ -23,8 +23,13 @@ test("the SPA catch-all never rewrites /api paths and comes last", () => {
   assert.equal(last.destination, "/index.html");
   const pattern = new RegExp(`^${last.source.replace(/^\//, "\\/")}$`);
   assert.ok(pattern.test("/finance") && pattern.test("/") && pattern.test("/reports/x"));
-  for (const path of ["/api/business/workspace", "/api/admin/daily-log/x/report-view", "/api/admin/auth-users"]) {
+  for (const path of ["/api/business/workspace", "/api/admin/daily-log/x/report-view", "/api/admin/auth-users", "/api/admin/reports/period"]) {
     assert.ok(!pattern.test(path), `${path} is not sent to index.html`);
   }
   assert.ok(!rewrites.some((r) => r.source === "/api/admin/:path*"), "no self-rewrite of /api/admin");
+});
+
+test("the period report is served from its own static function file (no rewrite needed)", () => {
+  assert.ok(existsSync(new URL("../api/admin/reports/period.js", import.meta.url)));
+  assert.ok(!rewrites.some((r) => r.source.startsWith("/api/admin/reports")), "no rewrite shadows it");
 });

@@ -8,6 +8,7 @@ import {
   normalizeCashUpWorkflowStatus,
 } from "../lib/cashUpContract";
 import { getActiveBusinessId } from "../lib/tenantWorkspace";
+import { PeriodReportSection } from "./PeriodReportSection";
 
 // Adding a report later means adding an entry here plus its own endpoint pair.
 const REPORT_TEMPLATES = [
@@ -245,6 +246,18 @@ export function ReportsPanel({ snapshot, activeRole, canAccessReports, accessTok
           Demo mode: reports use demo data and every PDF is marked DEMO DATA.
         </p>
       )}
+
+      <PeriodReportSection snapshot={snapshot} accessToken={accessToken} isDemo={isDemo} modeQuery={modeQuery} />
+
+      <div className="overview-board-head period-report-divider" data-testid="daily-cash-report">
+        <p className="eyebrow">One day's cash-up</p>
+        <h3>Daily cash report</h3>
+      </div>
+      <p className="finance-form-note">
+        The Daily Finance Report covers a single cash-up: one vehicle or driver on one day, with its hand-in, count,
+        variance, verification and banking. Use it to check that day's cash. For income, expenses, salaries and
+        results over a period, use Business and vehicle reports above.
+      </p>
 
       <div className="finance-form">
         <div className="finance-form-grid">

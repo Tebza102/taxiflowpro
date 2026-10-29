@@ -1839,3 +1839,32 @@ The monthly expense CSV alone did not meet the reporting requirement. Reports no
 **Result:** Pass. Not merged or deployed.
 
 **Limitations:** no background job (occurrences appear when TaxiFlow is opened); frequency and first due date cannot be edited (stop and start a new schedule); real phone, spreadsheet app and hosted Preview not checked.
+
+### 2026-10-29 — Phone fixes: report PDF download and compact mobile menu (branch `agent/phone-fixes`)
+
+**Changed by:** Agent
+
+**Files changed:**
+- `src/lib/reportDownload.js` (new), `src/components/ReportFileStatus.jsx` (new), `src/components/PeriodReportSection.jsx`, `src/components/ReportsPanel.jsx`
+- `src/components/MobileNavDrawer.jsx` (new), `src/App.jsx`, `src/styles.css`
+- `tests/report-downloads.spec.js` (new), `tests/mobile-navigation.spec.js` (new)
+
+**Summary:**
+Two issues from real-phone testing of the demo over the phone hotspot.
+
+1. *PDF report could not be downloaded.* Evidence: the server path is healthy. A Pixel 7 emulation over the LAN address got POST `/api/admin/reports/period?...format=pdf&mode=mock` 200 `application/pdf` 384 KB and a download; business (3 pages), vehicle (2) and daily (1) PDFs rendered with PyMuPDF. The difference on the real phone is the address: the demo is plain `http://` on a LAN IP, which is not a secure origin, and Chrome on Android warns about or blocks downloads from such pages. The app made this invisible: it always said "Downloaded <file>" after handing the file to the browser, offered no retry, the daily report had no timeout, and a non-PDF body would have been saved as a broken file. The exact message on the phone is not yet known (Tebogo to report; F4). Fix: one shared download path for the business, vehicle and daily PDFs (and the CSV). It uses a 60s timeout, checks the `%PDF-` header and refuses an unreadable body. The screen says "PDF ready: <file> (size)", never "Downloaded", and offers an Open PDF button (a real tap on a link to the kept file). A failure shows the reason and Try again. Filters, scope, permissions and the single server report are unchanged, so screen, PDF and CSV still reconcile.
+2. *Mobile menu covered content.* The fixed translucent bottom bar had five columns for six modules, so it wrapped to two rows (about 130px) over the content. Replaced on small screens with a compact top bar (menu button, current page title), which also shows on short touch screens such as a phone turned sideways. The drawer is closed by default and opens only from the button; it closes after choosing a page, on the backdrop or on Escape. It reuses the sheet accessibility hook (focus trap, scroll lock, focus return), has 44px targets, `aria-current`, `aria-expanded` and a scrollable list, and lists exactly the role- and module-filtered pages. The bar is navy at 94% opacity with blur and white text. Desktop module buttons are unchanged.
+
+**Tests run:**
+- New `tests/mobile-navigation.spec.js` 4/4 (portrait, landscape 780x320 scrolling, Driver pages only, desktop unchanged) and `tests/report-downloads.spec.js` 4/4 (business, vehicle and daily PDFs complete with `%%EOF`; Open PDF hands over the same bytes; aborted and 500 responses show Try again, which then succeeds; an HTML body is refused and nothing is saved).
+- Full `node scripts/verify-all.mjs` run `2026-10-29T13-52-13-750Z`: node 426/426, guards, build, mock 69/69 (61 before + 8 new), tenant 30/31. The one failure was `tenant-onboarding.spec.js:70` on the desktop access screen, which these fixes do not touch: after "Grant access" succeeded, the driver row still read "No sign-in" within the 5s assertion window. Re-run on a fresh test-stack reset `2026-10-29T14-11-12-059Z`: tenant 31/31. Recorded as a timing flake to watch, not fixed here.
+
+**Result:**
+Pass in automation. Real-phone check NOT passed until Tebogo confirms (manual checks section F).
+
+**Risks remaining:**
+- Over plain http on a hotspot, Chrome may still ask to keep the file; that is the browser, not the app. Production is https and is not affected.
+- The desktop module card grid still appears at the top of each page on phones (content, not an overlay); unchanged by request scope.
+
+**Next action:**
+- Tebogo runs section F on the phone and reports what Chrome showed at F4.

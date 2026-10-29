@@ -9,7 +9,9 @@ import {
 } from "../lib/cashUpContract";
 import { sanitizeDemoReportSnapshot } from "../lib/demoReportSnapshot";
 import { getActiveBusinessId } from "../lib/tenantWorkspace";
+import { fetchReportFile } from "../lib/reportDownload";
 import { PeriodReportSection } from "./PeriodReportSection";
+import { ReportFileStatus } from "./ReportFileStatus";
 
 // Adding a report later means adding an entry here plus its own endpoint pair.
 const REPORT_TEMPLATES = [
@@ -64,6 +66,13 @@ const describeError = (status) => {
     return { kind: "missing", message: "This record could not be found. It may have been removed." };
   }
 
+  if (status === "timeout") {
+    return { kind: "failed", message: "The report took too long to prepare. Check your connection and try again." };
+  }
+  if (status === "invalid") {
+    return { kind: "failed", message: "The PDF came back incomplete or unreadable, so it was not saved. Try again." };
+  }
+
   return {
     kind: "failed",
     message: "The report could not be prepared. Check your connection and try again.",
@@ -80,12 +89,6 @@ const resolveDriverLabel = (snapshot, record) => {
   const staffId = getFinanceRecordDriverStaffId(record);
 
   return (snapshot.drivers ?? []).find((driver) => driver.staffId === staffId)?.name ?? "Driver not recorded";
-};
-
-const getFilename = (response, fallback) => {
-  const match = /filename="([^"]+)"/i.exec(response.headers.get("Content-Disposition") ?? "");
-
-  return match?.[1] ?? fallback;
 };
 
 export function ReportsPanel({ snapshot, activeRole, canAccessReports, accessToken, backendMode }) {
@@ -193,30 +196,11 @@ export function ReportsPanel({ snapshot, activeRole, canAccessReports, accessTok
     }
 
     setDownload({ status: "loading" });
-
-    try {
-      const response = await fetch(`${template.pdfPath(selectedId)}?${modeQuery}`, requestInit);
-
-      if (!response.ok) {
-        setDownload({ status: "error", ...describeError(response.status) });
-        return;
-      }
-
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = getFilename(response, `taxiflow-daily-finance-${operatingDate}-${selectedId}.pdf`);
-      link.rel = "noopener";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      // Mobile browsers read the blob after click() returns; revoke later.
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      setDownload({ status: "done", filename: link.download });
-    } catch {
-      setDownload({ status: "error", ...describeError(0) });
-    }
+    const outcome = await fetchReportFile(`${template.pdfPath(selectedId)}?${modeQuery}`, requestInit, {
+      format: "pdf",
+      fallbackName: `taxiflow-daily-finance-${operatingDate}-${selectedId}.pdf`,
+    });
+    setDownload(outcome.ok ? { status: "done", file: outcome.file } : { status: "error", ...describeError(outcome.status) });
   };
 
   if (!REPORT_ROLES.includes(activeRole) || !canAccessReports) {
@@ -452,16 +436,7 @@ export function ReportsPanel({ snapshot, activeRole, canAccessReports, accessTok
           {download.status === "loading" ? "Preparing PDF..." : "Download A4 PDF"}
         </button>
       </div>
-      {download.status === "done" && (
-        <p className="finance-form-note" data-tone="success" data-testid="reports-download-done">
-          Downloaded {download.filename}
-        </p>
-      )}
-      {download.status === "error" && (
-        <p className="finance-form-note" data-tone="danger" data-testid="reports-download-error">
-          {download.message}
-        </p>
-      )}
+      <ReportFileStatus download={download} onRetry={handleDownload} testIdPrefix="reports-download" />
     </section>
   );
 }

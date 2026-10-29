@@ -9,6 +9,12 @@
   3. PR #8 driver salaries: `agent/driver-salary` (`bd063c5`) -> `agent/user-guide`. Uses the guide (salary sentence) and release 06's finance-action permissions.
 - Merge order: #6, #7, #8, retargeting each to `main` as the one below merges.
 
+## Phone fixes (2026-10-29): branch `agent/phone-fixes` (stacked on `agent/recurring-expenses`); not merged or deployed
+
+- **Report PDFs on a phone:** server generation was healthy (emulated Android over the LAN: 200 `application/pdf`, readable business/vehicle/daily PDFs). The real-phone demo runs on plain `http://` at a LAN IP, where Chrome on Android warns about or blocks downloads, and the app hid this by always saying "Downloaded". Now one shared download path for all report files: 60s timeout, PDF header check, "PDF ready" (never "Downloaded"), Open PDF button, reason plus Try again on failure.
+- **Mobile menu:** the two-row translucent bottom bar is replaced by a compact top bar and a drawer. The top bar shows the menu button and current page, also on phones turned sideways. The drawer is closed by default, closes after navigating, on the backdrop or on Escape, has focus handling and 44px targets, and lists only the role/module pages. Desktop unchanged.
+- Two separate commits (menu first, then downloads). Evidence: change-log 2026-10-29 "Phone fixes". **Real-phone check not passed until Tebogo confirms** (manual checks section F).
+
 ## Recurring fixed expenses (Prompt 3, 2026-10-29): branch `agent/recurring-expenses` (stacked on `agent/driver-salary-profile`); not merged or deployed
 
 - Money > Expenses > Recurring fixed expenses: schedules (description, category, amount, business-wide or one vehicle, daily/weekly/fortnightly/monthly, first due date, optional end date) with Due / Overdue / Paid / Upcoming occurrences calculated when the app opens (no background process), Record payment prefilled from the occurrence, Edit future (effective-dated), Pause, Resume, Stop (payments and history kept).

@@ -1,5 +1,10 @@
 # Next Action
 
+## Phone fixes (2026-10-29): branch `agent/phone-fixes`
+
+1. **Tebogo:** on the phone, run section F of `06-quality/manual-checks-guide-and-salary.md`, using the demo address the agent gives. Report what Chrome showed when downloading the PDF (F4). The real-phone check stays open until then.
+2. Review the draft PR (base `agent/recurring-expenses`). Merge order: #6 … #11, then this one. Nothing authorises a merge or deployment.
+
 ## Recurring fixed expenses (Prompt 3, 2026-10-29): draft PR on `agent/recurring-expenses`
 
 1. **Review the draft PR** (base `agent/driver-salary-profile`, PR #10). Merge order: #6, #7, #8, #9, #10, then this one. Nothing authorises a merge or deployment.

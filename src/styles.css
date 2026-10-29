@@ -1017,6 +1017,23 @@ button {
   color: var(--danger);
 }
 
+.report-file-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.report-file-status p {
+  flex: 1 1 14rem;
+  margin: 0;
+}
+
+.report-file-status .action-button {
+  min-height: 2.75rem;
+  text-decoration: none;
+}
+
 .ledger-row {
   display: grid;
   gap: 0.7rem;

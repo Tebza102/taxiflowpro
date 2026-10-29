@@ -1929,3 +1929,29 @@ Pass in automation. Real-phone check NOT passed until Tebogo confirms.
 
 **Not changed:** production database, data, settings and deployment; no merge; billing.
 
+### 2026-10-29 — Release prerequisites revised (no production change)
+
+**Changed by:** Agent. Files: `project-os/05-build/release-stack-review.md` (rewritten sections 2-11), `release-06-review.md` (correction), new read-only `scripts/hosted/unchanged-data-release-06.sql`.
+
+- **File 06 data change corrected:**
+  - It backfills `business_memberships.permissions` on every existing row: Admin `{cash.count}`, Manager `{cash.verify, cash.bank}`, Owner and Driver `{}`.
+  - No other column changes (no `updated_at` trigger exists) and no other table changes.
+- **Verification defined:**
+  - New `unchanged-data-release-06.sql` covers businesses, memberships except `permissions` (including `updated_at`), snapshots, request log, platform admins and Auth users. It must be identical before and after, in a quiet window.
+  - `verify-release-06.sql` checks the intended changes.
+  - Proved on the isolated local test stack (undo, hash, re-apply, hash): both hash sets identical; backfill exactly the role defaults; post-checks 10/11, with row 9 false only because the local undo keeps the seeded audit table. Stack reset afterwards.
+- **Rollback compatibility proved:** a snapshot built by the new code (salary schedule, bank and takings salaries, recurring schedule and payment) was run through `af3e5ad` server code in a temporary worktree:
+  - an old write applied and the new records were preserved byte for byte;
+  - driver expected cash identical (450 under both apps);
+  - old Driver and no-Money views stay scoped.
+  - Application rollback, database undo and data restore are now separated; a data restore needs an explicit recovery decision.
+- **Vercel configuration read:**
+  - `autoAssignCustomDomains: false`; Git deployments on.
+  - Production domains: `taxiflow.co.za`, `taxiflow.apprigate.com`, `taxiflowpro.vercel.app`. The current production deployment holds those plus `taxiflowpro-apprigate.vercel.app` and `taxiflowpro-git-main-apprigate.vercel.app`.
+  - Public: `taxiflow.co.za` and `taxiflowpro.vercel.app`. The two team aliases need a Vercel login.
+  - Whether the `git-main` alias follows `main` before promotion is unconfirmed, so there is a gate after the #6 merge and file 06 goes first.
+- **Part B:** the test project is paused, so restore is a prerequisite. SQL-editor steps and the expected message are documented. The tool refusal was not bypassed.
+- **Backup:** exact export and verify commands documented. The env file uses the session pooler (direct host is IPv6-only); an optional local restore rehearsal is left to Tebogo's decision.
+
+**Not changed:** production database, data, settings, deployment; no merge; test project left paused; no new hosted runs.
+

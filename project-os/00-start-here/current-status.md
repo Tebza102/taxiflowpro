@@ -15,6 +15,12 @@
 - Heads: #6 `51a0f5d`, #7 `99cf0c6`, #8 `c6cf61e`, #9 `33f9fa4`, #10 `c47b755`, #11 `405dc46`, #12 app code `cf75549`. The stack is linear. Only #6 changes the schema (release file 06).
 - Hosted check: 16/16 on Preview `taxiflowpro-lawb32hou` (`0bd07d2`, app = `cf75549`), isolated test project only. Cleanup is done: bypass 0, branch variables removed, test project paused.
 - Real phone (Firefox 158, Android 16): section F all passed. Not ticked: device rows A-E, the spreadsheet-app check (B), and hosted delta Part B.
+- Prerequisites revised (same day):
+  - File 06 wording corrected: it backfills `permissions` on existing memberships.
+  - New read-only `scripts/hosted/unchanged-data-release-06.sql`; undo and re-apply on the local test stack left it identical.
+  - `af3e5ad` proved to keep the new salary and recurring records and to compute the same driver cash.
+  - Vercel aliases read from the configuration (the `git-main` alias is unconfirmed, so there is a gate after the #6 merge).
+  - Exact backup command and connection-file format documented.
 
 ## Phone fixes (2026-10-29): branch `agent/phone-fixes` (stacked on `agent/recurring-expenses`); not merged or deployed
 

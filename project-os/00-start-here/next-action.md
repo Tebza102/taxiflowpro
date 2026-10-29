@@ -8,7 +8,12 @@
    - fingerprint, apply file 06, verify-release-06, fingerprint again;
    - merge #6 to #12 with merge commits, retargeting each to `main`;
    - promote the final `main` build once, then the smoke checks and an after-release backup.
-3. Optional before GO: spreadsheet check (manual section B) and device rows A-E; hosted delta Part B in the test project's SQL editor.
+3. **Before GO** (`release-stack-review.md` section 10):
+   - Part B in the test project's SQL editor; restore the project first, pause it after.
+   - Create the backup connection file (session pooler) and the output folder, both outside the repo.
+   - Decide on the restore rehearsal.
+   - Agree a quiet window.
+4. Optional: the open manual checks (A-E, spreadsheet).
 
 ## Phone fixes (2026-10-29): branch `agent/phone-fixes`
 

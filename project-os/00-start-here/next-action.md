@@ -9,7 +9,7 @@
    - merge #6 to #12 with merge commits, retargeting each to `main`;
    - promote the final `main` build once, then the smoke checks and an after-release backup.
 3. **Before GO** (`release-stack-review.md` section 10):
-   - Part B in the test project's SQL editor; restore the project first, pause it after.
+   - ~~Part B in the test project's SQL editor~~: PASS on 2026-10-29; the test project was paused again.
    - Create the backup connection file (session pooler) and the output folder, both outside the repo.
    - Decide on the restore rehearsal.
    - Agree a quiet window.

@@ -1955,3 +1955,15 @@ Pass in automation. Real-phone check NOT passed until Tebogo confirms.
 
 **Not changed:** production database, data, settings, deployment; no merge; test project left paused; no new hosted runs.
 
+
+## 2026-10-29: hosted Part B passed (release file 06)
+
+**Changed by:** Tebogo, with the agent guiding.
+
+- The isolated test project `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`) was restored and confirmed healthy.
+- Part A: 2 rows, both `ok = true`.
+- Part B: the expected deliberate error `PASS (rolled back): emptied Admin kept {} after re-insert; omitted list got {cash.count}`.
+- A read-only follow-up showed the Admin's responsibilities still `{cash.count}`, so nothing persisted.
+- The test project was paused again.
+
+**Not changed:** production; no merge or deployment. Still open: the production backup, the restore-rehearsal decision, the quiet window, and manual checks A-E and the spreadsheet check.

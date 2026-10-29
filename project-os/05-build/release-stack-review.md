@@ -40,7 +40,7 @@ Cleanup:
 
 **Manual (real phone, Tebogo, Android 16, Firefox 158).** Section F passed 2026-10-29: the menu in portrait and landscape; business, vehicle and daily A4 PDFs.
 
-**Outstanding (kept unconfirmed).** Manual rows A-E and the spreadsheet-app check (section 10). Hosted Part B (section 4).
+**Outstanding (kept unconfirmed).** Manual rows A-E and the spreadsheet-app check (section 10). (Hosted Part B passed on 2026-10-29; section 4.)
 
 ## 3. Database: what release file 06 changes (corrected)
 
@@ -101,6 +101,12 @@ SQL editor steps, in the **test** project only. First check that the URL shows `
    select m.role, m.permissions from public.business_memberships m join public.businesses b on b.id = m.business_id where b.slug = 'preview-company-a' order by m.role;
    ```
    It should show the same values as before step 2.
+
+**Result, 2026-10-29: PASS.** Run by Tebogo in the test project's SQL editor (`sxoonhovoqgcpflhqirb`):
+- Part A: 2 rows, both `ok = true`.
+- Part B: `ERROR: P0001: PASS (rolled back): emptied Admin kept {} after re-insert; omitted list got {cash.count}`.
+- The agent then checked, read-only, that nothing persisted: the `preview-company-a` Admin still has `{cash.count}`.
+- The test project was paused again afterwards.
 
 ## 5. Production backup and restore verification (for approval; nothing run)
 
@@ -341,7 +347,7 @@ Results:
 - [ ] E1-E4 and E6 on the phone; E5, the recurring report PDF and CSV (the CSV opened in a spreadsheet app).
 
 **Before GO (Tebogo):**
-- [ ] Hosted Part B in the test project's SQL editor (section 4; restore the project first, pause it after).
+- [x] Hosted Part B in the test project's SQL editor: PASS on 2026-10-29 (section 4); the project was paused again afterwards.
 - [ ] Production backup connection file and output folder outside the repo (section 5).
 - [ ] Decide on the restore rehearsal.
 - [ ] Agree a quiet window and who is available for the smoke checks.

@@ -104,53 +104,80 @@ SQL editor steps, in the **test** project only. First check that the URL shows `
 
 ## 5. Production backup and restore verification (for approval; nothing run)
 
-The backup tool has run only against local stacks. This would be its first hosted run (a read-only export).
+The backup tool has run only against local stacks, so this is its first hosted run (a read-only export). Commands are for **Windows PowerShell** (the terminal Tebogo uses), with quoted forward-slash paths; Node accepts them. Passwords and the passphrase are typed only into Notepad or the tool's hidden prompts, never into chat.
 
 **One-time preparation (Tebogo):**
-1. Create a connection file **outside the repo**, e.g. `C:\Users\appri\taxiflow-prod-backup.env.txt`:
+1. Docker Desktop running. If it is not, start it as in the memory note: `Invoke-CommandInDesktopPackage ... -PreventBreakaway`. The tool runs `psql` from `public.ecr.aws/supabase/postgres:17.11.0.004`.
+2. Create the output folder outside the repo:
    ```
-   TAXIFLOW_BACKUP_PGHOST=<Supabase > Connect > Session pooler host, e.g. aws-0-eu-west-1.pooler.supabase.com>
+   New-Item -ItemType Directory -Force 'C:/Users/appri/taxiflow-backups'
+   ```
+3. Create the connection file outside the repo:
+   ```
+   notepad 'C:/Users/appri/taxiflow-prod-backup.env.txt'
+   ```
+   Contents (the values come from Supabase > production project > Connect > **Session pooler**):
+   ```
+   TAXIFLOW_BACKUP_PGHOST=<session pooler host, e.g. aws-0-eu-west-1.pooler.supabase.com>
    TAXIFLOW_BACKUP_PGPORT=5432
    TAXIFLOW_BACKUP_PGUSER=postgres.vfxftviwteypasredjgm
    TAXIFLOW_BACKUP_PGPASSWORD=<production database password>
    TAXIFLOW_BACKUP_PGDATABASE=postgres
    ```
-   - Use the **session pooler, port 5432**. The direct host `db.vfxftviwteypasredjgm.supabase.co` is IPv6-only and normally unreachable from Docker on Windows.
-   - Not the transaction pooler (6543): the export needs one consistent transaction.
-   - The tool refuses a host or user that does not belong to `vfxftviwteypasredjgm`.
-2. Create an output folder outside the repo, e.g. `C:\Users\appri\taxiflow-backups`.
-3. Docker Desktop running (the tool runs `psql` from `public.ecr.aws/supabase/postgres:17.11.0.004`).
-4. A passphrase kept in a password manager. Without it the backup cannot be read.
+   - Save it as plain UTF-8. If the tool later says `TAXIFLOW_BACKUP_PGHOST` is missing, re-save without "UTF-8 with BOM".
+   - Use the session pooler on port 5432. The direct host is IPv6-only, and the transaction pooler (6543) cannot hold one consistent transaction.
+   - The tool refuses any host or user that does not belong to `vfxftviwteypasredjgm`.
+4. A passphrase of at least 16 characters, saved in a password manager. Without it the backup cannot be read.
 
-**Export.** Tebogo runs it in an interactive terminal; the tool asks for the typed ref, then the passphrase twice:
+**Export** (in the Terminal panel; the tool asks for the typed project ref, then the passphrase twice, hidden):
 ```
-node scripts/backup/backup.mjs export --target vfxftviwteypasredjgm --env-file C:\Users\appri\taxiflow-prod-backup.env.txt --out-dir C:\Users\appri\taxiflow-backups
+node scripts/backup/backup.mjs export --target vfxftviwteypasredjgm --env-file 'C:/Users/appri/taxiflow-prod-backup.env.txt' --out-dir 'C:/Users/appri/taxiflow-backups'
 ```
-Expected output and files:
-- `PASS backup verified (...)` and the counts;
-- a PASS line appended to `backup-log.txt`;
-- `taxiflow-vfxftviwteypasredjgm-<time>.tfbk` and its `.manifest.json`.
+Expected:
+- `PASS backup verified (...)` and a `counts {...}` line;
+- `backup-log.txt` gains a PASS line;
+- the folder now holds `taxiflow-vfxftviwteypasredjgm-<time>.tfbk` and its `.manifest.json`.
 
-It is one read-only REPEATABLE READ transaction, encrypted in memory, written, read back and compared before PASS. A failure leaves no partial file and logs FAIL.
+It is one read-only REPEATABLE READ transaction, encrypted in memory, written, read back and compared before PASS. On failure there is no partial file and the log shows FAIL.
 
-**Verify the file:**
+**Verify the newest file** (asks for the passphrase once):
 ```
-node scripts/backup/backup.mjs verify --file C:\Users\appri\taxiflow-backups\taxiflow-vfxftviwteypasredjgm-<time>.tfbk
+$f = (Get-ChildItem 'C:/Users/appri/taxiflow-backups/*.tfbk' | Sort-Object LastWriteTime | Select-Object -Last 1).FullName; node scripts/backup/backup.mjs verify --file $f
 ```
-- Expected: `PASS decrypts, complete and consistent: {counts}`.
-- The counts must equal the export's counts and the row counts from `unchanged-data-release-06.sql` run in the same quiet window: businesses, memberships, snapshots, finance requests, platform admins, Auth users.
+- Expected: `PASS decrypts, complete and consistent: {counts}`, with the same counts as the export.
+- The release-day backup is taken inside the quiet window, right before the hashes in section 6 step 2. Its counts must then equal the row counts from `unchanged-data-release-06.sql` (businesses, memberships, snapshots, finance requests, platform admins, Auth users).
 
-**Restore rehearsal (optional; proves the file restores, not only decrypts).** It puts production personal data on this laptop's isolated local test stack, so it is Tebogo's decision:
+**Restore rehearsal (optional; Tebogo decides after reading this).**
+
+Where production data would be stored:
+- Decrypted rows go only into the Postgres database of the isolated local test stack: the Docker volume `taxiflow_localdb_test_db`.
+- That volume sits inside Docker Desktop's data disk, in the Claude app's package storage on this laptop (`%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\...`).
+- The tool never writes the decrypted backup as a file.
+- The copy includes Auth users: emails and password hashes (not passwords), and business records.
+
+How access is restricted:
+- The stack's ports are bound to 127.0.0.1 only (45321 API, 45322 database, 45324 mail). The setup refuses any other binding, so nothing on the hotspot or LAN can reach it.
+- Access needs this Windows account (or an administrator) and Docker Desktop.
+- No app or dev server is pointed at it. The phone demo on 5173 is demo-mode only.
+- It is still a full copy of production personal data on a laptop. Keep the laptop locked during the rehearsal and do not run other work on the test stack until it is removed.
+
+How it is removed:
+- `setup.mjs reset` stops the stack, **deletes the volume**, recreates it and loads only synthetic data.
+- Check afterwards that no `@example.com`-free accounts remain (command below).
+- Freed space inside Docker's virtual disk is not zeroed. For a stronger wipe, delete the volume and compact the disk, or reinstall Docker Desktop.
+
+Commands (run one at a time):
 ```
-$env:TAXIFLOW_LOCALDB_PROFILE="test"; node scripts/localdb/setup.mjs schema
-$env:TAXIFLOW_LOCALDB_PROFILE="test"; node scripts/backup/backup.mjs restore --target local --file C:\Users\appri\taxiflow-backups\taxiflow-vfxftviwteypasredjgm-<time>.tfbk
-$env:TAXIFLOW_LOCALDB_PROFILE="test"; node scripts/localdb/setup.mjs reset
+$env:TAXIFLOW_LOCALDB_PROFILE = 'test'; node scripts/localdb/setup.mjs schema
+$env:TAXIFLOW_LOCALDB_PROFILE = 'test'; node scripts/backup/backup.mjs restore --target local --file $f
+$env:TAXIFLOW_LOCALDB_PROFILE = 'test'; node scripts/localdb/setup.mjs reset
+docker exec taxiflow_localdb_test_db psql -U postgres -d postgres -Atc "select count(*) from auth.users where email not like '%@example.com'"
 ```
-- Expected: the restore re-reads the local database and reports a match with the backup.
+- Expected after the restore: the tool reports that the local database matches the backup.
+- After the reset, the last line prints `0`.
 - `schema` builds an empty current schema (including file 06), so the rehearsal also shows pre-06 memberships receiving their role defaults.
-- The last command wipes the production copy from the laptop.
 
-**Keep** the backup and the passphrase until the after-release backup also verifies.
+**Keep** the backup file and the passphrase until the after-release backup also verifies.
 
 ## 6. Deployment steps and smoke checks
 
@@ -253,19 +280,38 @@ Results:
 - it ignores per-person responsibilities and applies the fixed role rules (Admin counts; Manager verifies and banks);
 - it does not enforce separation of duties.
 
-**1. Application rollback (first, and usually the only step).**
-- How: `vercel promote https://taxiflowpro-dy1a1k761-apprigate.vercel.app --scope apprigate`.
-- It is instant, and the data stays as it is.
-- Re-promoting the new deployment later restores the new app with all records intact.
+**Rollback means degraded operation, not normal service.** The old app keeps the data, but it lets anyone with Money access edit or delete salary and recurring payments, and it drops the per-person controls. Users are therefore held out first, and the old app is used only in restricted form until Tebogo has assessed the problem.
 
-**2. Database undo (only if file 06 itself is faulty; after step 1, with Tebogo's approval).**
+**1. Hold users out (first step on any serious fault).**
+- Promote the tested maintenance deployment:
+  ```
+  vercel promote https://taxiflowpro-cmlp6fmww-apprigate.vercel.app --scope apprigate
+  ```
+  It is `dpl_FHXMuDf19iELaFMadeFdPsgGQ2r3`, READY, and tested at the October cutover.
+- Result: `taxiflow.co.za` and `taxiflowpro.vercel.app` show the maintenance page, and every `/api/*` call answers 503, so nobody can write through the public addresses.
+- Data stays exactly as it is.
+- Then assess, read-only: what failed, since when, and which records are affected (`unchanged-data-release-06.sql` plus the error logs).
+
+**2. Choose one, with Tebogo:**
+- **(a) Fix forward (preferred).** Stay in maintenance, fix, test on a Preview, promote the fixed build.
+- **(b) Old app in restricted, degraded mode.**
+  - Command: `vercel promote https://taxiflowpro-dy1a1k761-apprigate.vercel.app --scope apprigate`.
+  - Allowed only under these written restrictions, announced to staff before the promote:
+    - **Owner-only finance.** Admins and Managers do not count, verify or bank. The old app would apply the fixed role rules and ignore the responsibilities Owners set, so an Owner may need to switch staff Money access off in Business access first.
+    - **No edits or deletions** of any expense whose description starts with "Driver salary /" or belongs to a recurring schedule. The old app does not protect them.
+    - **No new salary or recurring payments.** The old app has no duplicate protection and no schedules.
+    - Separation of duties is **not enforced**. The Owner must not verify a count they recorded.
+  - Leave this mode by re-promoting the new (or fixed) deployment. All records written under the new app are still there.
+- **(c) Remain in maintenance** until (a) is ready, when the restrictions in (b) are not acceptable.
+
+**3. Database undo (only if file 06 itself is faulty; with users held out, and with Tebogo's approval).**
 - How: `scripts/localdb/rollback/20261019090000_member_permissions.down.sql`.
 - Removes the `permissions` column, its constraints, trigger and functions.
 - **Loses any responsibility lists Owners set since release.**
 - Keeps businesses, memberships, snapshots, the request log and the audit table.
 - Re-applying file 06 later gives role defaults, not the lost lists.
 
-**3. Data restore (exceptional; never part of the normal rollback).**
+**4. Data restore (exceptional; never part of the normal rollback).**
 - Restoring the pre-release backup replaces the database with its state at backup time.
 - Every transaction, cash-up, salary and expense entered after that is lost.
 - It needs an explicit recovery decision by Tebogo that names what will be lost, and a fresh backup taken first.

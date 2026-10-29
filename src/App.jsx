@@ -1380,21 +1380,21 @@ function App() {
     }
     const staffId = String(draft.staffId ?? "").trim();
     const knownProfile = Boolean(staffId) && (current.drivers ?? []).some((driver) => driver.staffId === staffId);
-    // Only route ids stored in this business are sent. An older profile that
-    // names its route only by text gets a derived id in the form; if nothing
-    // selected is a stored route, routeIds is left out so the saved route stays
-    // as it is (the server would refuse an unknown id).
-    const storedRouteIds = new Set((current.routes ?? []).map((route) => String(route?.id ?? "").trim()).filter(Boolean));
-    const selectedRouteIds = Array.from(new Set((Array.isArray(draft.routeIds) ? draft.routeIds : []).map((value) => String(value ?? "").trim()).filter(Boolean)));
-    const knownRouteIds = selectedRouteIds.filter((id) => storedRouteIds.has(id));
-    const keepStoredRoute = knownProfile && selectedRouteIds.length > 0 && knownRouteIds.length === 0;
+    // Editing: routes are sent only when the selection changed since the form
+    // opened. An older profile that names its route only by text gets a derived
+    // id in the form; left untouched, its stored route stays exactly as it is
+    // (the server would refuse the derived id).
+    const normalizeIds = (ids) => Array.from(new Set((Array.isArray(ids) ? ids : []).map((value) => String(value ?? "").trim()).filter(Boolean))).sort();
+    const selectedRouteIds = normalizeIds(draft.routeIds);
+    const keepStoredRoute =
+      knownProfile && Array.isArray(draft.routeIdsAtOpen) && selectedRouteIds.join("|") === normalizeIds(draft.routeIdsAtOpen).join("|");
     return saveFleetRecordInTenant(
       `driver:${staffId || "new"}`,
       "driver.save",
       {
         ...(knownProfile ? { staffId } : {}),
         name: driverName,
-        ...(keepStoredRoute ? {} : { routeIds: knownRouteIds }),
+        ...(keepStoredRoute ? {} : { routeIds: selectedRouteIds }),
         licenseNumber: String(draft.licenseNumber ?? "").trim(),
         licenseCode: String(draft.licenseCode ?? "").trim(),
         licenseExpiryDate: draft.licenseExpiryDate || "",
@@ -12569,7 +12569,8 @@ function DriversPanel({
   };
 
   const handleEditDriver = (driver, focusSalary = false) => {
-    setDriverDraft(createDriverDraft(driver));
+    const draft = createDriverDraft(driver);
+    setDriverDraft({ ...draft, routeIdsAtOpen: draft.routeIds });
     setSalaryDraft(createSalaryDraft(canManageSalaries ? salaryArrangementForDriver(snapshot, driver.staffId) : null));
     setShowDriverPassword(false);
     setShowDriverForm(true);

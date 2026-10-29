@@ -185,6 +185,7 @@ test("permission split: salary-only and driver-management-only Managers each kee
     // 1. Salary only: Money on, no driver-profile management.
     await setAccess(["cash.verify", "cash.bank"], true);
     await ownerPage.getByRole("button", { name: "Sign out" }).click();
+    await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
     await signIn(page, "manager.b@example.com");
     await page.locator("button.module-button").filter({ hasText: "Drivers" }).first().click();
     await expect(page.getByRole("button", { name: `Edit profile: ${NAME}` })).toHaveCount(0);
@@ -203,6 +204,7 @@ test("permission split: salary-only and driver-management-only Managers each kee
     await signIn(page, "owner.b@example.com");
     await setAccess(["drivers.manage"], false);
     await page.getByRole("button", { name: "Sign out" }).click();
+    await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
     await signIn(page, "manager.b@example.com");
     await expect(page.locator("button.module-button").filter({ hasText: "Money" })).toHaveCount(0);
     await page.locator("button.module-button").filter({ hasText: "Drivers" }).first().click();

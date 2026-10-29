@@ -41,6 +41,16 @@ test("Owner B: schedule from the profile, one payment, duplicate refused by the 
   await salary.getByLabel("Salary starts on").fill("2026-01-01");
   await page.getByTestId("driver-profile-form").getByRole("button", { name: "Save driver" }).click();
   await expect(page.getByText("Salary schedule saved. No expense was added.")).toBeVisible({ timeout: 30_000 });
+  // Driver B's route is stored only as text ("UAT Route A"); the profile save
+  // left it exactly as it was (no unknown route id sent, nothing refused).
+  const driverB = await page.evaluate(async () => {
+    const raw = Object.entries(window.localStorage).find(([key]) => key.startsWith("sb-") && key.endsWith("-auth-token"));
+    const token = JSON.parse(raw[1]).access_token;
+    const workspace = await fetch("/api/business/workspace", { headers: { Authorization: `Bearer ${token}` } }).then((r) => r.json());
+    return workspace.snapshot.drivers.filter((driver) => driver.name === "UAT Driver B").map(({ route, routeIds }) => ({ route, routeIds: routeIds ?? null }));
+  });
+  expect(driverB).toHaveLength(1);
+  expect(driverB[0].route).toBe("UAT Route A");
   let panel = await openSalaries(page);
 
   const row = panel.getByTestId("salary-schedule-row").filter({ hasText: DRIVER_NAME });

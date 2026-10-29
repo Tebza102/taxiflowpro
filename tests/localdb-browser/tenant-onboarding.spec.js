@@ -5,6 +5,7 @@ import { expect, test } from "@playwright/test";
 import { assertLocalDatabase } from "../../scripts/localdb/lib/exec.mjs";
 import { activateViaEmail } from "../../scripts/localdb/lib/mailpit.mjs";
 import { LOCAL_TEST_PASSWORD } from "../../scripts/localdb/seed-data.mjs";
+import { skipUserGuideWhenShown } from "../user-guide-helpers.mjs";
 
 // Pilot onboarding in the browser (Task 18), LOCAL stack with real local Auth:
 // operator creates a business + Owner, the Owner sets a password from the
@@ -24,6 +25,7 @@ const activate = async (email) => {
   expect(result.error ?? null).toBeNull();
 };
 const signIn = async (page, email) => {
+  await skipUserGuideWhenShown(page);
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
   await page.getByLabel("Email").fill(email);

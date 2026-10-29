@@ -13,6 +13,8 @@ export function MobileBottomSheet({
   footer,
   focusKey,
   initialFocusSelector,
+  className = "",
+  closeLabel = "Close sheet",
 }) {
   const titleId = useId();
   const subtitleId = useId();
@@ -28,7 +30,7 @@ export function MobileBottomSheet({
   }
 
   return (
-    <div className="mobile-sheet-root" role="presentation">
+    <div className={`mobile-sheet-root ${className}`.trim()} role="presentation">
       <button
         type="button"
         className="mobile-sheet-backdrop"
@@ -63,7 +65,7 @@ export function MobileBottomSheet({
               </div>
             ) : null}
           </div>
-          <button type="button" className="mobile-sheet-close" aria-label="Close sheet" onClick={onClose}>
+          <button type="button" className="mobile-sheet-close" aria-label={closeLabel} onClick={onClose}>
             <X size={18} />
           </button>
         </header>

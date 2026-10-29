@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { expect, test } from "@playwright/test";
 
 import { BUSINESS_A_ID, BUSINESS_B_ID, LOCAL_TEST_PASSWORD } from "../../scripts/localdb/seed-data.mjs";
+import { skipUserGuideWhenShown } from "../user-guide-helpers.mjs";
 
 // Tenant-mode browser proof against the LOCAL synthetic stack with real local
 // Auth (playwright.localdb.config.mjs). Requires a fresh
@@ -25,6 +26,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 const signIn = async (page, email) => {
+  await skipUserGuideWhenShown(page);
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
   await page.getByLabel("Email").fill(email);

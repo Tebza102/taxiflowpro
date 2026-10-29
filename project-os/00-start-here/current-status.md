@@ -1,5 +1,14 @@
 # Current Status
 
+## In-app guide "How to use TaxiFlow" (2026-10-28): draft PR #7, branch `agent/user-guide` (stacked on release 06); not deployed
+
+- Before this, no post-login guide existed (only a sign-in "forgot password" help toggle).
+- Opens automatically on a person's first sign-in to a workspace; remembered per user and business in that browser (`localStorage` key `taxiflow-user-guide-v1:<user>:<business>`; mock/legacy mode uses the backend mode as the workspace). Help button (next to Sign out) reopens it. Skip, X, Escape, backdrop, Done or any "Open ..." button all mark it seen.
+- Content built from the account's visible modules, role and (business workspace) cash responsibilities: `src/lib/userGuide.js`; sheet `src/components/UserGuideSheet.jsx` reuses `MobileBottomSheet` (focus trap, Escape, focus return, scrolling body); 44px targets.
+- Tests: mock Playwright 43/43 (9 new in `tests/user-guide.spec.js`); local tenant browser suite 15/15 on the isolated test stack (3 new in `tests/localdb-browser/user-guide-tenant.spec.js`); Node 367/367 (9 new); sync guards; build.
+- Not verified: real Android device; hosted UAT/preview-test suites (need a deployed Preview).
+- Release 06 / PR #6 unchanged. #7 depends on release 06 code (cash-step and panel-access helpers).
+
 ## Release 06 review COMPLETE (2026-10-20): recommendation GO; production on hold
 
 - Review document: `05-build/release-06-review.md`. Final file 06 SHA-256 `09dd1e33112108f0a17d8645ec9fb3294c8139ba56fc391508ab8699d676b30c` (`ac10ed1`); app code tested = `e78e4b3` tree (unchanged at head `c3f6eda`+).

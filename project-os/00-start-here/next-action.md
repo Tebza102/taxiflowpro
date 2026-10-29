@@ -1,5 +1,11 @@
 # Next Action
 
+## In-app guide "How to use TaxiFlow" (2026-10-28): draft PR #7
+
+1. **Review draft PR #7** (`agent/user-guide`, stacked on `agent/owner-responsibilities`). Merge only after PR #6; then retarget #7 to `main`. PR #6 is unchanged.
+2. Before release: one look on a real low-spec Android phone (open, scroll, Skip, Help). Not yet checked on a device; proven in Chromium mobile emulation only.
+3. Not run: the hosted UAT and preview-test suites (need a deployed Preview); they now skip the guide through `tests/user-guide-helpers.mjs`.
+
 ## Release 06: go/no-go (2026-10-20)
 
 1. **Tebogo:** delta already applied and Part A passed. In the `taxiflow-preview-test` SQL editor run only Part B of `scripts/preview-test/verify-delta-06.sql`; the error message must start `PASS (rolled back)`.

@@ -1,8 +1,10 @@
 import { expect, test } from "@playwright/test";
+import { skipUserGuideWhenShown } from "./user-guide-helpers.mjs";
 
 const PASSWORD = "TaxiFlow.123";
 
 const signIn = async (page, email) => {
+  await skipUserGuideWhenShown(page);
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
   await page.getByLabel("Email").fill(email);

@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { expect, test } from "@playwright/test";
+import { skipUserGuideWhenShown } from "../user-guide-helpers.mjs";
 
 // Authenticated hosted journey (playwright.preview-test.config.mjs): a Vercel
 // Preview whose backend is the ISOLATED test project, seeded with the synthetic
@@ -49,6 +50,7 @@ const setPerms = async (request, actor, targetEmail, permissions) => {
 };
 
 const signIn = async (page, email) => {
+  await skipUserGuideWhenShown(page);
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 60_000 });
   await page.getByLabel("Email").fill(email);

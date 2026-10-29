@@ -4,6 +4,7 @@ import { expect, test } from "@playwright/test";
 import { assertLocalDatabase, assertLoopbackOnlyOrStop, psql } from "../../scripts/localdb/lib/exec.mjs";
 import { activateViaEmail } from "../../scripts/localdb/lib/mailpit.mjs";
 import { LOCAL_TEST_PASSWORD } from "../../scripts/localdb/seed-data.mjs";
+import { skipUserGuideWhenShown } from "../user-guide-helpers.mjs";
 
 // Platform onboarding in the browser, LOCAL stack with real local Auth:
 // the operator grants platform admin to an existing login (an Admin of the
@@ -26,6 +27,7 @@ const activate = async (email) => {
   expect(result.error ?? null).toBeNull();
 };
 const signIn = async (page, email) => {
+  await skipUserGuideWhenShown(page);
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible({ timeout: 30_000 });
   await page.getByLabel("Email").fill(email);

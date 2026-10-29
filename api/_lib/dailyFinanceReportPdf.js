@@ -411,6 +411,11 @@ const drawDailyPosition = (ctx, report) => {
       value: money(cashUp.totalExpenses),
       note: `Cash ${money(cashUp.cashExpenses)} / non-cash ${money(cashUp.nonCashExpenses)}`,
     },
+    ...(cashUp.salaryFromTakings ?? []).map((salary) => ({
+      label: "  Salary from takings",
+      value: money(salary.amount),
+      note: `${salary.driverName ?? "Driver"} / ${salary.period ?? ""}; included in cash expenses`,
+    })),
     { label: "Expected cash hand-in", value: money(cashUp.expectedCashHandIn), emphasis: true },
   ];
   const footnote = driverDay

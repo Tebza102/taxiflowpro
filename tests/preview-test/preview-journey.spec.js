@@ -15,8 +15,12 @@ const REF = process.env.PREVIEW_TEST_REF;
 const PASSWORD = process.env.PREVIEW_TEST_PASSWORD;
 const PRODUCTION_REF = "vfxftviwteypasredjgm";
 const SUPABASE_URL = `https://${REF}.supabase.co`;
-const DAY = "2026-10-08";
-const DAY_LABEL = "08 Oct 2026";
+// Run day: chosen in the target test as the day after the driver's latest
+// activity. Hosted data persists, a banked day refuses new work, and the driver
+// board shows the most recent unbanked day, so each run needs the newest day.
+let DAY = null;
+let DAY_LABEL = null;
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const EXPECTED_CASH = 380; // trip 500 less safe-paid expense 120
 const RUN = Date.now().toString(36).slice(-5).toUpperCase();
 
@@ -113,6 +117,15 @@ test("target: the Preview runs this build against the isolated test project, nev
     data: { action: "route.save", requestId: crypto.randomUUID(), expectedVersion: owner.json.version, fields: { name: "Cross Company", primaryOrigin: "X", primaryDestination: "Y" } },
   });
   expect(crossWrite.status()).toBe(403);
+  // This run's day: after every existing day of the driver (records and checkings).
+  const driverView = (await workspace(request, "driver@example.com")).json.snapshot ?? {};
+  const days = [
+    ...(driverView.financeTransactions ?? []).map((record) => record.tripDate ?? record.expenseDate),
+    ...(driverView.dailyCashUps ?? []).map((entry) => entry.workDate),
+    "2026-10-07",
+  ].filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value ?? "")).sort();
+  DAY = new Date(Date.parse(`${days.at(-1)}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
+  DAY_LABEL = `${DAY.slice(8)} ${MONTHS[Number(DAY.slice(5, 7)) - 1]} ${DAY.slice(0, 4)}`;
 });
 
 test("full cash workflow: driver capture and checking, admin count, manager verify, owner bank", async ({ page }) => {
@@ -273,7 +286,7 @@ test("separation of duties: a Manager holding count and verify cannot verify its
   expect(manager).toEqual(expect.arrayContaining(["cash.count", "cash.verify"]));
   // The driver captures a second day through the server action (direct API).
   const vehicle = (await workspace(request, "driver@example.com")).json.snapshot.vehicles.find((entry) => entry.registration === "PV TEST 01");
-  const SOD_DAY = "2026-10-09";
+  const SOD_DAY = new Date(Date.parse(`${DAY}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10); // run-unique, after DAY
   const captured = await act(request, "driver@example.com", "capture.standard_income", {
     captureAs: "driver",
     vehicleId: vehicle.id,

@@ -155,6 +155,9 @@ const changeSummary = (before, after) =>
 const editRecord = (stored, fields, requester, now, requestId) => {
   const record = findRecord(stored, fields.recordId);
   if (record.status !== "pending") throw createHttpError(409, `Only pending records can be edited; this one is ${record.status}.`);
+  // A salary keeps the amount and period it was paid for; correct a pending one
+  // by deleting it and recording the payment again.
+  if (record.salaryPayment) throw createHttpError(409, "Salary payments cannot be edited. Delete the pending payment and record it again.");
   const kind = KIND[kindOf(record)];
 
   const isDriverEdit = requester.role === "Driver";

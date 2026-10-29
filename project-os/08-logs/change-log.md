@@ -1714,3 +1714,63 @@ What `platform-admin-tests.mjs` covers:
 
 **Next action:** review PR #7; merge after #6, then retarget to `main`.
 
+### 2026-10-28 — Repository context corrected; driver salaries (draft PR #8)
+
+**Changed by:** Agent (Claude). Branch `agent/driver-salary`, commit `bd063c5`, draft PR #8 (base `agent/user-guide`). PR #6 / `agent/owner-responsibilities` untouched at `51a0f5d`.
+
+**Context:** a correction suggested PR #6 belonged to a separate client-workspace project. Verified here: `Tebza102/taxiflowpro` PR #6 is TaxiFlow release 06, open draft; no client-workspace branch exists. Tebogo confirmed the repository evidence takes precedence; the stack #6 -> #7 -> #8 stays.
+
+**Files changed:** `src/lib/salaryContract.js` (new, shared rules), `api/_lib/salaryActions.js` (new), `api/_lib/financeActions.js` (registers 2 actions), `src/components/DriverSalaryPanel.jsx` (new), `src/App.jsx` (handlers, panel, edit guard for recorded salaries), `src/styles.css`, `src/lib/userGuide.js` (one sentence), tests `tests/salary.test.mjs`, `tests/driver-salary.spec.js`, `tests/localdb-browser/driver-salary-tenant.spec.js`, `tests/user-guide.test.mjs`; `project-os/04-technical/data-model.md`.
+
+**Financial rules proven:** schedule adds no expense and stays out of totals; one expense per driver and period (form block + server 409); paid and scheduled amounts kept after schedule changes; bank and cash salaries leave a driver's expected cash unchanged; report lines and totals count each payment once and reconcile; drivers and no-Money managers receive no salary data.
+
+**Tests (final code):** Node 381/381; mock Playwright 44 passed + 1 timeout loading the sign-in page on the first test of the run (branding desktop; 6/6 on two reruns); local tenant suite 17/17 (fresh reset, isolated test profile); sync guards; build.
+
+**Result:** Pass locally. Not merged, not deployed.
+
+**Outstanding:** real Android phone; hosted Preview UAT/preview-test; spreadsheet check of the CSV by a real user. The "previously supplied" salary prompt was not available; the rules given on 2026-10-28 were implemented.
+
+### 2026-10-28 — Driver salaries reconciled with the original requirements (`a8dac17`, PR #8)
+
+**Changed by:** Agent (Claude). Branch `agent/driver-salary` (base `agent/user-guide`); PR #6 still `51a0f5d`, PR #7 still `99cf0c6`.
+
+**Gaps closed:** daily and fortnightly frequencies with period start/end/next (leap years, year end, Sunday-to-Monday, fortnight anchoring); payment method separate from source; salary from a driver's takings lowers that day's expected cash exactly once (linked to the driver day, pending, refused on a counted/closed day); manual payments without a schedule; schedule changes with an effective date; next payment date, scheduled and due amounts; salary lines in the daily finance report (PDF and preview) as well as the monthly CSV; `record.edit` refuses salaries.
+
+**Reports/exports checked:** monthly expense CSV (Money > Expenses); daily finance report PDF `/api/admin/daily-log/:id/report-pdf` and preview `/report-view`. No other financial download exists in the app or API (the backup tool is a restore format).
+
+**Tests (final code):** Node 385/385 (17 salary); mock Playwright 47/47 (4 salary); local tenant suite 18/18 on a fresh reset (3 salary, incl. server-side takings hand-in 700 -> 450 and counted-day refusal); sync guards; build.
+
+**Hosted:** not run. General Preview variables use production's sign-in project (only `agent/owner-responsibilities` has the isolated test backend), so the auto-built Previews for `agent/user-guide` and `agent/driver-salary` use production sign-in with no server key and fail closed. The hosted salary spec needs branch-scoped test variables for `agent/driver-salary`: awaiting Tebogo's approval.
+
+**Result:** Pass locally. Not merged, not deployed.
+
+### 2026-10-28 — Hosted Preview check of driver salaries: PASS; cleaned up
+
+**Changed by:** Agent (Claude), under Tebogo's approvals of 2026-10-28 (restore only the isolated test project; branch-scoped Preview variables; temporary bypass; hosted runs; cleanup).
+
+**Cost check before restoring:** organization Apprigate is on the Free plan; Supabase does not bill paused projects or restores; 2 active free projects allowed and only production was active. No plan change, no charge.
+
+**Steps and evidence:**
+- Restored `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`) to ACTIVE_HEALTHY. Read-only checks 13/13: 6 tables, release-06 permissions column, RLS on (forced on the 2 server-only tables), no browser grants, no anon-executable functions, 5 service-role functions, delta-06 rules (no default; defaults only for NULL), only synthetic `@example.com` users (6) and Preview Company A/B.
+- Added 4 Preview variables scoped to `agent/driver-salary` (URL x2, public anon key, server key piped from the external env file, never displayed). Redeployed `e46ba96` -> `taxiflowpro-nry1tv6fk`; later auto-build of `4370dce` -> `taxiflowpro-fcuys737n`.
+- Temporary automation bypass created from a locally generated value (stored only in the git-ignored `.env.preview-test.local`, never printed); baseline 0 -> 1.
+- Target guard first (before any sign-in): bundle carries `sxoonhovoqgcpflhqirb.supabase.co`, no production ref, the salary build; 401 unauthenticated. PASS on both Previews.
+- Runs: on `nry1tv6fk` salary 4/4; release-06 journey failed at its fixed day 2026-10-08 ("day checking ... is banked; new work for that day cannot be added", correct app behaviour) and then because the driver board shows the most recent unbanked day. Fixes (test-only): the journey now picks the day after the driver's latest activity. Found and fixed an app gap: server salary records lacked `timestamp` (now 12:00 SAST on the paid date, like other server captures). On `fcuys737n` (`4370dce`): release-06 journey 6/6; salary journey 4/4 after a test-only fix (the driver legitimately sees takings salaries from earlier runs too).
+- Cleanup: bypass revoked (0 entries; protection on; Previews 302 to login); local bypass copy deleted; 4 branch variables removed; test project paused.
+
+**Not changed:** production (project `vfxftviwteypasredjgm` only listed, never queried), PR #6/#7 branches, billing. Nothing merged or promoted.
+
+**Outstanding:** real Android phone; a real user opening the CSV in a spreadsheet app; optional Preview-scope decision (general Preview variables equal production sign-in).
+
+### 2026-10-28 — Preview configuration corrected: production Supabase settings are Production-only
+
+**Changed by:** Agent (Claude), approved by Tebogo. Vercel project `taxiflowpro` configuration only; no code, no production deploy.
+
+**Change:** removed the Preview environment from `VITE_SUPABASE_URL` (`GI8rLthQfc03IvSJ`), `VITE_SUPABASE_ANON_KEY` (`vtTUkEj1aZ8NBahD`) and `SUPABASE_URL` (`Wfm4tf0xNpI9a5uy`) via PATCH of `target` only (no values sent). Production scope and values, the production server key, `VITE_BACKEND_MODE` and release 06's four Preview overrides unchanged.
+
+**Verification:** redeployed `agent/user-guide` `99cf0c6` -> `taxiflowpro-6ngbg58jb`; with a temporary bypass: built assets contain no Supabase URL, no production or test ref, no key-like JWT; endpoints 401 unauthenticated and 503 with a token; the browser shows "Secure sign-in is unavailable" with no sign-in form or demo data and contacts no external host; production `taxiflow.co.za` loads its normal sign-in (200). Bypass revoked: 0 remain.
+
+**Kept (Tebogo):** the 18 older Previews inferred (from build times vs variable history) to carry production settings stay behind Vercel login; not deleted.
+
+**Outstanding:** real Android and spreadsheet checks (`06-quality/manual-checks-guide-and-salary.md`).
+

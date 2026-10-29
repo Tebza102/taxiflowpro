@@ -187,7 +187,7 @@ const buildManagementGuide = ({ role, views, cash, tenant }) => {
         "mgmt-expenses",
         "finance",
         "Record expenses",
-        "In Money, Expenses, choose the vehicle, the category and how it was paid. Cash paid out of takings lowers the cash to bank. For driver salaries use Driver salaries: the schedule is only a plan, so record each payment once, when it is actually paid, and say where the money came from (bank, business cash or the driver's takings).",
+        "In Money, Expenses, choose the vehicle, the category and how it was paid. Cash paid out of takings lowers the cash to bank. Driver salaries are set in each driver's profile (Drivers, Edit profile, Salary): amount, how often, from when and whether it is paid at the start or end of the period. That schedule is only a plan, so record each payment once here in Driver salaries, when it is actually paid, and say where the money came from (bank, business cash or the driver's takings).",
         "Example: R 450 tyre repair on JHB 457 GP, paid in cash.",
       ),
     );
@@ -213,7 +213,7 @@ const buildManagementGuide = ({ role, views, cash, tenant }) => {
         "drivers",
         "Link drivers to vehicles",
         tenant.driversManage
-          ? "In Drivers, link each driver to a vehicle so their trips and cash land in the right place."
+          ? "In Drivers, link each driver to a vehicle so their trips and cash land in the right place. Edit profile keeps their details; its Salary section appears only for people with Money access."
           : "Drivers shows who is driving which vehicle. The Owner decides who can change the roster.",
       ),
     );
@@ -225,7 +225,7 @@ const buildManagementGuide = ({ role, views, cash, tenant }) => {
         "mgmt-reports",
         "reports",
         "Check the reports",
-        "Reports gives a printable daily finance report for the day you choose.",
+        "Reports gives business and vehicle reports for a day, week, month or your own dates, with PDF and CSV downloads, and the daily cash report for a single cash-up.",
       ),
     );
   }

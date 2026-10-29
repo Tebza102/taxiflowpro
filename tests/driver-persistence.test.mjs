@@ -129,8 +129,13 @@ test("14. FINANCE CONTRACT: workflow statuses remain exactly pending | counted |
 });
 
 test("handleDriverSubmit and handleAllocationSubmit await their async save calls", () => {
-  const driverSubmit = sliceFrom(appSource, "const handleDriverSubmit = async (event) => {", 700);
-  assert.match(driverSubmit, /await onSaveDriver\(driverDraft\)/);
+  // The profile and its optional salary are saved through onSaveDriverProfile,
+  // which awaits saveDriver and then the salary arrangement action.
+  const driverSubmit = sliceFrom(appSource, "const handleDriverSubmit = async (event) => {", 900);
+  assert.match(driverSubmit, /await onSaveDriverProfile\(\{\s*profileDraft: driverDraft,/);
+  const combined = sliceFrom(appSource, "const saveDriverProfile = async ({ profileDraft, salaryFields, canSaveProfile }) => {", 900);
+  assert.match(combined, /const saved = await saveDriver\(profileDraft\);/);
+  assert.match(combined, /const salary = await saveSalaryArrangement\(/);
 
   const allocationSubmit = sliceFrom(appSource, "const handleAllocationSubmit = async (event) => {", 400);
   assert.match(allocationSubmit, /await onAllocateDriverShift\(allocationDraft\)/);
@@ -202,7 +207,7 @@ test("Password visibility resets to hidden when the driver form is opened fresh 
   const addDriver = sliceFrom(appSource, "const handleAddDriver = () => {", 250);
   assert.match(addDriver, /setShowDriverPassword\(false\);/);
 
-  const cancelButtonIndex = appSource.indexOf('onClick={() => {\n                          setDriverDraft(createDriverDraft());\n                          setShowDriverPassword(false);\n                          setShowDriverForm(false);\n                        }}');
+  const cancelButtonIndex = appSource.indexOf('onClick={() => {\n                          setDriverDraft(createDriverDraft());\n                          setSalaryDraft(createSalaryDraft(null));\n                          setShowDriverPassword(false);\n                          setShowDriverForm(false);\n                        }}');
   assert.ok(cancelButtonIndex !== -1, "Cancel button must reset password visibility alongside the draft");
 });
 
@@ -255,8 +260,9 @@ test("Driver save submit button disables and shows a saving state, guarding agai
   const fn = sliceFrom(appSource, "const handleDriverSubmit = async (event) => {", 700);
   assert.match(fn, /if \(driverFormSaving\) {\s*\n\s*return;/);
 
-  const buttonIndex = appSource.indexOf('disabled={!canManageDrivers || driverFormSaving}');
+  // Enabled for profile managers, or salary-only for Money users (the server re-checks both).
+  const buttonIndex = appSource.indexOf('disabled={(!canManageDrivers && !canManageSalaries) || driverFormSaving}');
   assert.ok(buttonIndex !== -1);
-  const button = appSource.slice(buttonIndex, buttonIndex + 200);
-  assert.match(button, /driverFormSaving \? "Saving\.\.\." : "Save driver"/);
+  const button = appSource.slice(buttonIndex, buttonIndex + 260);
+  assert.match(button, /driverFormSaving \? "Saving\.\.\." : canManageDrivers \? "Save driver" : "Save salary"/);
 });

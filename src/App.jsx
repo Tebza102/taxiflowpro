@@ -38,6 +38,7 @@ import PlatformCompaniesPanel from "./components/PlatformCompaniesPanel";
 import TenantAccessPanel from "./components/TenantAccessPanel";
 import { UserGuideSheet } from "./components/UserGuideSheet";
 import { DriverSalaryPanel } from "./components/DriverSalaryPanel";
+import { DriverProfileSalary, createSalaryDraft, salaryFieldsFromDraft } from "./components/DriverProfileSalary";
 const formatSignedMoney = (value) => {
   const amount = Number(value ?? 0);
   if (amount === 0) return formatMoney(0);
@@ -51,6 +52,7 @@ import {
   isSalaryPayment,
   parseSalaryArrangement,
   parseSalaryPayment,
+  salaryArrangementForDriver,
 } from "./lib/salaryContract";
 import {
   buildUserGuide,
@@ -333,6 +335,10 @@ function App() {
     password: "",
   });
   const latestSnapshotRef = useRef(null);
+  // Salary: the driver profile sets it, Money records and reviews payments. These
+  // carry "open that driver's salary" / "open salary payments" between panels.
+  const [driverProfileIntent, setDriverProfileIntent] = useState(null);
+  const [financeViewIntent, setFinanceViewIntent] = useState(null);
   const latestBackendModeRef = useRef(repository.backendMode);
   const sessionRole = useMemo(
     () => getAuthSessionRole(authSession?.user ?? null),
@@ -1374,13 +1380,21 @@ function App() {
     }
     const staffId = String(draft.staffId ?? "").trim();
     const knownProfile = Boolean(staffId) && (current.drivers ?? []).some((driver) => driver.staffId === staffId);
+    // Editing: routes are sent only when the selection changed since the form
+    // opened. An older profile that names its route only by text gets a derived
+    // id in the form; left untouched, its stored route stays exactly as it is
+    // (the server would refuse the derived id).
+    const normalizeIds = (ids) => Array.from(new Set((Array.isArray(ids) ? ids : []).map((value) => String(value ?? "").trim()).filter(Boolean))).sort();
+    const selectedRouteIds = normalizeIds(draft.routeIds);
+    const keepStoredRoute =
+      knownProfile && Array.isArray(draft.routeIdsAtOpen) && selectedRouteIds.join("|") === normalizeIds(draft.routeIdsAtOpen).join("|");
     return saveFleetRecordInTenant(
       `driver:${staffId || "new"}`,
       "driver.save",
       {
         ...(knownProfile ? { staffId } : {}),
         name: driverName,
-        routeIds: Array.from(new Set((Array.isArray(draft.routeIds) ? draft.routeIds : []).map((value) => String(value ?? "").trim()).filter(Boolean))),
+        ...(keepStoredRoute ? {} : { routeIds: selectedRouteIds }),
         licenseNumber: String(draft.licenseNumber ?? "").trim(),
         licenseCode: String(draft.licenseCode ?? "").trim(),
         licenseExpiryDate: draft.licenseExpiryDate || "",
@@ -3803,8 +3817,11 @@ function App() {
 
   // Driver salaries (rules: src/lib/salaryContract.js). Business workspace: the
   // server actions decide. Demo/legacy: the same rules applied locally.
-  const runLocalSalaryChange = async (build) => {
-    const current = currentSnapshot;
+  // base: the snapshot a save in this same handler just produced (a new or
+  // edited driver profile), so the salary is applied on top of it, not on the
+  // render's older copy (which would undo that profile save).
+  const runLocalSalaryChange = async (build, base = null) => {
+    const current = base ?? currentSnapshot;
     if (!current) {
       return { ok: false, error: "No data available." };
     }
@@ -3830,7 +3847,7 @@ function App() {
       : { ok: false, error: commitResult.error ?? "The change could not be saved. Nothing was recorded." };
   };
 
-  const saveSalaryArrangement = async (draft) => {
+  const saveSalaryArrangement = async (draft, { base = null } = {}) => {
     if (tenantLive) {
       return runTenantFinance(
         `salary-schedule:${draft.driverStaffId}`,
@@ -3847,7 +3864,34 @@ function App() {
         audit,
         message: `Salary schedule saved for ${arrangement.driverName}. No expense was added.`,
       };
-    });
+    }, base);
+  };
+
+  // Driver profile with its optional salary settings: the profile first (needs
+  // drivers.manage), then the salary through the one arrangement action (needs
+  // Money edit access; the server re-checks both). Neither records a payment.
+  const saveDriverProfile = async ({ profileDraft, salaryFields, canSaveProfile }) => {
+    let staffId = String(profileDraft.staffId ?? "").trim();
+    let base = null;
+    const messages = [];
+    if (canSaveProfile) {
+      const saved = await saveDriver(profileDraft);
+      if (!saved.ok) return saved;
+      staffId = saved.staffId ?? staffId;
+      base = saved.snapshot ?? null;
+      messages.push(saved.message);
+    }
+    if (salaryFields) {
+      if (!staffId) return { ok: false, error: "Save the driver profile before setting a salary." };
+      const salary = await saveSalaryArrangement({ ...salaryFields, driverStaffId: staffId }, { base });
+      if (!salary.ok) {
+        return messages.length
+          ? { ok: false, partial: true, staffId, error: `${messages.join(" ")} The salary was not saved: ${salary.error}` }
+          : salary;
+      }
+      messages.push(salary.message);
+    }
+    return { ok: true, staffId, message: messages.join(" ") || "Nothing changed." };
   };
 
   const recordSalaryPayment = async (draft) => {
@@ -5352,6 +5396,7 @@ function App() {
           ok: true,
           message: existingUser ? `${profileMessage} TaxiFlow login: Active.` : profileMessage,
           staffId: confirmedDriver.staffId,
+          snapshot: commitResult.snapshot,
         };
       }
 
@@ -5369,6 +5414,7 @@ function App() {
           ok: true,
           message: `Driver profile saved, but TaxiFlow login was not created: ${lifecycleResult.error}`,
           staffId: confirmedDriver.staffId,
+          snapshot: commitResult.snapshot,
         };
       }
 
@@ -5418,12 +5464,13 @@ function App() {
         : [...currentUsers, nextDriverUser],
     );
 
-    setSnapshot({
+    const nextSnapshotLocal = {
       ...current,
       drivers: nextDriversLocal,
       appUsers: nextUsersLocal,
       auditTrail: nextAuditTrail,
-    });
+    };
+    setSnapshot(nextSnapshotLocal);
 
     return {
       ok: true,
@@ -5431,6 +5478,7 @@ function App() {
         ? `${nextDriverLocal.name} updated in the driver roster.`
         : `${nextDriverLocal.name} added to the driver roster.`,
       staffId: nextDriverLocal.staffId,
+      snapshot: nextSnapshotLocal,
     };
   };
 
@@ -6232,8 +6280,13 @@ function App() {
               onSaveSpecialIncome={saveSpecialIncome}
               onSaveExpense={saveExpense}
               onSaveExpensePreset={saveExpensePreset}
-              onSaveSalaryArrangement={saveSalaryArrangement}
               onRecordSalaryPayment={recordSalaryPayment}
+              onOpenDriverSalary={(staffId) => {
+                setDriverProfileIntent({ staffId, nonce: Date.now() });
+                setActiveView("drivers");
+              }}
+              viewIntent={financeViewIntent}
+              onViewIntentHandled={() => setFinanceViewIntent(null)}
               onVerifyIncome={verifyIncome}
               onDeleteTransaction={deleteTransaction}
               onLockDeposit={lockDeposit}
@@ -6268,6 +6321,13 @@ function App() {
               onSaveExpense={saveExpense}
               onSubmitDriverCashUp={submitDriverCashUp}
               onSaveDriver={saveDriver}
+              onSaveDriverProfile={saveDriverProfile}
+              profileIntent={driverProfileIntent}
+              onProfileIntentHandled={() => setDriverProfileIntent(null)}
+              onOpenSalaryPayments={() => {
+                setFinanceViewIntent({ view: "expenses", focus: "driver-salaries", nonce: Date.now() });
+                setActiveView("finance");
+              }}
               tenant={tenantPanelAccess}
               onAllocateDriverShift={allocateDriverShift}
               onRevalidateLiveWorkspace={revalidateLiveWorkspace}
@@ -6985,8 +7045,10 @@ function FinancePanel({
   onSaveSpecialIncome,
   onSaveExpense,
   onSaveExpensePreset,
-  onSaveSalaryArrangement,
   onRecordSalaryPayment,
+  onOpenDriverSalary,
+  viewIntent = null,
+  onViewIntentHandled,
   onVerifyIncome,
   onDeleteTransaction,
   onLockDeposit,
@@ -6996,8 +7058,17 @@ function FinancePanel({
   const defaultVehicle = snapshot.vehicles[0] ?? null;
   const defaultVehicleId = defaultVehicle?.id ?? "";
   const defaultVehicleRoute = defaultVehicle?.route ?? "";
-  const [financeView, setFinanceView] = useState("revenue");
+  const [financeView, setFinanceView] = useState(() => viewIntent?.view ?? "revenue");
   const [expenseView, setExpenseView] = useState("vehicle");
+  // Opened from a driver profile's "Record or review salary payments".
+  useEffect(() => {
+    if (!viewIntent) return;
+    setFinanceView(viewIntent.view);
+    if (viewIntent.focus) {
+      window.setTimeout(() => document.querySelector(`[data-testid="${viewIntent.focus}"]`)?.scrollIntoView({ block: "start" }), 50);
+    }
+    onViewIntentHandled?.();
+  }, [viewIntent]);
   const [feedback, setFeedback] = useState(null);
   const [verificationInputs, setVerificationInputs] = useState({});
   const [pendingRevenueTarget, setPendingRevenueTarget] = useState(null);
@@ -8451,7 +8522,7 @@ function FinancePanel({
             snapshot={snapshot}
             canEdit={canEditFinanceUpdates}
             businessName={snapshot.profile?.fleetName ?? ""}
-            onSaveArrangement={onSaveSalaryArrangement}
+            onOpenDriverSalary={onOpenDriverSalary}
             onRecordPayment={onRecordSalaryPayment}
           />
         </div>
@@ -11760,6 +11831,10 @@ function DriversPanel({
   onSaveExpense,
   onSubmitDriverCashUp,
   onSaveDriver,
+  onSaveDriverProfile,
+  profileIntent = null,
+  onProfileIntentHandled,
+  onOpenSalaryPayments,
   onAllocateDriverShift,
   onRevalidateLiveWorkspace,
   onSelectDriverVehicle,
@@ -11788,6 +11863,9 @@ function DriversPanel({
     currentUserRecord,
   );
   const canUseFinanceCapture = activeRole === "Driver" ? true : canEditFinanceRecords;
+  // Salary settings follow Money edit access (Owner always), never driver-profile
+  // management; the server applies the same rule to salary.arrangement_save.
+  const canManageSalaries = activeRole === "Owner" || (PRIVILEGED_ROLES.has(activeRole) && canEditFinanceRecords);
   const autoCheckDriverExpenses = activeRole !== "Driver" && canEditFinanceRecords;
   const linkedVehicles = getDriverLinkedVehicles(snapshot);
   const allocatableDrivers = useMemo(
@@ -11829,6 +11907,9 @@ function DriversPanel({
   const [showDriverForm, setShowDriverForm] = useState(false);
   const [driverFormSaving, setDriverFormSaving] = useState(false);
   const [driverDraft, setDriverDraft] = useState(() => createDriverDraft());
+  const [salaryDraft, setSalaryDraft] = useState(() => createSalaryDraft(null));
+  const editingArrangement =
+    canManageSalaries && driverDraft.staffId ? salaryArrangementForDriver(snapshot, driverDraft.staffId) : null;
   // Never persisted, never pre-filled from a saved password - only reflects what is
   // currently being typed into this form, and resets to hidden whenever the form is
   // reset or closed (see the Cancel handler and post-submit reset below).
@@ -12481,10 +12562,32 @@ function DriversPanel({
 
   const handleAddDriver = () => {
     setDriverDraft(createDriverDraft());
+    setSalaryDraft(createSalaryDraft(null));
     setShowDriverPassword(false);
     setShowDriverForm(true);
     driverFormRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
+
+  const handleEditDriver = (driver, focusSalary = false) => {
+    const draft = createDriverDraft(driver);
+    setDriverDraft({ ...draft, routeIdsAtOpen: draft.routeIds });
+    setSalaryDraft(createSalaryDraft(canManageSalaries ? salaryArrangementForDriver(snapshot, driver.staffId) : null));
+    setShowDriverPassword(false);
+    setShowDriverForm(true);
+    window.setTimeout(() => {
+      const target = focusSalary ? document.getElementById("driver-profile-salary") : driverFormRef.current;
+      target?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 50);
+  };
+
+  // Opened from Money > Driver salaries: that driver's profile, at its salary.
+  useEffect(() => {
+    if (!profileIntent) return;
+    const driver = (snapshot.drivers ?? []).find((item) => item.staffId === profileIntent.staffId);
+    if (driver) handleEditDriver(driver, true);
+    else if (canManageDrivers) handleAddDriver();
+    onProfileIntentHandled?.();
+  }, [profileIntent]);
 
   const handleDriverSubmit = async (event) => {
     event.preventDefault();
@@ -12496,15 +12599,31 @@ function DriversPanel({
     setDriverFormSaving(true);
 
     try {
-      const response = await onSaveDriver(driverDraft);
+      const salaryFields = canManageSalaries
+        ? salaryFieldsFromDraft(salaryDraft, editingArrangement, driverDraft.staffId)
+        : null;
+      const response = await onSaveDriverProfile({
+        profileDraft: driverDraft,
+        salaryFields,
+        canSaveProfile: canManageDrivers,
+      });
 
       setFeedback({
         tone: response.ok ? "success" : "danger",
         message: response.message ?? response.error,
+        source: "profile",
       });
+
+      // Profile saved but the salary was refused: keep the form open on this
+      // driver so the salary can be corrected and saved again.
+      if (response.partial && response.staffId) {
+        setDriverDraft((current) => ({ ...current, staffId: response.staffId }));
+        await onRevalidateLiveWorkspace?.({ reason: "driver-profile-update", force: true });
+      }
 
       if (response.ok) {
         setDriverDraft(createDriverDraft());
+        setSalaryDraft(createSalaryDraft(null));
         setShowDriverPassword(false);
         setShowDriverForm(false);
 
@@ -12776,7 +12895,7 @@ function DriversPanel({
 
   return (
     <div className="content-stack">
-      {feedback && (
+      {feedback && !(feedback.source === "profile" && showDriverForm) && (
         <div className="finance-feedback" data-tone={feedback.tone}>
           <span className="status-chip" data-tone={feedback.tone}>
             {feedback.message}
@@ -13524,12 +13643,13 @@ function DriversPanel({
 
         <Panel eyebrow="People operations" title="Roster and performance" icon={Users}>
           <div className="content-stack">
-            {canManageDrivers && (
-              <article ref={driverFormRef} className="overview-board">
+            {(canManageDrivers || canManageSalaries) && (
+              <article ref={driverFormRef} className="overview-board" data-testid="driver-profile-form">
                 <div className="overview-board-head">
                   <p className="eyebrow">Roster control</p>
-                  <h3>Add driver</h3>
+                  <h3>{showDriverForm && driverDraft.staffId ? `Edit driver: ${driverDraft.name}` : "Add driver"}</h3>
                 </div>
+                {canManageDrivers && (
                 <div className="finance-form-actions">
                     <button
                       type="button"
@@ -13541,8 +13661,15 @@ function DriversPanel({
                     Add driver
                   </button>
                 </div>
+                )}
+                {!canManageDrivers && !showDriverForm && (
+                  <p className="finance-form-note" data-tone="info">
+                    Choose Salary settings on a driver below to set or change their salary. You have not been given driver-profile management, so their profile details are read-only.
+                  </p>
+                )}
                 {showDriverForm && (
                   <form className="finance-form" onSubmit={handleDriverSubmit}>
+                    <fieldset className="driver-profile-fieldset" disabled={!canManageDrivers}>
                     <div className="finance-form-grid">
                       <label className="finance-field finance-field-wide">
                         <span>Full name</span>
@@ -13683,6 +13810,17 @@ function DriversPanel({
                         />
                       </label>
                     </div>
+                    </fieldset>
+                    {canManageSalaries && (
+                      <DriverProfileSalary
+                        snapshot={snapshot}
+                        arrangement={editingArrangement}
+                        draft={salaryDraft}
+                        onChange={setSalaryDraft}
+                        disabled={driverFormSaving}
+                        onOpenPayments={onOpenSalaryPayments ? () => onOpenSalaryPayments(driverDraft.staffId) : null}
+                      />
+                    )}
                     {tenantLive && (
                       <span className="status-chip" data-tone="neutral">
                         Profile only. The Owner gives sign-ins in Settings &gt; Business access.
@@ -13765,9 +13903,9 @@ function DriversPanel({
                       <button
                         type="submit"
                         className="action-button primary"
-                        disabled={!canManageDrivers || driverFormSaving}
+                        disabled={(!canManageDrivers && !canManageSalaries) || driverFormSaving}
                       >
-                        {driverFormSaving ? "Saving..." : "Save driver"}
+                        {driverFormSaving ? "Saving..." : canManageDrivers ? "Save driver" : "Save salary"}
                       </button>
                       <button
                         type="button"
@@ -13775,6 +13913,7 @@ function DriversPanel({
                         disabled={driverFormSaving}
                         onClick={() => {
                           setDriverDraft(createDriverDraft());
+                          setSalaryDraft(createSalaryDraft(null));
                           setShowDriverPassword(false);
                           setShowDriverForm(false);
                         }}
@@ -13782,6 +13921,13 @@ function DriversPanel({
                         Cancel
                       </button>
                     </div>
+                    {feedback?.source === "profile" && (
+                      // The outcome next to the form as well as at the top of the panel
+                      // (a saved profile with a refused salary keeps the form open).
+                      <p className="finance-form-note" data-tone={feedback.tone} role="status" data-testid="driver-profile-outcome">
+                        {feedback.message}
+                      </p>
+                    )}
                     <p
                       className="finance-form-note"
                       data-tone={driverRouteOptions.length === 0 ? "info" : "info"}
@@ -13942,8 +14088,17 @@ function DriversPanel({
                       {driver.prdpDays ? `${driver.prdpDays} days PrDP` : driver.shiftStatus}
                     </span>
                   </div>
-                  {canManageDrivers && driver.role === "Driver" && (
+                  {(canManageDrivers || canManageSalaries) && driver.role === "Driver" && (
                     <div className="finance-form-actions">
+                      <button
+                        type="button"
+                        className="record-button"
+                        onClick={() => handleEditDriver(driver, !canManageDrivers)}
+                        aria-label={`${canManageDrivers ? "Edit profile" : "Salary settings"}: ${driver.name}`}
+                      >
+                        {canManageDrivers ? "Edit profile" : "Salary settings"}
+                      </button>
+                      {canManageDrivers && (
                       <button
                         type="button"
                         className="record-button"
@@ -13952,6 +14107,7 @@ function DriversPanel({
                       >
                         {driverVehicleMap.has(driver.staffId) ? "Change vehicle" : "Assign vehicle"}
                       </button>
+                      )}
                     </div>
                   )}
                 </article>

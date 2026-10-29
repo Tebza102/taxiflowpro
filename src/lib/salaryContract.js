@@ -35,6 +35,10 @@ export const SALARY_SOURCE_LABELS = Object.freeze({
   driver_takings: "Driver's takings for the day",
 });
 export const SALARY_FREQUENCY_LABELS = Object.freeze({ daily: "Daily", weekly: "Weekly", fortnightly: "Fortnightly", monthly: "Monthly" });
+// When in its period a salary falls due: "end" (in arrears, the default and the
+// rule before timing existed) or "start" (in advance).
+export const SALARY_PAY_TIMINGS = Object.freeze(["end", "start"]);
+export const SALARY_PAY_TIMING_LABELS = Object.freeze({ end: "At the end of each period", start: "At the start of each period" });
 export const SALARY_CATEGORY = "Salary";
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -163,6 +167,8 @@ export const SALARY_ARRANGEMENT_FIELDS = Object.freeze([
   "startDate",
   "effectiveFrom",
   "active",
+  "payTiming",
+  "revision",
 ]);
 
 export const parseSalaryArrangement = (fields = {}) => {
@@ -176,6 +182,11 @@ export const parseSalaryArrangement = (fields = {}) => {
   if (!validDate(startDate)) throw bad("Select the date the salary starts.");
   if (effectiveFrom && !validDate(effectiveFrom)) throw bad("Select the date the change applies from.");
   if (fields.active !== undefined && typeof fields.active !== "boolean") throw bad("active must be true or false.");
+  const payTiming = text(fields.payTiming) || "end";
+  if (!SALARY_PAY_TIMINGS.includes(payTiming)) throw bad("Choose when the salary is paid: at the start or the end of each period.");
+  if (fields.revision !== undefined && fields.revision !== null && (!Number.isInteger(fields.revision) || fields.revision < 1)) {
+    throw bad("revision must be the schedule's revision number.");
+  }
   return {
     driverStaffId: text(fields.driverStaffId),
     amount: money(fields.amount, "salary amount"),
@@ -184,8 +195,15 @@ export const parseSalaryArrangement = (fields = {}) => {
     startDate,
     effectiveFrom: effectiveFrom || null,
     active: fields.active !== false,
+    payTiming,
+    revision: fields.revision ?? null,
   };
 };
+
+// A schedule saved before revisions existed counts as revision 1.
+export const salaryArrangementRevision = (arrangement) => (Number.isInteger(arrangement?.revision) ? arrangement.revision : 1);
+export const salaryArrangementForDriver = (snapshot, driverStaffId) =>
+  getSalaryArrangements(snapshot).find((item) => text(item.driverStaffId) === text(driverStaffId)) ?? null;
 
 // Amount the schedule set for the period that starts on periodStart.
 export const scheduledAmountFor = (arrangement, periodStart) => {
@@ -204,8 +222,25 @@ export const applySalaryArrangement = (snapshot, parsed, actor, now) => {
   if (!driver) throw new SalaryRuleError(404, "That driver does not exist in this business.");
   const arrangements = getSalaryArrangements(snapshot);
   const existing = arrangements.find((item) => text(item.driverStaffId) === parsed.driverStaffId) ?? null;
+  // Never overwrite silently: a change must name the revision it was based on,
+  // and a new schedule must not land on top of one saved meanwhile.
+  if (existing && parsed.revision == null) {
+    throw conflict(`${text(existing.driverName) || "This driver"} already has a salary schedule. Open it to change it; nothing was saved.`);
+  }
+  if (existing && parsed.revision !== salaryArrangementRevision(existing)) {
+    throw conflict("This salary schedule was changed by someone else since you opened it. Reload it and try again; nothing was saved.");
+  }
+  if (!existing && parsed.revision != null) {
+    throw conflict("This salary schedule no longer exists. Reload and try again; nothing was saved.");
+  }
   const changed = !existing || existing.amount !== parsed.amount || existing.frequency !== parsed.frequency;
   const effectiveFrom = existing ? parsed.effectiveFrom ?? text(now).slice(0, 10) : parsed.startDate;
+  // Earlier amounts and their dates are kept: a change may not start before the
+  // latest recorded change, or the schedule's history would be rewritten.
+  const latest = [...(existing?.amountHistory ?? [])].map((entry) => text(entry.effectiveFrom)).sort().at(-1);
+  if (changed && existing && latest && effectiveFrom < latest) {
+    throw bad(`A change cannot apply before the last change (${latest}). Choose ${latest} or later.`);
+  }
   const frequencyChanged = existing && existing.frequency !== parsed.frequency;
   const arrangement = {
     ...(existing ?? {}),
@@ -218,6 +253,8 @@ export const applySalaryArrangement = (snapshot, parsed, actor, now) => {
     // A new frequency starts its own periods from the change date.
     startDate: frequencyChanged ? effectiveFrom : parsed.startDate,
     active: parsed.active,
+    payTiming: parsed.payTiming,
+    revision: existing ? salaryArrangementRevision(existing) + 1 : 1,
     amountHistory: [
       ...(existing?.amountHistory ?? []),
       ...(changed
@@ -243,7 +280,7 @@ export const applySalaryArrangement = (snapshot, parsed, actor, now) => {
     entityType: "salary-arrangement",
     entityId: arrangement.id,
     title: `Salary schedule ${existing ? "updated" : "set"} / ${arrangement.driverName}`,
-    detail: `${formatRand(arrangement.amount)} ${arrangement.frequency} from ${effectiveFrom} / usually ${arrangement.payMethod}${arrangement.active ? "" : " / paused"}`,
+    detail: `${formatRand(arrangement.amount)} ${arrangement.frequency} from ${effectiveFrom} / ${arrangement.payTiming === "start" ? "paid in advance" : "paid in arrears"} / usually ${arrangement.payMethod}${arrangement.active ? "" : " / paused"}`,
   };
   return { finance, arrangement, audit };
 };
@@ -265,7 +302,7 @@ export const describeSalarySchedule = (snapshot, arrangement, today) => {
   const describe = (item) => ({
     period: item,
     label: formatSalaryPeriod(frequency, item),
-    dueDate: salaryPeriodEnd(frequency, item),
+    dueDate: arrangement.payTiming === "start" ? salaryPeriodStart(frequency, item) : salaryPeriodEnd(frequency, item),
     scheduledAmount: scheduledAmountFor(arrangement, salaryPeriodStart(frequency, item)),
     payment: findSalaryPayment(snapshot, arrangement.driverStaffId, frequency, item),
   });

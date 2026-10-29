@@ -268,9 +268,14 @@ const vehicleIdentity = (vehicle) => ({
 });
 
 const NET_LABEL = "Net result (recorded income less recorded expenses)";
-const BASE_NOTES = [
+// Amounts in notes use the same en-ZA format as the rest of the report.
+const NOTE_RAND = new Intl.NumberFormat("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const noteRand = (centsValue) => `R ${NOTE_RAND.format(centsValue / 100)}`;
+const baseNotes = (kind) => [
   "Net result is recorded income less recorded expenses for these dates. It is not accounting profit: TaxiFlow does not record depreciation, tax, loan repayments, or opening and closing balances.",
-  "Income is the takings recorded on each trip or special hire. Cash actually counted is shown under Cash checking.",
+  kind === "business"
+    ? "Income is the takings recorded on each trip or special hire. Cash actually counted is shown under Cash checking."
+    : "Income is the takings recorded on each trip or special hire. Cash actually counted is checked per driver day, in the Overall business report.",
   "Every recorded entry is included whatever its checking status; see Verification status.",
 ];
 
@@ -293,7 +298,7 @@ const stamp = (options) => {
 const legacySalaryNote = (expenses) => {
   const legacy = expenses.filter((line) => !line.salary && line.category.toLowerCase() === "salary");
   if (!legacy.length) return [];
-  return [`${legacy.length} ${legacy.length === 1 ? "expense" : "expenses"} (R ${rand(legacy.reduce((t, l) => t + l.amountCents, 0)).toFixed(2)}) in the category Salary ${legacy.length === 1 ? "was" : "were"} recorded without a driver salary payment, so ${legacy.length === 1 ? "it is" : "they are"} shown under ${legacy[0].vehicleId ? "vehicle expenses" : "business costs without a vehicle"}, not under Driver salaries.`];
+  return [`${legacy.length} ${legacy.length === 1 ? "expense" : "expenses"} (${noteRand(legacy.reduce((t, l) => t + l.amountCents, 0))}) in the category Salary ${legacy.length === 1 ? "was" : "were"} recorded without a driver salary payment, so ${legacy.length === 1 ? "it is" : "they are"} shown under ${legacy[0].vehicleId ? "vehicle expenses" : "business costs without a vehicle"}, not under Driver salaries.`];
 };
 
 // --- Business report ---------------------------------------------------------
@@ -334,9 +339,9 @@ export const buildBusinessReport = (snapshot = {}, periodInput = {}, options = {
 
   const assetCents = sumCents(expenses.filter((line) => line.asset), (line) => rand(line.amountCents));
   const notes = [
-    ...BASE_NOTES,
+    ...baseNotes("business"),
     "Business costs without a vehicle and driver salaries are shown separately; they are not spread across vehicles.",
-    ...(assetCents ? [`Expenses include R ${rand(assetCents).toFixed(2)} of asset purchases recorded as expenses.`] : []),
+    ...(assetCents ? [`Expenses include ${noteRand(assetCents)} of asset purchases recorded as expenses.`] : []),
     ...legacySalaryNote(expenses),
     "Cash checking lists driver day hand-ins. Entries captured before day hand-ins existed appear only under Verification status.",
     "Deposits are listed by the date they were banked, which can differ from the dates of the entries they contain.",
@@ -447,11 +452,11 @@ export const buildVehicleReport = (snapshot = {}, periodInput = {}, vehicleId, o
     verification: statusSummary(lines),
     transactions: lines,
     notes: [
-      ...BASE_NOTES,
+      ...baseNotes("vehicle"),
       "Only entries recorded against this vehicle are included. Business costs without a vehicle and driver salaries are not allocated to vehicles; they are in the Overall business report.",
       "Distance is closing less opening odometer on trips where both were recorded.",
       "Cash checking and banking are per driver day and per deposit, not per vehicle; see the Overall business report.",
-      ...(assetCents ? [`Expenses include R ${rand(assetCents).toFixed(2)} of asset purchases recorded as expenses.`] : []),
+      ...(assetCents ? [`Expenses include ${noteRand(assetCents)} of asset purchases recorded as expenses.`] : []),
       ...datingNotes(all.filter((line) => line.vehicleId === vehicle.id), undated),
     ],
     reconciliation: reconcile({ lines, incomeCents, expenseCents }),

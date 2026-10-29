@@ -84,3 +84,12 @@ test("management expenses step explains the driver salary workflow", () => {
   assert.match(body, /Driver salaries/);
   assert.match(body, /record each payment once/);
 });
+
+test("guide: salary settings live in the driver profile; payments in Money; Reports covers period reports", () => {
+  const guide = buildUserGuide({ role: "Owner", views: MANAGEMENT_VIEWS });
+  const body = (id) => guide.steps.find((step) => step.id === id)?.body ?? "";
+  assert.match(body("mgmt-expenses"), /driver's profile \(Drivers, Edit profile, Salary\)/);
+  assert.match(body("mgmt-expenses"), /record each payment once here in Driver salaries/);
+  assert.match(body("mgmt-drivers"), /Salary section appears only for people with Money access/);
+  if (MANAGEMENT_VIEWS.includes("reports")) assert.match(body("mgmt-reports"), /business and vehicle reports/);
+});

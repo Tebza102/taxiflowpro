@@ -133,10 +133,17 @@ test("development demo request downloads a PDF with attachment headers", async (
   });
 });
 
-test("handlers reject non-GET methods and missing ids", async () => {
+test("handlers reject other methods, business-mode POSTs and missing ids", async () => {
+  const putRes = createRes();
+  await reportPdfHandler({ method: "PUT", headers: {}, query: { id: RECORD_ID } }, putRes);
+  assert.equal(putRes.statusCode, 405);
+
+  // POST is only for demo data sent by a local demo app (reportSnapshot.js);
+  // any other mode is refused before anything is read or rendered.
   const postRes = createRes();
-  await reportPdfHandler({ method: "POST", headers: {}, query: { id: RECORD_ID } }, postRes);
-  assert.equal(postRes.statusCode, 405);
+  await reportPdfHandler({ method: "POST", headers: {}, body: { snapshot: {} }, query: { id: RECORD_ID } }, postRes);
+  assert.equal(postRes.statusCode, 400);
+  assert.ok(!String(postRes.headers?.["content-type"] ?? postRes.headers?.["Content-Type"] ?? "").includes("pdf"));
 
   const missingRes = createRes();
   await reportPdfHandler({ method: "GET", headers: {}, query: {} }, missingRes);

@@ -1801,3 +1801,27 @@ The monthly expense CSV alone did not meet the reporting requirement. Reports no
 
 **Next action:**
 - Tebogo reviews the sample PDF and the draft PR; Prompt 2 (salary settings in the driver profile) on request.
+
+### 2026-10-29 — Salary settings in the driver profile (Prompt 2) and demo reports from the current demo workspace, branch `agent/driver-salary-profile`
+
+**Changed by:** Agent (Claude Code)
+
+**Summary:**
+- Prompt 2: Drivers > Add driver / Edit profile has an optional Salary section on the one existing arrangement model (amount, frequency, start/effective date, payment timing, Active/Paused; shows current arrangement, next/due, amount history). Saving never records a payment. Money keeps payments and history, linked both ways. Arrangement `revision` stops silent overwrites (409); a change cannot start before the last change. Salary access = Money edit, independent of `drivers.manage` (and vice versa); `driver.save` refuses salary fields; projections for Drivers and no-Money managers hold no salary data. A saved profile with a refused salary keeps the form open with the inputs and the exact outcome next to the form; retry updates the same driver. Edits send routes only when the selection changed, so a text-only legacy route is left unchanged (this was a real refusal found by the tenant suite; editing existing drivers was not reachable in the UI before).
+- Demo-report correction (separate commit): demo Reports (screen, CSV, PDF; business/vehicle and daily) are built from the current demo workspace through the shared calculations. Posted data is accepted only for `mode=mock`, never on a production server (403), never with a sign-in token (403), shape/size validated (400/413, incl. pre-parsed bodies), reduced to an explicit field allowlist on both sides.
+- Verification: `scripts/verify-all.mjs` runs Node -> guards -> build -> demo browser -> fresh-reset isolated test-stack tenant suite, stops on failure, keeps logs and artifacts under `uat-reports/verify/<run>/`, and refuses to overlap (lock file). Reset targets only `taxiflow-localdb-test` (loopback 45321, guarded by `scripts/localdb/lib/localTarget.mjs`).
+- Report polish: notes use the en-ZA amount format; the vehicle report no longer points to a Cash checking section it does not have. Report requests time out after 60 s with a clear message.
+
+**Failures found and fixed during verification (evidence kept under `uat-reports/verify/`):**
+- Tenant: profile save refused "A selected route does not exist" for a driver whose route is stored only as text (fixed: routes sent only when changed). Permission test signed in before sign-out finished (test fixed).
+- Demo browser suite under the pipeline: the PDF request was cut off mid-test (trace: JSON 0.7 s, CSV 1.7 s, PDF no response) because the dev server watched the pipeline's own logs and traces in `uat-reports/` (Vite ignores only `test-results/`). Fixed: `server.watch.ignored` adds `uat-reports`. Run time went from ~10 min back to 5.5 min.
+- Endpoint test expected POST to be 405; now PUT is 405 and a business-mode POST is 400 with no report.
+
+**Tests run (final, `scripts/verify-all.mjs`):** Node 416/416; sync guards pass; build pass; demo browser 58/58 (run `2026-10-29T07-10-49-113Z`); tenant 27/27 after a fresh reset of the isolated test stack (same run). New: `tests/salary-profile.test.mjs` (8), `tests/demo-report-snapshot.test.mjs` (8, incl. reduced-vs-full report equality for every demo cash-up and vehicle), `tests/driver-salary-profile.spec.js` (4), `tests/localdb-browser/driver-salary-profile-tenant.spec.js` (5: profile + no payment + no salary in profile; payment -> server report once, no vehicle report; Driver refused; partial save + retry, one driver; salary-only vs driver-management-only Managers).
+- Sample PDFs rendered to images (PyMuPDF in the session scratchpad only): 5 pages, 0 text outside the page, 0 overlapping text; visually readable. Sample CSV parsed independently: 21 lines, amounts numeric, lines = totals, split and net reconcile.
+
+**Result:** Pass. Not merged or deployed.
+
+**Risks remaining:** real phone, real spreadsheet app and hosted Preview not checked; a deployed demo (none exists) could not post session data.
+
+**Next action:** review the draft PR; Prompt 3 (recurring fixed expenses) when supplied.

@@ -225,7 +225,7 @@ test("recorded salaries cannot be edited through the generic record edit", () =>
 
 test("historical amounts survive a schedule change; scheduled amount follows the effective date", () => {
   const paid = pay(withSchedule()).snapshot;
-  const raised = withSchedule(paid, { ...schedule, amount: 7000, effectiveFrom: "2026-11-01" });
+  const raised = withSchedule(paid, { ...schedule, amount: 7000, effectiveFrom: "2026-11-01", revision: 1 });
   const october = findSalaryPayment(raised, DRIVER, "monthly", "2026-10");
   assert.equal(october.amount, 6500);
   assert.equal(october.salaryPayment.scheduledAmount, 6500);

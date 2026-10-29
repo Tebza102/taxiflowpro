@@ -15,33 +15,22 @@ import {
   salaryPeriodForDate,
 } from "../lib/salaryContract";
 
-// Money > Expenses: driver salary schedules, salary payments (scheduled or
-// manual) and the monthly expense report. A schedule is a plan only; each
-// payment is recorded once, as one "Salary" expense, when it is actually paid
-// (rules: src/lib/salaryContract.js).
+// Money > Expenses: where salary payments are recorded and reviewed (scheduled
+// or manual) and the monthly expense report. Schedules are set and changed in
+// the driver's profile (DriverProfileSalary); here they are shown with what is
+// due. A schedule is a plan only; each payment is recorded once, as one "Salary"
+// expense, when it is actually paid (rules: src/lib/salaryContract.js).
 
 const today = () => new Date().toLocaleDateString("en-CA");
 const methodLabel = (method) => (method === "bank" ? "Bank" : "Cash");
 
-const emptySchedule = (driverStaffId = "") => ({
-  driverStaffId,
-  amount: "",
-  frequency: "monthly",
-  payMethod: "bank",
-  startDate: today(),
-  effectiveFrom: "",
-  active: true,
-  isChange: false,
-});
-
-export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArrangement, onRecordPayment }) {
+export function DriverSalaryPanel({ snapshot, canEdit, businessName, onOpenDriverSalary, onRecordPayment }) {
   const drivers = snapshot.drivers ?? [];
   const arrangements = getSalaryArrangements(snapshot);
   const payments = useMemo(
     () => [...getSalaryPayments(snapshot)].sort((a, b) => String(b.expenseDate).localeCompare(String(a.expenseDate))),
     [snapshot],
   );
-  const [scheduleDraft, setScheduleDraft] = useState(() => emptySchedule(drivers[0]?.staffId ?? ""));
   const [paymentDraft, setPaymentDraft] = useState(null);
   const [feedback, setFeedback] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -55,20 +44,6 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
   const duplicate = paymentDraft?.period
     ? findSalaryPayment(snapshot, paymentDraft.driverStaffId, paymentDraft.frequency, paymentDraft.period)
     : null;
-
-  const editSchedule = (arrangement) => {
-    setPaymentDraft(null);
-    setScheduleDraft({
-      driverStaffId: arrangement.driverStaffId,
-      amount: String(arrangement.amount),
-      frequency: arrangement.frequency,
-      payMethod: arrangement.payMethod,
-      startDate: arrangement.startDate,
-      effectiveFrom: today(),
-      active: arrangement.active !== false,
-      isChange: true,
-    });
-  };
 
   const startPayment = (arrangement, period, amount) => {
     setFeedback(null);
@@ -115,18 +90,6 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
     } finally {
       setSaving(false);
     }
-  };
-
-  const saveSchedule = (event) => {
-    event.preventDefault();
-    const { isChange, effectiveFrom, ...fields } = scheduleDraft;
-    run(() =>
-      onSaveArrangement({
-        ...fields,
-        amount: Number(fields.amount),
-        ...(isChange && effectiveFrom ? { effectiveFrom } : {}),
-      }),
-    );
   };
 
   const savePayment = (event) => {
@@ -177,7 +140,9 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
         )}
 
         {arrangements.length === 0 ? (
-          <p className="panel-note">No salary schedules yet.{canEdit ? " Set one below, or record a manual payment." : ""}</p>
+          <p className="panel-note">
+            No salary schedules yet.{canEdit ? " Set one in a driver's profile (Drivers > Edit profile), or record a manual payment." : ""}
+          </p>
         ) : (
           <div className="finance-ledger">
             {arrangements.map((arrangement) => {
@@ -209,9 +174,16 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
                     )}
                     {canEdit && (
                       <>
-                        <button type="button" className="action-button" onClick={() => editSchedule(arrangement)}>
-                          Change schedule
-                        </button>
+                        {onOpenDriverSalary && (
+                          <button
+                            type="button"
+                            className="action-button"
+                            onClick={() => onOpenDriverSalary(arrangement.driverStaffId)}
+                            aria-label={`Salary settings in ${arrangement.driverName}'s profile`}
+                          >
+                            Salary settings
+                          </button>
+                        )}
                         {status.active && (
                           <button
                             type="button"
@@ -373,99 +345,13 @@ export function DriverSalaryPanel({ snapshot, canEdit, businessName, onSaveArran
         </form>
       )}
 
-      {canEdit && (
-        <form className="finance-form overview-board" onSubmit={saveSchedule} aria-label="Salary schedule">
-          <div className="overview-board-head">
-            <p className="eyebrow">Salary schedule</p>
-            <h3>{arrangementFor(scheduleDraft.driverStaffId) ? "Change a schedule" : "Set a schedule"}</h3>
-          </div>
-          <label className="finance-field">
-            <span>Driver</span>
-            <select
-              value={scheduleDraft.driverStaffId}
-              onChange={(event) => {
-                const existing = arrangementFor(event.target.value);
-                if (existing) editSchedule(existing);
-                else setScheduleDraft(emptySchedule(event.target.value));
-              }}
-              required
-            >
-              {drivers.map((driver) => (
-                <option key={driver.staffId} value={driver.staffId}>
-                  {driver.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="finance-field">
-            <span>Salary amount (R)</span>
-            <input
-              type="number"
-              min="0.01"
-              step="0.01"
-              inputMode="decimal"
-              value={scheduleDraft.amount}
-              onChange={(event) => setScheduleDraft((draft) => ({ ...draft, amount: event.target.value }))}
-              required
-            />
-          </label>
-          <label className="finance-field">
-            <span>How often</span>
-            <select
-              value={scheduleDraft.frequency}
-              onChange={(event) => setScheduleDraft((draft) => ({ ...draft, frequency: event.target.value }))}
-            >
-              {SALARY_FREQUENCIES.map((frequency) => (
-                <option key={frequency} value={frequency}>
-                  {SALARY_FREQUENCY_LABELS[frequency]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="finance-field">
-            <span>Usually paid by</span>
-            <select
-              value={scheduleDraft.payMethod}
-              onChange={(event) => setScheduleDraft((draft) => ({ ...draft, payMethod: event.target.value }))}
-            >
-              <option value="bank">Bank transfer</option>
-              <option value="cash">Cash</option>
-            </select>
-          </label>
-          <label className="finance-field">
-            <span>Starts on</span>
-            <input
-              type="date"
-              value={scheduleDraft.startDate}
-              onChange={(event) => setScheduleDraft((draft) => ({ ...draft, startDate: event.target.value }))}
-              required
-            />
-          </label>
-          {scheduleDraft.isChange && (
-            <label className="finance-field">
-              <span>Changes apply from</span>
-              <input
-                type="date"
-                value={scheduleDraft.effectiveFrom}
-                onChange={(event) => setScheduleDraft((draft) => ({ ...draft, effectiveFrom: event.target.value }))}
-              />
-            </label>
-          )}
-          <label className="salary-choice">
-            <input
-              type="checkbox"
-              checked={scheduleDraft.active}
-              onChange={(event) => setScheduleDraft((draft) => ({ ...draft, active: event.target.checked }))}
-            />
-            Schedule is active
-          </label>
-          <p className="finance-form-note" data-tone="info">
-            Saving a schedule does not add an expense. Past payments keep the amount they were paid.
-          </p>
-          <button type="submit" className="action-button primary" disabled={saving || drivers.length === 0}>
-            {saving ? "Saving..." : "Save schedule"}
+      {canEdit && onOpenDriverSalary && drivers.length > 0 && (
+        <p className="finance-form-note" data-tone="info" data-testid="salary-settings-pointer">
+          Salary amounts, frequency, timing and pausing are set in each driver's profile.{" "}
+          <button type="button" className="cta-link" onClick={() => onOpenDriverSalary(drivers[0].staffId)}>
+            Open a driver profile
           </button>
-        </form>
+        </p>
       )}
 
       {payments.length > 0 && (

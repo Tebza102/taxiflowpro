@@ -1,5 +1,11 @@
 # Next Action
 
+## Salary settings in the driver profile (Prompt 2, 2026-10-29): draft PR on `agent/driver-salary-profile`
+
+1. **Review the draft PR** (base `agent/period-reports`, PR #9). Two commits: the profile salary work, and the separately reviewable demo-report correction. Merge order: #6, #7, #8, #9, then this one. Nothing authorises a merge or deployment.
+2. **Manual checks outstanding:** section D of `06-quality/manual-checks-guide-and-salary.md` (and A6 now starts in the driver profile).
+3. **Next prompt:** Prompt 3 (recurring fixed expenses) when Tebogo pastes it; nothing started.
+
 ## Business and vehicle reports (2026-10-29): draft PR on `agent/period-reports`
 
 1. **Review the draft PR** (base `agent/driver-salary`, PR #8). Merge order becomes #6, #7, #8, then this one. Nothing authorises a merge or deployment.

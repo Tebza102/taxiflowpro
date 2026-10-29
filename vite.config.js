@@ -99,5 +99,9 @@ export default defineConfig({
   server: {
     host: "127.0.0.1",
     port: 5173,
+    // Test logs, traces and downloads (scripts/verify-all.mjs, UAT) are written
+    // under uat-reports while a dev server is running; watching them made the
+    // dev server reprocess and reload mid-test. Vite already ignores test-results.
+    watch: { ignored: ["**/uat-reports/**"] },
   },
 });

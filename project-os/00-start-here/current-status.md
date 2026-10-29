@@ -9,6 +9,13 @@
   3. PR #8 driver salaries: `agent/driver-salary` (`bd063c5`) -> `agent/user-guide`. Uses the guide (salary sentence) and release 06's finance-action permissions.
 - Merge order: #6, #7, #8, retargeting each to `main` as the one below merges.
 
+## Salary settings in the driver profile (Prompt 2, 2026-10-29): branch `agent/driver-salary-profile` (stacked on `agent/period-reports`); not merged or deployed
+
+- Drivers > Add driver / Edit profile has an optional Salary section (amount, frequency, start/effective date, payment timing, Active/Paused) on the one existing arrangement model; it shows the current arrangement, next/due and amount history, and never records a payment. Money > Driver salaries keeps payments (scheduled and manual), duplicates, sources and history, with "Salary settings" links into the profile and a link back.
+- No silent overwrite: arrangements carry a revision (stale or missing = 409); a change cannot start before the last change. Salary access = Money edit (Owner always), independent of `drivers.manage`; `driver.save` refuses salary fields. A saved profile with a refused salary keeps the form open with the inputs for a retry (no duplicate driver). Editing sends routes only when the selection changed, so older text-only routes stay unchanged.
+- Separate commit: demo Reports now use the current demo workspace (session entries included) through the shared calculations; caller-supplied data is refused on any deployed server, with any sign-in, or outside demo mode, and is shape/size checked and stripped of personal fields.
+- Evidence: change-log 2026-10-29 (Prompt 2). Not checked: real phone, spreadsheet app, hosted Preview.
+
 ## Business and vehicle reports (2026-10-29): branch `agent/period-reports` (stacked on `agent/driver-salary`); not merged or deployed
 
 - The monthly expense CSV alone did not meet the reporting requirement. Reports now has **Business and vehicle reports** for Owners, and Admins/Managers with Money on: scope Overall business or Individual vehicle; period Daily, Weekly (Mon-Sun), Monthly or Custom dates; a View report button; the applied scope and dates shown on screen; PDF and CSV downloads of exactly the report shown (if filters change, a warning says so until View report is pressed again).

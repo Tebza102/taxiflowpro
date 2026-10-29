@@ -1839,3 +1839,131 @@ The monthly expense CSV alone did not meet the reporting requirement. Reports no
 **Result:** Pass. Not merged or deployed.
 
 **Limitations:** no background job (occurrences appear when TaxiFlow is opened); frequency and first due date cannot be edited (stop and start a new schedule); real phone, spreadsheet app and hosted Preview not checked.
+
+### 2026-10-29 — Phone fixes: report PDF download and compact mobile menu (branch `agent/phone-fixes`)
+
+**Changed by:** Agent
+
+**Files changed:**
+- `src/lib/reportDownload.js` (new), `src/components/ReportFileStatus.jsx` (new), `src/components/PeriodReportSection.jsx`, `src/components/ReportsPanel.jsx`
+- `src/components/MobileNavDrawer.jsx` (new), `src/App.jsx`, `src/styles.css`
+- `tests/report-downloads.spec.js` (new), `tests/mobile-navigation.spec.js` (new)
+
+**Summary:**
+Two issues from real-phone testing of the demo over the phone hotspot.
+
+1. *PDF report could not be downloaded.* Evidence: the server path is healthy. A Pixel 7 emulation over the LAN address got POST `/api/admin/reports/period?...format=pdf&mode=mock` 200 `application/pdf` 384 KB and a download; business (3 pages), vehicle (2) and daily (1) PDFs rendered with PyMuPDF. The difference on the real phone is the address: the demo is plain `http://` on a LAN IP, which is not a secure origin, and Chrome on Android warns about or blocks downloads from such pages. The app made this invisible: it always said "Downloaded <file>" after handing the file to the browser, offered no retry, the daily report had no timeout, and a non-PDF body would have been saved as a broken file. The exact message on the phone is not yet known (Tebogo to report; F4). Fix: one shared download path for the business, vehicle and daily PDFs (and the CSV). It uses a 60s timeout, checks the `%PDF-` header and refuses an unreadable body. The screen says "PDF ready: <file> (size)", never "Downloaded", and offers an Open PDF button (a real tap on a link to the kept file). A failure shows the reason and Try again. Filters, scope, permissions and the single server report are unchanged, so screen, PDF and CSV still reconcile.
+2. *Mobile menu covered content.* The fixed translucent bottom bar had five columns for six modules, so it wrapped to two rows (about 130px) over the content. Replaced on small screens with a compact top bar (menu button, current page title), which also shows on short touch screens such as a phone turned sideways. The drawer is closed by default and opens only from the button; it closes after choosing a page, on the backdrop or on Escape. It reuses the sheet accessibility hook (focus trap, scroll lock, focus return), has 44px targets, `aria-current`, `aria-expanded` and a scrollable list, and lists exactly the role- and module-filtered pages. The bar is navy at 94% opacity with blur and white text. Desktop module buttons are unchanged.
+
+**Tests run:**
+- New `tests/mobile-navigation.spec.js` 4/4 (portrait, landscape 780x320 scrolling, Driver pages only, desktop unchanged) and `tests/report-downloads.spec.js` 4/4 (business, vehicle and daily PDFs complete with `%%EOF`; Open PDF hands over the same bytes; aborted and 500 responses show Try again, which then succeeds; an HTML body is refused and nothing is saved).
+- Full `node scripts/verify-all.mjs` run `2026-10-29T13-52-13-750Z`: node 426/426, guards, build, mock 69/69 (61 before + 8 new), tenant 30/31. The one failure was `tenant-onboarding.spec.js:70` on the desktop access screen, which these fixes do not touch: after "Grant access" succeeded, the driver row still read "No sign-in" within the 5s assertion window. Re-run on a fresh test-stack reset `2026-10-29T14-11-12-059Z`: tenant 31/31. Recorded as a timing flake to watch, not fixed here.
+
+**Result:**
+Pass in automation. Real-phone check NOT passed until Tebogo confirms (manual checks section F).
+
+**Risks remaining:**
+- Over plain http on a hotspot, Chrome may still ask to keep the file; that is the browser, not the app. Production is https and is not affected.
+- The desktop module card grid still appears at the top of each page on phones (content, not an overlay); unchanged by request scope.
+
+**Next action:**
+- Tebogo runs section F on the phone and reports what Chrome showed at F4.
+
+### 2026-10-29 — Phone PDF still not saving (CSV saves): PDF handed over as a generic file; report errors logged (branch `agent/phone-fixes`)
+
+**Changed by:** Agent
+
+**Files changed:**
+- `src/lib/reportDownload.js`, `tests/report-downloads.spec.js`
+- `api/admin/reports/period.js`, `api/admin/daily-log/report-pdf.js` (server errors now logged)
+- `vite.config.js` (dev server only: one log line per report request)
+
+**Summary:**
+Tebogo's retry on the phone: the CSV downloads but the PDF still does not. Both use the same browser download code, so the difference is the file itself.
+- *Server excluded:* the period PDF renderer was stress-tested with phone-style demo data and rendered every case, business and vehicle; daily, monthly and wide custom periods. The data included emoji, accents, Chinese text, empty and 400-character fields, string amounts, a recurring schedule and entries without a vehicle. Before this change the handlers swallowed errors without logging; they now log any 500 to the server log (also useful on Vercel).
+- *Remaining difference:* the PDF blob was typed `application/pdf` and the CSV `text/csv`. Recent Chrome on Android hands `application/pdf` to its built-in PDF viewer instead of saving a blob download. Fix: the PDF is handed over with the same bytes, typed `application/octet-stream` with the `.pdf` name, so it saves like the CSV and opens as a PDF from Downloads. The CSV is unchanged.
+- *Evidence still needed:* no Android debug tools on this laptop, so the real phone could not be inspected directly. The dev server now logs each report request: route, format, status, bytes, time, browser and phone address, never bodies or tokens. Tebogo's next tap shows whether the phone's PDF request reached the server and returned 200.
+
+**Tests run:**
+- `report-downloads.spec.js` now also asserts the saved PDF is typed `application/octet-stream` with unchanged bytes; report, period-report and recurring specs 23/23.
+- Full `verify-all` run `2026-10-29T14-50-43-880Z`: node 426/426, guards, build, mock 69/69, tenant 31/31.
+
+**Result:**
+Pass in automation. Real-phone check NOT passed until Tebogo confirms.
+
+**Next action:**
+- Tebogo retries Download PDF on the phone; the agent reads the `[report-dev]` lines for that request.
+
+### 2026-10-29 — Real phone: PDF download CONFIRMED working (Firefox for Android)
+
+**Changed by:** Agent (result reported by Tebogo)
+
+**Summary:**
+- The dev-server request log identified the phone's browser as **Firefox 158 on Android 16**, not Chrome as assumed in the previous entry. The phone's PDF requests (`POST /api/admin/reports/period?format=pdf&mode=mock`) returned 200 with complete PDFs (320 KB and 384 KB, about 0.3s), so the server was never the cause.
+- With the PDF handed over as a generic file (`5110069`), Tebogo confirmed on the phone: **"the pdf is working now."** The cause was the browser's handling of a blob typed `application/pdf`; Firefox for Android has its own PDF viewer. Code and test comments now name Android browsers generally (Firefox observed), not Chrome only.
+- Real-phone result: business report PDF download PASSED (Tebogo, 2026-10-29). Not separately confirmed on the phone: the vehicle and daily PDFs (same download code), and the mobile menu (manual checks F1-F3).
+
+### 2026-10-29 — Hosted verification of the combined stack (#6-#12) and release review
+
+**Changed by:** Agent, under Tebogo's instruction of 2026-10-29. Approved: restore only the isolated test project, branch-scoped test variables, temporary bypass, hosted runs, cleanup.
+
+**Manual (real phone, Tebogo):** section F all PASS (menu portrait and landscape; business, vehicle and daily A4 PDFs) on Android 16 / Firefox 158. Rows A-E and B not marked; no evidence given.
+
+**Repository state:**
+- PRs #6-#12 are open drafts. The stack is linear (each branch contains the one below) and local heads equal remote heads.
+- Only #6 carries a schema change (release file 06).
+- Production deployment `taxiflowpro-dy1a1k761` (`af3e5ad`); `autoAssignCustomDomains: false`; `main` unprotected.
+
+**Hosted:**
+- Cost check: Free plan, only production active. Restored `sxoonhovoqgcpflhqirb`. Read-only checks: 6 tables, permissions column, RLS on every table, 6 synthetic users only, Preview Company A/B.
+- Added 4 Preview variables for `agent/phone-fixes`; the server key was piped from the external env file after confirming it targets the test project, never shown.
+- Pushed `0bd07d2` (adds `tests/preview-test/release-stack-journey.spec.js`; app = `cf75549`) -> Preview `taxiflowpro-lawb32hou`. Bypass 0 -> 1.
+- Result: 16/16 on the first run (release-06 6, release stack 6, salaries 4). Target guards before sign-in: test project only, no production ref.
+
+**Cleanup:**
+- Bypass revoked; entries 0; local copy deleted.
+- 4 branch variables removed (9 records, shared production settings still Production-only).
+- Preview 302 without the bypass; test project paused (INACTIVE).
+
+**Release review:** `project-os/05-build/release-stack-review.md`. Recommendation: GO, conditional on Tebogo's approval and a verified pre-release backup.
+
+**Not changed:** production database, data, settings and deployment; no merge; billing.
+
+### 2026-10-29 — Release prerequisites revised (no production change)
+
+**Changed by:** Agent. Files: `project-os/05-build/release-stack-review.md` (rewritten sections 2-11), `release-06-review.md` (correction), new read-only `scripts/hosted/unchanged-data-release-06.sql`.
+
+- **File 06 data change corrected:**
+  - It backfills `business_memberships.permissions` on every existing row: Admin `{cash.count}`, Manager `{cash.verify, cash.bank}`, Owner and Driver `{}`.
+  - No other column changes (no `updated_at` trigger exists) and no other table changes.
+- **Verification defined:**
+  - New `unchanged-data-release-06.sql` covers businesses, memberships except `permissions` (including `updated_at`), snapshots, request log, platform admins and Auth users. It must be identical before and after, in a quiet window.
+  - `verify-release-06.sql` checks the intended changes.
+  - Proved on the isolated local test stack (undo, hash, re-apply, hash): both hash sets identical; backfill exactly the role defaults; post-checks 10/11, with row 9 false only because the local undo keeps the seeded audit table. Stack reset afterwards.
+- **Rollback compatibility proved:** a snapshot built by the new code (salary schedule, bank and takings salaries, recurring schedule and payment) was run through `af3e5ad` server code in a temporary worktree:
+  - an old write applied and the new records were preserved byte for byte;
+  - driver expected cash identical (450 under both apps);
+  - old Driver and no-Money views stay scoped.
+  - Application rollback, database undo and data restore are now separated; a data restore needs an explicit recovery decision.
+- **Vercel configuration read:**
+  - `autoAssignCustomDomains: false`; Git deployments on.
+  - Production domains: `taxiflow.co.za`, `taxiflow.apprigate.com`, `taxiflowpro.vercel.app`. The current production deployment holds those plus `taxiflowpro-apprigate.vercel.app` and `taxiflowpro-git-main-apprigate.vercel.app`.
+  - Public: `taxiflow.co.za` and `taxiflowpro.vercel.app`. The two team aliases need a Vercel login.
+  - Whether the `git-main` alias follows `main` before promotion is unconfirmed, so there is a gate after the #6 merge and file 06 goes first.
+- **Part B:** the test project is paused, so restore is a prerequisite. SQL-editor steps and the expected message are documented. The tool refusal was not bypassed.
+- **Backup:** exact export and verify commands documented. The env file uses the session pooler (direct host is IPv6-only); an optional local restore rehearsal is left to Tebogo's decision.
+
+**Not changed:** production database, data, settings, deployment; no merge; test project left paused; no new hosted runs.
+
+
+## 2026-10-29: hosted Part B passed (release file 06)
+
+**Changed by:** Tebogo, with the agent guiding.
+
+- The isolated test project `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`) was restored and confirmed healthy.
+- Part A: 2 rows, both `ok = true`.
+- Part B: the expected deliberate error `PASS (rolled back): emptied Admin kept {} after re-insert; omitted list got {cash.count}`.
+- A read-only follow-up showed the Admin's responsibilities still `{cash.count}`, so nothing persisted.
+- The test project was paused again.
+
+**Not changed:** production; no merge or deployment. Still open: the production backup, the restore-rehearsal decision, the quiet window, and manual checks A-E and the spreadsheet check.

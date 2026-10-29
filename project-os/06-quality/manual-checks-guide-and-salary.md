@@ -86,3 +86,18 @@ Date: ______  Checked by: ______  Device/app: ______
 | E4 | Pause, then Resume, then Stop (keep today). | Status chip changes Paused / Active / Stopped; the Paid line stays. | |
 | E5 | Reports > Overall business > Custom dates covering the two months > View report; download PDF and CSV. | "Scheduled commitments" lists each due date with Paid/Overdue; the rent payment appears once under Transactions; totals unchanged by commitments; the CSV opens in columns and reconciles. | |
 | E6 | Add a recurring expense linked to JHB 457 GP; Reports > Individual vehicle > JHB 457 GP. | Its commitments appear there; the business-wide rent does not. | |
+
+## F. Phone fixes: PDF download and compact menu (added 2026-10-29, branch `agent/phone-fixes`)
+
+Open the demo on the phone's browser at the address the agent gives (it changes when the laptop reconnects to the hotspot). Demo accounts only.
+
+Date: 2026-10-29  Checked by: Tebogo  Phone / browser: Android 16, Firefox 158 (from the dev-server request log)
+
+| # | Steps | Expected result | Result |
+|---|---|---|---|
+| F1 | Sign in as `owner@taxiflow.local`. Look at the bottom of the screen; scroll to the end of Overview. | No menu bar over the content. A slim dark bar at the top shows the menu button and "Overview". | PASS 2026-10-29, Tebogo, Firefox 158 / Android 16 |
+| F2 | Tap the menu button. Tap Reports. | A drawer slides in from the left with your pages; Reports opens and the drawer closes; the top bar says "Reports". | PASS 2026-10-29, Tebogo, Firefox 158 / Android 16 |
+| F3 | Open the menu; tap the dimmed area on the right. Turn the phone sideways and open the menu again. | It closes without changing page. Sideways, every page can be reached (the list scrolls if needed). | PASS 2026-10-29, Tebogo, Firefox 158 / Android 16 |
+| F4 | Reports > Business and vehicle reports > View report > Download PDF. | "PDF ready: taxiflow-business-....pdf (... KB)" and an Open PDF button. Note what the browser shows. | PASS 2026-10-29, Tebogo, Firefox 158 / Android 16 (after the generic-file hand-off) |
+| F5 | If the file did not appear in Downloads: tap Open PDF. If Chrome says the file can't be downloaded securely, open Chrome's Downloads and choose Keep. | The PDF opens: DEMO DATA, the same period and Net result as the screen. | Not needed: the PDF saved directly (F4) |
+| F6 | Individual vehicle > View report > Download PDF; then the Daily finance report "Download A4 PDF" above. | Both give "PDF ready" and open as readable PDFs. | PASS 2026-10-29, Tebogo, Firefox 158 / Android 16 |

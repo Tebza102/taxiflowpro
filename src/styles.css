@@ -303,7 +303,6 @@ button {
 }
 
 .role-pill,
-.bottom-nav-item,
 .shortcut-button,
 .cta-link {
   appearance: none;
@@ -1018,6 +1017,23 @@ button {
   color: var(--danger);
 }
 
+.report-file-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.report-file-status p {
+  flex: 1 1 14rem;
+  margin: 0;
+}
+
+.report-file-status .action-button {
+  min-height: 2.75rem;
+  text-decoration: none;
+}
+
 .ledger-row {
   display: grid;
   gap: 0.7rem;
@@ -1586,8 +1602,7 @@ button {
 }
 
 .cta-link:hover,
-.shortcut-button:hover,
-.bottom-nav-item:hover {
+.shortcut-button:hover {
   transform: translateY(-1px);
 }
 
@@ -2439,37 +2454,166 @@ button {
   flex-wrap: wrap;
 }
 
-.bottom-nav {
+/* Small screens: compact header with a menu button and the current page, and a
+   drawer opened on request. The header is lightly translucent over a near-solid
+   navy so its white text stays readable; nothing covers content when closed. */
+.mobile-topbar {
   position: fixed;
-  left: 50%;
-  bottom: 1rem;
+  inset: 0 0 auto;
   z-index: 25;
-  transform: translateX(-50%);
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 0.35rem;
-  width: min(calc(100% - 1rem), 32rem);
-  padding: 0.4rem;
-  border-radius: 1.3rem;
-  background: rgba(10, 25, 37, 0.9);
-  box-shadow: 0 18px 50px rgba(10, 25, 37, 0.32);
-}
-
-.bottom-nav-item {
-  display: grid;
-  place-items: center;
-  gap: 0.3rem;
-  padding: 0.65rem 0.25rem;
-  border-radius: 1rem;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.75);
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-
-.bottom-nav-item.active {
-  background: rgba(255, 255, 255, 0.12);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: calc(3.5rem + env(safe-area-inset-top, 0px));
+  padding: env(safe-area-inset-top, 0px) max(0.75rem, env(safe-area-inset-right, 0px)) 0 max(0.75rem, env(safe-area-inset-left, 0px));
+  background: rgba(10, 25, 37, 0.94);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 6px 18px rgba(10, 25, 37, 0.18);
   color: var(--white);
+}
+
+.mobile-topbar-menu,
+.mobile-drawer-close {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 2.75rem;
+  height: 2.75rem;
+  border: 0;
+  border-radius: 0.8rem;
+  background: rgba(255, 255, 255, 0.1);
+  color: inherit;
+  cursor: pointer;
+}
+
+.mobile-topbar-menu:focus-visible,
+.mobile-drawer-close:focus-visible,
+.mobile-drawer-item:focus-visible {
+  outline: 3px solid var(--brand-yellow);
+  outline-offset: 2px;
+}
+
+.mobile-topbar-title {
+  margin: 0;
+  overflow: hidden;
+  font-size: 1.05rem;
+  font-weight: 800;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mobile-drawer-root {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+}
+
+.mobile-drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(10, 25, 37, 0.42);
+  backdrop-filter: blur(2px);
+}
+
+.mobile-drawer {
+  position: absolute;
+  inset: 0 auto 0 0;
+  display: flex;
+  flex-direction: column;
+  width: min(20rem, 85vw);
+  max-height: 100dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: calc(0.75rem + env(safe-area-inset-top, 0px)) 0.75rem calc(1rem + env(safe-area-inset-bottom, 0px)) max(0.75rem, env(safe-area-inset-left, 0px));
+  background: var(--navy);
+  color: var(--white);
+  box-shadow: 18px 0 50px rgba(10, 25, 37, 0.32);
+  animation: mobile-drawer-enter 180ms ease-out;
+}
+
+.mobile-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0 0.25rem 0.75rem;
+}
+
+.mobile-drawer-head .eyebrow {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.mobile-drawer-head h2 {
+  margin: 0.15rem 0 0;
+  font-size: 1.05rem;
+}
+
+.mobile-drawer-list {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mobile-drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.7rem 0.85rem;
+  border: 0;
+  border-radius: 0.8rem;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mobile-drawer-item.active {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--white);
+  box-shadow: inset 3px 0 0 var(--brand-yellow);
+}
+
+@keyframes mobile-drawer-enter {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mobile-drawer {
+    animation: none;
+  }
+}
+
+/* Shown on narrow screens and on phones turned sideways (short touch screens
+   wider than the narrow breakpoint); desktop keeps the module buttons only. */
+@media (min-width: 720px) and (min-height: 501px), (min-width: 720px) and (pointer: fine) {
+  .mobile-topbar {
+    display: none;
+  }
+}
+
+@media (max-width: 719px), (max-height: 500px) and (pointer: coarse) {
+  .app-shell {
+    padding-top: calc(4.25rem + env(safe-area-inset-top, 0px));
+  }
+}
+
+@media (max-width: 719px) {
+  .page-shell {
+    padding-bottom: 1.5rem;
+  }
 }
 
 @keyframes mobile-sheet-enter {
@@ -2551,9 +2695,6 @@ button {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .bottom-nav {
-    display: none;
-  }
 
   /* Keep the quick-actions grid container-responsive; do not force 2-up on narrow panels. */
   .driver-quick-actions-grid {

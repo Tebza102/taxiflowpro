@@ -12,6 +12,19 @@ const reportApiDevRoutes = () => ({
   configureServer(server) {
     server.middlewares.use(async (req, res, next) => {
       const url = new URL(req.url ?? "/", "http://localhost");
+      // Report requests are logged (route, format, status, size, time, browser)
+      // so a phone's failed download can be traced; no body or token is logged.
+      if (/^\/api\/admin\/(reports|daily-log)\//.test(url.pathname)) {
+        const started = Date.now();
+        res.on("finish", () => {
+          const agent = /Android[^;)]*|iPhone|Windows|Mac OS X/.exec(req.headers["user-agent"] ?? "")?.[0] ?? "unknown";
+          const chrome = /(?:Chrome|CriOS|SamsungBrowser|Firefox)\/[\d.]+/.exec(req.headers["user-agent"] ?? "")?.[0] ?? "";
+          console.log(`[report-dev] ${req.method} ${url.pathname} format=${url.searchParams.get("format") ?? "-"} -> ${res.statusCode} ${res.getHeader("Content-Length") ?? "?"}B ${Date.now() - started}ms in=${req.headers["content-length"] ?? 0}B ${agent} ${chrome} from ${req.socket.remoteAddress}`);
+        });
+        res.on("close", () => {
+          if (!res.writableFinished) console.log(`[report-dev] ${req.method} ${url.pathname} format=${url.searchParams.get("format") ?? "-"} CONNECTION CLOSED before the response finished (${Date.now() - started}ms)`);
+        });
+      }
       const match = /^\/api\/admin\/daily-log\/([^/]+)\/(report-view|report-pdf)$/.exec(url.pathname);
       // Tenant business and platform routes (dev only): same real handlers as
       // Vercel's api/business/<name>.js and api/platform/<name>.js routing.

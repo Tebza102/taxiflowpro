@@ -33,6 +33,7 @@ import { DriverFullScreenView } from "./components/DriverFullScreenView";
 import { MobileActionScreen } from "./components/MobileActionScreen";
 import { MobileBottomSheet } from "./components/MobileBottomSheet";
 import { TripLegOptionalFields } from "./components/TripLegOptionalFields";
+import { MobileNavDrawer } from "./components/MobileNavDrawer";
 import { ReportsPanel } from "./components/ReportsPanel";
 import PlatformCompaniesPanel from "./components/PlatformCompaniesPanel";
 import TenantAccessPanel from "./components/TenantAccessPanel";
@@ -6440,19 +6441,12 @@ function App() {
         </footer>
       </div>
 
-      <nav className="bottom-nav" aria-label="Mobile navigation">
-        {allowedViews.map((item) => (
-          <button
-            key={item.id}
-            className={item.id === activeView ? "bottom-nav-item active" : "bottom-nav-item"}
-            onClick={() => setActiveView(item.id)}
-            type="button"
-          >
-            <item.icon size={16} />
-            <span>{item.label}</span>
-          </button>
-        ))}
-      </nav>
+      <MobileNavDrawer
+        views={allowedViews}
+        activeView={activeView}
+        onNavigate={setActiveView}
+        fleetName={currentSnapshot.profile.fleetName}
+      />
 
       <UserGuideSheet
         open={userGuideOpen}

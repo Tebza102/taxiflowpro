@@ -9,6 +9,26 @@
   3. PR #8 driver salaries: `agent/driver-salary` (`bd063c5`) -> `agent/user-guide`. Uses the guide (salary sentence) and release 06's finance-action permissions.
 - Merge order: #6, #7, #8, retargeting each to `main` as the one below merges.
 
+## Release stack #6-#12 (2026-10-29): verified; release review ready; awaiting Tebogo's GO
+
+- Release review with plan and recommendation (GO, conditional): `05-build/release-stack-review.md`. Nothing merged, migrated, promoted or deployed; production still `af3e5ad` (`taxiflowpro-dy1a1k761`), database files 01-05.
+- Heads: #6 `51a0f5d`, #7 `99cf0c6`, #8 `c6cf61e`, #9 `33f9fa4`, #10 `c47b755`, #11 `405dc46`, #12 app code `cf75549`. The stack is linear. Only #6 changes the schema (release file 06).
+- Hosted check: 16/16 on Preview `taxiflowpro-lawb32hou` (`0bd07d2`, app = `cf75549`), isolated test project only. Cleanup is done: bypass 0, branch variables removed, test project paused.
+- Real phone (Firefox 158, Android 16): section F all passed. Not ticked: device rows A-E, the spreadsheet-app check (B). Hosted delta Part B: PASS on 2026-10-29 in the test project (paused again afterwards).
+- Prerequisites revised (same day):
+  - File 06 wording corrected: it backfills `permissions` on existing memberships.
+  - New read-only `scripts/hosted/unchanged-data-release-06.sql`; undo and re-apply on the local test stack left it identical.
+  - `af3e5ad` proved to keep the new salary and recurring records and to compute the same driver cash.
+  - Vercel aliases read from the configuration (the `git-main` alias is unconfirmed, so there is a gate after the #6 merge).
+  - Exact backup command and connection-file format documented.
+
+## Phone fixes (2026-10-29): branch `agent/phone-fixes` (stacked on `agent/recurring-expenses`); not merged or deployed
+
+- **Report PDFs on a phone:** server generation was healthy (emulated Android over the LAN: 200 `application/pdf`, readable business/vehicle/daily PDFs). The real-phone demo runs on plain `http://` at a LAN IP, where Chrome on Android warns about or blocks downloads, and the app hid this by always saying "Downloaded". Now one shared download path for all report files: 60s timeout, PDF header check, "PDF ready" (never "Downloaded"), Open PDF button, reason plus Try again on failure.
+- **Mobile menu:** the two-row translucent bottom bar is replaced by a compact top bar and a drawer. The top bar shows the menu button and current page, also on phones turned sideways. The drawer is closed by default, closes after navigating, on the backdrop or on Escape, has focus handling and 44px targets, and lists only the role/module pages. Desktop unchanged.
+- Follow-up (same day): on the phone the CSV saved but the PDF did not. The server was excluded: the stress test passed, and server errors are now logged. The PDF is now handed over as a generic file (same bytes, `.pdf` name), so the phone's browser saves it instead of passing it to its PDF viewer. The dev server logs each report request for diagnosis. **Real phone (Firefox 158, Android 16): PDF download confirmed working by Tebogo, 2026-10-29.** Menu checks F1-F3 not yet confirmed.
+- Separate commits (menu, downloads, PDF hand-off). Evidence: change-log 2026-10-29 "Phone fixes". **Real-phone check not passed until Tebogo confirms** (manual checks section F).
+
 ## Recurring fixed expenses (Prompt 3, 2026-10-29): branch `agent/recurring-expenses` (stacked on `agent/driver-salary-profile`); not merged or deployed
 
 - Money > Expenses > Recurring fixed expenses: schedules (description, category, amount, business-wide or one vehicle, daily/weekly/fortnightly/monthly, first due date, optional end date) with Due / Overdue / Paid / Upcoming occurrences calculated when the app opens (no background process), Record payment prefilled from the occurrence, Edit future (effective-dated), Pause, Resume, Stop (payments and history kept).

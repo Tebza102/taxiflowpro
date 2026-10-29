@@ -1,6 +1,9 @@
 import { useMemo, useRef, useState } from "react";
 import { ArrowDownToLine, BarChart3, Loader2 } from "lucide-react";
 
+import { ReportFileStatus } from "./ReportFileStatus";
+
+import { fetchReportFile, fetchWithTimeout } from "../lib/reportDownload";
 import { REPORT_PERIOD_LABELS, REPORT_PERIODS, REPORT_STATUS_LABELS, reportDateOf, sastDateOf } from "../lib/periodReport";
 
 // Reports > Business and vehicle reports. The browser only collects the filters;
@@ -10,25 +13,14 @@ import { REPORT_PERIOD_LABELS, REPORT_PERIODS, REPORT_STATUS_LABELS, reportDateO
 const ZAR = new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR" });
 const rand = (cents) => ZAR.format((cents ?? 0) / 100);
 
-// A report request that has not answered after this long is abandoned, so the
-// screen never stays on "Preparing..." (the person can try again).
-const REQUEST_TIMEOUT_MS = 60_000;
-const fetchWithTimeout = (url, init) => {
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  return fetch(url, { ...init, signal: controller.signal }).finally(() => window.clearTimeout(timer));
-};
-
 const describeError = (status, message) => {
-  if (status === "timeout") return "The report took too long to prepare. Try again.";
+  if (status === "timeout") return "The report took too long to prepare. Check your connection and try again.";
+  if (status === "invalid") return "The PDF came back incomplete or unreadable, so it was not saved. Try again.";
   if (status === 401) return "Your session has expired. Sign in again to use reports.";
   if (status === 403) return "Your role does not have access to management reports.";
   if ((status === 400 || status === 404) && message) return message;
   return "The report could not be prepared. Check your connection and try again.";
 };
-
-const filenameOf = (response, fallback) =>
-  /filename="([^"]+)"/i.exec(response.headers.get("Content-Disposition") ?? "")?.[1] ?? fallback;
 
 const toQuery = (filters) => {
   const params = new URLSearchParams({ scope: filters.scope, period: filters.period });
@@ -143,27 +135,11 @@ export function PeriodReportSection({ snapshot, accessToken, isDemo, demoBody = 
   const downloadFile = async (format) => {
     if (!appliedQuery || download.status === "loading") return;
     setDownload({ status: "loading", format });
-    try {
-      const response = await fetchWithTimeout(`/api/admin/reports/period?${appliedQuery}&format=${format}&${modeQuery}`, requestInit(appliedBody));
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        setDownload({ status: "error", message: describeError(response.status, body.error) });
-        return;
-      }
-      const url = URL.createObjectURL(await response.blob());
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = filenameOf(response, `taxiflow-report.${format}`);
-      link.rel = "noopener";
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      // Mobile browsers read the blob after click() returns; revoke later.
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      setDownload({ status: "done", filename: link.download });
-    } catch (error) {
-      setDownload({ status: "error", message: describeError(error?.name === "AbortError" ? "timeout" : 0) });
-    }
+    const outcome = await fetchReportFile(`/api/admin/reports/period?${appliedQuery}&format=${format}&${modeQuery}`, requestInit(appliedBody), {
+      format,
+      fallbackName: `taxiflow-report.${format}`,
+    });
+    setDownload(outcome.ok ? { status: "done", format, file: outcome.file } : { status: "error", format, message: describeError(outcome.status, outcome.error) });
   };
 
   const report = result.status === "ready" ? result.report : null;
@@ -285,16 +261,7 @@ export function PeriodReportSection({ snapshot, accessToken, isDemo, demoBody = 
               </button>
             ))}
           </div>
-          {download.status === "done" && (
-            <p className="finance-form-note" data-tone="success" data-testid="period-report-download-done">
-              Downloaded {download.filename}
-            </p>
-          )}
-          {download.status === "error" && (
-            <p className="finance-form-note" data-tone="danger" data-testid="period-report-download-error">
-              {download.message}
-            </p>
-          )}
+          <ReportFileStatus download={download} onRetry={() => downloadFile(download.format)} testIdPrefix="period-report-download" />
 
           <div className="queue-stats" data-testid="period-report-summary">
             <Stat label="Income" value={rand(t.incomeCents)} testId="period-report-income" />

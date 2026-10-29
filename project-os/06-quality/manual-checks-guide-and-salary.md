@@ -23,7 +23,7 @@ Phone used (model, Android version, RAM): ______  Date: ______  Checked by: ____
 | A3 | Tap "Skip for now". | The guide closes. Signing out and in again does not reopen it. | |
 | A4 | Tap "Help" (top right). | The guide reopens. Tap the X: it closes. All buttons are easy to hit with a thumb (no mis-taps). | |
 | A5 | Sign in as `driver.one@taxiflow.local` (after clearing site data, see step 5). | The guide shows driver steps: check your vehicle, add trips, add costs, send for checking, report problems. No Money or Reports steps. | |
-| A6 | As Owner: Money > Expenses > Driver salaries. Set a schedule for Sizwe Mokoena: R 300, Daily, starts 2 days ago, Save schedule. | "Salary schedule saved ... No expense was added." The row shows "Next payment: ..." and "Due now: 3 periods, R 900,00". | |
+| A6 | As Owner: Drivers > Edit profile on Sizwe Mokoena > Salary: tick "Set a salary", R 300, Daily, starts 2 days ago, Save driver. Then Money > Expenses > Driver salaries. | "... Salary schedule saved ... No expense was added." The row shows "Next payment: ..." and "Due now: 3 periods, R 900,00". | |
 | A7 | Tap "Record payment". Leave Bank transfer. Tap "Record payment". | "Salary payment recorded ... added to expenses once." The payment appears under "Salary payments". | |
 | A8 | Tap "Record payment" again and set the period to the one just paid. | A warning "Already recorded ..." appears and the Record payment button is disabled. | |
 | A9 | Tap "Record a manual payment": Driver Sizwe Mokoena, Daily, amount 250, Cash, "Driver's takings for the day". | The yellow note says it lowers Sizwe Mokoena's cash to hand in for that day. After saving, the payment shows "pending". | |
@@ -60,3 +60,16 @@ Date: ______  Checked by: ______  Device/app: ______
 | C3 | Download CSV and open it in Excel and Google Sheets. | Sections in separate columns; Income, Expenses and Net result equal the screen; amounts are numbers; "Reconciles,yes". | |
 | C4 | Individual vehicle, JHB 457 GP, Weekly, 27 Mar 2026. | Only that vehicle's entries; no "Rank Fees" or "No vehicle" lines; drivers named. | |
 | C5 | Change the dates without pressing View report. | Yellow warning that the report and downloads are still for the selection shown. | |
+
+## D. Salary settings in the driver profile (added 2026-10-29, branch `agent/driver-salary-profile`)
+
+Date: ______  Checked by: ______  Device: ______
+
+| # | Steps | Expected result | Result |
+|---|---|---|---|
+| D1 | As Owner: Drivers > Add driver. Name, tick "Set a salary", R 4 000, Monthly, starts the 1st of this month, "At the end of each period". Save driver. | "added to the driver roster. Salary schedule saved ... No expense was added." No new line under Money > Salary payments. | |
+| D2 | Edit profile on that driver. | The Salary section shows the current amount, timing, Active, next payment and the amount history. | |
+| D3 | Change the amount, "Changes apply from" the 15th; Save. Edit again and open Amount history. | Two entries with their dates; the earlier one is unchanged. | |
+| D4 | Money > Driver salaries > Salary settings on that driver. | Opens the driver's profile at Salary. "Record or review salary payments in Money" goes back. | |
+| D5 | As a Manager whose Money is off: Drivers > Edit profile. | Profile fields editable (if given driver management); no Salary section anywhere. | |
+| D6 | On the phone: the Salary section fields and buttons are easy to tap; nothing cut off sideways. | | |

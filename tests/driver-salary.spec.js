@@ -3,9 +3,10 @@ import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 import { skipUserGuideWhenShown } from "./user-guide-helpers.mjs";
 
-// Driver salaries in Money > Expenses (mock backend): a schedule adds no expense,
-// a payment adds exactly one, duplicates are blocked, bank salary leaves the
-// driver's cash hand-in alone, and the downloaded report reconciles.
+// Driver salaries (mock backend): the schedule is set in the driver's profile and
+// adds no expense; a payment recorded in Money > Expenses adds exactly one,
+// duplicates are blocked, bank salary leaves the driver's cash hand-in alone,
+// and the downloaded report reconciles.
 
 const PASSWORD = "TaxiFlow.123";
 const DRIVER_NAME = "Sizwe Mokoena";
@@ -28,6 +29,20 @@ const openSalaries = async (page) => {
   return panel;
 };
 
+// Drivers > Edit profile > Salary, then Save driver (the profile is unchanged).
+const setSalaryInProfile = async (page, { amount, frequency = "monthly", start, method = "bank" }) => {
+  await page.locator("button.module-button").filter({ hasText: "Drivers" }).first().click();
+  await page.getByRole("button", { name: `Edit profile: ${DRIVER_NAME}` }).click();
+  const salary = page.getByTestId("driver-profile-salary");
+  await salary.getByTestId("driver-profile-salary-enable").check();
+  await salary.getByLabel("Salary amount (R)").fill(String(amount));
+  await salary.getByLabel("How often").selectOption(frequency);
+  await salary.getByLabel("Salary starts on").fill(start);
+  await salary.getByLabel("Usually paid by").selectOption(method);
+  await page.getByTestId("driver-profile-form").getByRole("button", { name: "Save driver" }).click();
+  await expect(page.getByText(`Salary schedule saved for ${DRIVER_NAME}. No expense was added.`)).toBeVisible();
+};
+
 const reportTotal = async (page) =>
   // en-ZA format: "R 6 500,00" (space thousands, comma decimals).
   Number((await page.getByTestId("expense-report-total").textContent()).replace(/[^\d,]/g, "").replace(",", "."));
@@ -46,18 +61,13 @@ test("schedule adds no expense; payment adds one; duplicate blocked; report reco
   await page.getByRole("button", { name: "Sign out" }).click();
 
   await signIn(page, "owner@taxiflow.local");
-  const panel = await openSalaries(page);
+  let panel = await openSalaries(page);
   const totalBefore = await reportTotal(page);
 
-  // 1. Schedule only.
-  const scheduleForm = page.getByRole("form", { name: "Salary schedule" });
-  await scheduleForm.getByLabel("Driver").selectOption({ label: DRIVER_NAME });
-  await scheduleForm.getByLabel("Salary amount (R)").fill("6500");
-  await scheduleForm.getByLabel("Usually paid by").selectOption("bank");
-  // Starts this month, so the next payment is this month's (nothing overdue).
-  await scheduleForm.getByLabel("Starts on").fill(`${new Date().toLocaleDateString("en-CA").slice(0, 7)}-01`);
-  await scheduleForm.getByRole("button", { name: "Save schedule" }).click();
-  await expect(panel.getByText(`Salary schedule saved for ${DRIVER_NAME}. No expense was added.`)).toBeVisible();
+  // 1. Schedule only, set in the driver's profile. Starts this month, so the
+  // next payment is this month's (nothing overdue).
+  await setSalaryInProfile(page, { amount: 6500, start: `${new Date().toLocaleDateString("en-CA").slice(0, 7)}-01` });
+  panel = await openSalaries(page);
   const row = panel.getByTestId("salary-schedule-row").filter({ hasText: DRIVER_NAME });
   await expect(row).toContainText("not paid yet");
   expect(await reportTotal(page)).toBe(totalBefore);
@@ -139,15 +149,10 @@ test("manual payment from the driver's takings lowers that driver's cash to hand
 
 test("a schedule shows the next payment date and what is due", async ({ page }) => {
   await signIn(page, "owner@taxiflow.local");
-  const panel = await openSalaries(page);
-  const scheduleForm = page.getByRole("form", { name: "Salary schedule" });
-  await scheduleForm.getByLabel("Driver").selectOption({ label: DRIVER_NAME });
-  await scheduleForm.getByLabel("Salary amount (R)").fill("300");
-  await scheduleForm.getByLabel("How often").selectOption("daily");
   // Started two days ago: two finished days are due, today is the next unpaid day after them.
   const start = new Date(Date.now() - 2 * 86_400_000).toLocaleDateString("en-CA");
-  await scheduleForm.getByLabel("Starts on").fill(start);
-  await scheduleForm.getByRole("button", { name: "Save schedule" }).click();
+  await setSalaryInProfile(page, { amount: 300, frequency: "daily", start });
+  const panel = await openSalaries(page);
   const row = panel.getByTestId("salary-schedule-row").filter({ hasText: DRIVER_NAME });
   await expect(row.getByTestId("salary-next-payment")).toContainText(`due ${start}`);
   await expect(row.getByTestId("salary-due")).toContainText("Due now: 3 periods");

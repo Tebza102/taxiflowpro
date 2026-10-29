@@ -3149,3 +3149,55 @@ button {
     flex: 1 1 100%;
   }
 }
+
+/* Driver profile > Salary */
+.driver-profile-fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.driver-salary-settings {
+  display: grid;
+  gap: 0.7rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+}
+
+.driver-salary-settings legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 0.3rem;
+  color: var(--navy);
+  font-weight: 700;
+}
+
+.driver-salary-current {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.7rem 0.8rem;
+  border-left: 4px solid var(--navy);
+  border-radius: 0.6rem;
+  background: rgba(245, 247, 250, 0.9);
+  color: var(--subtext);
+  overflow-wrap: anywhere;
+}
+
+.driver-salary-current strong {
+  color: var(--navy);
+}
+
+.driver-salary-current ul {
+  margin: 0.3rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.driver-salary-settings .salary-choice,
+.driver-salary-settings .cta-link {
+  min-height: 2.75rem;
+}

@@ -29,16 +29,19 @@ const openSalaries = async (page) => {
   return panel;
 };
 
-test("Owner B: schedule, one payment, duplicate refused by the server, persisted after reload", async ({ page }) => {
+test("Owner B: schedule from the profile, one payment, duplicate refused by the server, persisted after reload", async ({ page }) => {
   await signIn(page, "owner.b@example.com");
-  let panel = await openSalaries(page);
 
-  const scheduleForm = page.getByRole("form", { name: "Salary schedule" });
-  await scheduleForm.getByLabel("Driver").selectOption({ label: DRIVER_NAME });
-  await scheduleForm.getByLabel("Salary amount (R)").fill("5200");
-  await scheduleForm.getByLabel("Starts on").fill("2026-01-01");
-  await scheduleForm.getByRole("button", { name: "Save schedule" }).click();
-  await expect(panel.getByText("Salary schedule saved. No expense was added.")).toBeVisible({ timeout: 30_000 });
+  // The schedule is set in the driver's profile (server: driver.save, then salary.arrangement_save).
+  await page.locator("button.module-button").filter({ hasText: "Drivers" }).first().click();
+  await page.getByRole("button", { name: `Edit profile: ${DRIVER_NAME}` }).click();
+  const salary = page.getByTestId("driver-profile-salary");
+  await salary.getByTestId("driver-profile-salary-enable").check();
+  await salary.getByLabel("Salary amount (R)").fill("5200");
+  await salary.getByLabel("Salary starts on").fill("2026-01-01");
+  await page.getByTestId("driver-profile-form").getByRole("button", { name: "Save driver" }).click();
+  await expect(page.getByText("Salary schedule saved. No expense was added.")).toBeVisible({ timeout: 30_000 });
+  let panel = await openSalaries(page);
 
   const row = panel.getByTestId("salary-schedule-row").filter({ hasText: DRIVER_NAME });
   await row.getByRole("button", { name: "Record payment" }).click();

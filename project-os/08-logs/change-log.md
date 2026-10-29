@@ -1894,3 +1894,12 @@ Pass in automation. Real-phone check NOT passed until Tebogo confirms.
 **Next action:**
 - Tebogo retries Download PDF on the phone; the agent reads the `[report-dev]` lines for that request.
 
+### 2026-10-29 — Real phone: PDF download CONFIRMED working (Firefox for Android)
+
+**Changed by:** Agent (result reported by Tebogo)
+
+**Summary:**
+- The dev-server request log identified the phone's browser as **Firefox 158 on Android 16**, not Chrome as assumed in the previous entry. The phone's PDF requests (`POST /api/admin/reports/period?format=pdf&mode=mock`) returned 200 with complete PDFs (320 KB and 384 KB, about 0.3s), so the server was never the cause.
+- With the PDF handed over as a generic file (`5110069`), Tebogo confirmed on the phone: **"the pdf is working now."** The cause was the browser's handling of a blob typed `application/pdf`; Firefox for Android has its own PDF viewer. Code and test comments now name Android browsers generally (Firefox observed), not Chrome only.
+- Real-phone result: business report PDF download PASSED (Tebogo, 2026-10-29). Not separately confirmed on the phone: the vehicle and daily PDFs (same download code), and the mobile menu (manual checks F1-F3).
+

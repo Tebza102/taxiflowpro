@@ -57,9 +57,10 @@ export async function fetchReportFile(url, init, { format, fallbackName }) {
   if (format === "pdf" && !isPdfBytes(new Uint8Array(await blob.slice(0, 5).arrayBuffer()))) {
     return { ok: false, status: "invalid" };
   }
-  // Chrome on Android hands a blob typed application/pdf to its PDF viewer
-  // instead of saving it (the CSV, typed text/csv, saves normally). The same
-  // bytes typed as a generic file are saved; the .pdf name still opens as a PDF.
+  // Android browsers can pass a blob typed application/pdf to their built-in PDF
+  // viewer instead of saving it (seen on Firefox for Android; the CSV, typed
+  // text/csv, saved normally). The same bytes typed as a generic file are saved;
+  // the .pdf name still opens as a PDF.
   const saveable = format === "pdf" ? new Blob([blob], { type: "application/octet-stream" }) : blob;
   const file = {
     url: URL.createObjectURL(saveable),

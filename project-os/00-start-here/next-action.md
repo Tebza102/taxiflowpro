@@ -2,7 +2,7 @@
 
 ## Phone fixes (2026-10-29): branch `agent/phone-fixes`
 
-1. **Tebogo:** on the phone, run section F of `06-quality/manual-checks-guide-and-salary.md`, using the demo address the agent gives. Report what Chrome showed when downloading the PDF (F4). The real-phone check stays open until then.
+1. **Tebogo:** on the phone, run section F of `06-quality/manual-checks-guide-and-salary.md`, using the demo address the agent gives. PDF download on the phone: CONFIRMED working (Firefox for Android, 2026-10-29). Still to confirm: the menu (F1-F3) and the vehicle and daily PDFs (F6).
 2. Review the draft PR (base `agent/recurring-expenses`). Merge order: #6 … #11, then this one. Nothing authorises a merge or deployment.
 
 ## Recurring fixed expenses (Prompt 3, 2026-10-29): draft PR on `agent/recurring-expenses`

@@ -46,6 +46,12 @@ export const readDemoReportSnapshot = (body) => {
   const posted = body?.snapshot;
   if (!isRecord(posted)) throw createHttpError(400, "A demo report needs the demo workspace.");
   if (posted.profile !== undefined && posted.profile !== null && !isRecord(posted.profile)) throw createHttpError(400, "profile must be an object.");
+  if (posted.finance !== undefined && posted.finance !== null && !isRecord(posted.finance)) throw createHttpError(400, "finance must be an object.");
+  const schedules = posted.finance?.recurringExpenses;
+  if (schedules !== undefined) {
+    if (!Array.isArray(schedules) || !schedules.every(isRecord)) throw createHttpError(400, "finance.recurringExpenses must be a list of objects.");
+    if (schedules.length > DEMO_REPORT_MAX_RECORDS) throw tooLarge();
+  }
   for (const key of DEMO_REPORT_LIST_KEYS) {
     if (posted[key] === undefined) continue;
     if (!Array.isArray(posted[key])) throw createHttpError(400, `${key} must be a list.`);

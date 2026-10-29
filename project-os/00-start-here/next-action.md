@@ -1,5 +1,11 @@
 # Next Action
 
+## Recurring fixed expenses (Prompt 3, 2026-10-29): draft PR on `agent/recurring-expenses`
+
+1. **Review the draft PR** (base `agent/driver-salary-profile`, PR #10). Merge order: #6, #7, #8, #9, #10, then this one. Nothing authorises a merge or deployment.
+2. **Manual checks:** section E of `06-quality/manual-checks-guide-and-salary.md` (phone and spreadsheet).
+3. Later (not built): automatic background preparation would need a scheduled server job; today occurrences are calculated when TaxiFlow opens.
+
 ## Salary settings in the driver profile (Prompt 2, 2026-10-29): draft PR on `agent/driver-salary-profile`
 
 1. **Review the draft PR** (base `agent/period-reports`, PR #9). Two commits: the profile salary work, and the separately reviewable demo-report correction. Merge order: #6, #7, #8, #9, then this one. Nothing authorises a merge or deployment.

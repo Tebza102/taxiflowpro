@@ -369,14 +369,14 @@ export const salaryPaymentRecordId = (driverStaffId, frequency, period) => `txn-
 
 // The driver day a takings-funded salary is taken from must still be open: a
 // counted, verified, banked or closed day cannot change its expected cash.
-const assertTakingsDayOpen = (snapshot, driverStaffId, workDate, driverName) => {
+export const assertTakingsDayOpen = (snapshot, driverStaffId, workDate, driverName, what = "salary") => {
   const summary = summarizeDriverDayCash(snapshot ?? {}, { driverStaffId, workDate });
   const entry = findDriverCashUpEntry(snapshot?.dailyCashUps ?? [], { driverStaffId, workDate });
   if (!entry) return;
   const status = getDriverCashUpWorkflowStatus(entry, summary);
   if (["counted", "verified", "banked"].includes(status) || isClosedWithoutDeposit(entry)) {
     throw conflict(
-      `${driverName}'s day checking for ${workDate} is ${isClosedWithoutDeposit(entry) ? "closed" : status}, so its cash can no longer change. Record this salary as paid from business cash, or use an open day.`,
+      `${driverName}'s day checking for ${workDate} is ${isClosedWithoutDeposit(entry) ? "closed" : status}, so its cash can no longer change. Record this ${what} as paid from business cash, or use an open day.`,
     );
   }
 };

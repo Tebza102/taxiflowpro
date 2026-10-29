@@ -158,6 +158,7 @@ const editRecord = (stored, fields, requester, now, requestId) => {
   // A salary keeps the amount and period it was paid for; correct a pending one
   // by deleting it and recording the payment again.
   if (record.salaryPayment) throw createHttpError(409, "Salary payments cannot be edited. Delete the pending payment and record it again.");
+  if (record.recurringPayment) throw createHttpError(409, "Recurring expense payments cannot be edited. Delete the pending payment and record it again.");
   const kind = KIND[kindOf(record)];
 
   const isDriverEdit = requester.role === "Driver";

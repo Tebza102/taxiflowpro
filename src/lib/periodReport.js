@@ -5,6 +5,7 @@
 // income uses tripDate, expenses expenseDate; a record without one is dated by
 // its capture time in South African time (and the report says so).
 
+import { RECURRING_OCCURRENCE_LABELS, occurrenceStatus, recurringCommitments } from "./recurringExpenseContract.js";
 import { SALARY_SOURCE_LABELS } from "./salaryContract.js";
 
 export const REPORT_PERIODS = Object.freeze(["daily", "weekly", "monthly", "custom"]);
@@ -288,10 +289,50 @@ const datingNotes = (lines, undated) => {
 };
 
 const SAST_STAMP = new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Johannesburg", year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const stampAt = (options) => (options.generatedAt ??= new Date().toISOString());
 const stamp = (options) => {
-  const generatedAt = options.generatedAt ?? new Date().toISOString();
+  const generatedAt = stampAt(options);
   return { generatedAt, generatedAtLabel: `${SAST_STAMP.format(new Date(generatedAt))} SAST`, businessName: text(options.businessName) || null };
 };
+
+// Scheduled commitments: recurring-expense occurrences falling due in the
+// period. They are NOT expenses and never enter any total above; a payment is
+// counted once, as the expense line it created, on the date it was paid.
+// Status is as at the time the report is built (calculated, not stored).
+const commitmentsOf = (snapshot, period, generatedAt, vehicleId = null) => {
+  const today = sastDateOf(generatedAt) ?? period.end;
+  const items = recurringCommitments(snapshot, period.start, period.end, { vehicleId }).map((item) => {
+    const status = occurrenceStatus(item, today);
+    return {
+      scheduleId: item.scheduleId,
+      period: item.period,
+      periodLabel: item.periodLabel,
+      dueDate: item.dueDate,
+      description: item.description,
+      category: item.category,
+      vehicle: item.vehicleId ? item.vehicle : null,
+      scheduledCents: cents(item.amount),
+      status,
+      statusLabel: RECURRING_OCCURRENCE_LABELS[status],
+      paidCents: item.payment ? cents(item.payment.amount) : null,
+      paidDate: item.payment ? text(item.payment.expenseDate) : null,
+    };
+  });
+  const unpaid = items.filter((item) => item.paidCents == null);
+  return {
+    items,
+    asOf: today,
+    count: items.length,
+    scheduledCents: items.reduce((total, item) => total + item.scheduledCents, 0),
+    paidCount: items.length - unpaid.length,
+    paidCents: items.reduce((total, item) => total + (item.paidCents ?? 0), 0),
+    unpaidCount: unpaid.length,
+    unpaidCents: unpaid.reduce((total, item) => total + item.scheduledCents, 0),
+    overdueCount: unpaid.filter((item) => item.status === "overdue").length,
+  };
+};
+const COMMITMENT_NOTE =
+  "Scheduled commitments are recurring expenses falling due in these dates. They are not expenses and are not in any total; a payment counts once, as an expense on the date it was paid (which can be outside these dates). They are calculated when the report is built; TaxiFlow has no background process.";
 
 // Expenses filed under "Salary" before salary payments existed carry no driver
 // or period, so they cannot be counted as driver salaries.
@@ -379,7 +420,8 @@ export const buildBusinessReport = (snapshot = {}, periodInput = {}, options = {
     cashChecking: cashCheckingOf(snapshot, period),
     banking: bankingOf(snapshot, period),
     transactions: lines,
-    notes,
+    commitments: commitmentsOf(snapshot, period, stampAt(options)),
+    notes: [...notes, COMMITMENT_NOTE],
     reconciliation: reconcile({ lines, incomeCents, expenseCents, salaryCents, vehicleExpenseCents, unallocatedCents, vehicleRows }),
   };
 };
@@ -451,6 +493,7 @@ export const buildVehicleReport = (snapshot = {}, periodInput = {}, vehicleId, o
     expenseBreakdown: breakdownOf(expenses),
     verification: statusSummary(lines),
     transactions: lines,
+    commitments: commitmentsOf(snapshot, period, stampAt(options), vehicle.id),
     notes: [
       ...baseNotes("vehicle"),
       "Only entries recorded against this vehicle are included. Business costs without a vehicle and driver salaries are not allocated to vehicles; they are in the Overall business report.",
@@ -458,6 +501,7 @@ export const buildVehicleReport = (snapshot = {}, periodInput = {}, vehicleId, o
       "Cash checking and banking are per driver day and per deposit, not per vehicle; see the Overall business report.",
       ...(assetCents ? [`Expenses include ${noteRand(assetCents)} of asset purchases recorded as expenses.`] : []),
       ...datingNotes(all.filter((line) => line.vehicleId === vehicle.id), undated),
+      COMMITMENT_NOTE,
     ],
     reconciliation: reconcile({ lines, incomeCents, expenseCents }),
   };
@@ -525,6 +569,14 @@ export const periodReportCsv = (report) => {
     rows.push([], ["By vehicle (own entries only)", "Trips", "Income (R)", "Expenses (R)", "Net (R)"],
       ...report.vehicles.map((row) => [row.label, row.trips, centsToAmount(row.incomeCents), centsToAmount(row.expenseCents), centsToAmount(row.netCents)]));
   }
+
+  const c = report.commitments;
+  rows.push([], ["Scheduled commitments (not expenses; not in any total)", `as at ${c.asOf}`],
+    ["Due date", "Description", "Category", "Vehicle", "Period", "Scheduled (R)", "Status", "Recorded payment (R)", "Paid on"],
+    ...c.items.map((item) => [item.dueDate, item.description, item.category, item.vehicle ?? "No vehicle", item.periodLabel, centsToAmount(item.scheduledCents), item.statusLabel, item.paidCents == null ? "" : centsToAmount(item.paidCents), item.paidDate ?? ""]),
+    ["Scheduled total", "", "", "", `${c.count} occurrences`, centsToAmount(c.scheduledCents)],
+    ["  recorded as paid", "", "", "", `${c.paidCount} occurrences`, centsToAmount(c.paidCents)],
+    ["  not recorded", "", "", "", `${c.unpaidCount} occurrences (${c.overdueCount} overdue)`, centsToAmount(c.unpaidCents)]);
 
   rows.push([], ["Verification status", "Income entries", "Income (R)", "Expense entries", "Expenses (R)"],
     ...report.verification.map((s) => [s.label, s.incomeCount, centsToAmount(s.incomeCents), s.expenseCount, centsToAmount(s.expenseCents)]));

@@ -3201,3 +3201,32 @@ button {
 .driver-salary-settings .cta-link {
   min-height: 2.75rem;
 }
+
+/* Money > Recurring fixed expenses */
+.recurring-occurrences {
+  display: grid;
+  gap: 0.35rem;
+  margin: 0.4rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recurring-occurrences li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  overflow-wrap: anywhere;
+}
+
+.recurring-occurrences .cta-link {
+  min-height: 2.75rem;
+}
+
+.recurring-row .action-button {
+  min-height: 2.75rem;
+}
+
+.recurring-stop {
+  grid-column: 1 / -1;
+}

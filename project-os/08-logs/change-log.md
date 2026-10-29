@@ -1903,3 +1903,29 @@ Pass in automation. Real-phone check NOT passed until Tebogo confirms.
 - With the PDF handed over as a generic file (`5110069`), Tebogo confirmed on the phone: **"the pdf is working now."** The cause was the browser's handling of a blob typed `application/pdf`; Firefox for Android has its own PDF viewer. Code and test comments now name Android browsers generally (Firefox observed), not Chrome only.
 - Real-phone result: business report PDF download PASSED (Tebogo, 2026-10-29). Not separately confirmed on the phone: the vehicle and daily PDFs (same download code), and the mobile menu (manual checks F1-F3).
 
+### 2026-10-29 — Hosted verification of the combined stack (#6-#12) and release review
+
+**Changed by:** Agent, under Tebogo's instruction of 2026-10-29. Approved: restore only the isolated test project, branch-scoped test variables, temporary bypass, hosted runs, cleanup.
+
+**Manual (real phone, Tebogo):** section F all PASS (menu portrait and landscape; business, vehicle and daily A4 PDFs) on Android 16 / Firefox 158. Rows A-E and B not marked; no evidence given.
+
+**Repository state:**
+- PRs #6-#12 are open drafts. The stack is linear (each branch contains the one below) and local heads equal remote heads.
+- Only #6 carries a schema change (release file 06).
+- Production deployment `taxiflowpro-dy1a1k761` (`af3e5ad`); `autoAssignCustomDomains: false`; `main` unprotected.
+
+**Hosted:**
+- Cost check: Free plan, only production active. Restored `sxoonhovoqgcpflhqirb`. Read-only checks: 6 tables, permissions column, RLS on every table, 6 synthetic users only, Preview Company A/B.
+- Added 4 Preview variables for `agent/phone-fixes`; the server key was piped from the external env file after confirming it targets the test project, never shown.
+- Pushed `0bd07d2` (adds `tests/preview-test/release-stack-journey.spec.js`; app = `cf75549`) -> Preview `taxiflowpro-lawb32hou`. Bypass 0 -> 1.
+- Result: 16/16 on the first run (release-06 6, release stack 6, salaries 4). Target guards before sign-in: test project only, no production ref.
+
+**Cleanup:**
+- Bypass revoked; entries 0; local copy deleted.
+- 4 branch variables removed (9 records, shared production settings still Production-only).
+- Preview 302 without the bypass; test project paused (INACTIVE).
+
+**Release review:** `project-os/05-build/release-stack-review.md`. Recommendation: GO, conditional on Tebogo's approval and a verified pre-release backup.
+
+**Not changed:** production database, data, settings and deployment; no merge; billing.
+

@@ -9,6 +9,13 @@
   3. PR #8 driver salaries: `agent/driver-salary` (`bd063c5`) -> `agent/user-guide`. Uses the guide (salary sentence) and release 06's finance-action permissions.
 - Merge order: #6, #7, #8, retargeting each to `main` as the one below merges.
 
+## Release stack #6-#12 (2026-10-29): verified; release review ready; awaiting Tebogo's GO
+
+- Release review with plan and recommendation (GO, conditional): `05-build/release-stack-review.md`. Nothing merged, migrated, promoted or deployed; production still `af3e5ad` (`taxiflowpro-dy1a1k761`), database files 01-05.
+- Heads: #6 `51a0f5d`, #7 `99cf0c6`, #8 `c6cf61e`, #9 `33f9fa4`, #10 `c47b755`, #11 `405dc46`, #12 app code `cf75549`. The stack is linear. Only #6 changes the schema (release file 06).
+- Hosted check: 16/16 on Preview `taxiflowpro-lawb32hou` (`0bd07d2`, app = `cf75549`), isolated test project only. Cleanup is done: bypass 0, branch variables removed, test project paused.
+- Real phone (Firefox 158, Android 16): section F all passed. Not ticked: device rows A-E, the spreadsheet-app check (B), and hosted delta Part B.
+
 ## Phone fixes (2026-10-29): branch `agent/phone-fixes` (stacked on `agent/recurring-expenses`); not merged or deployed
 
 - **Report PDFs on a phone:** server generation was healthy (emulated Android over the LAN: 200 `application/pdf`, readable business/vehicle/daily PDFs). The real-phone demo runs on plain `http://` at a LAN IP, where Chrome on Android warns about or blocks downloads, and the app hid this by always saying "Downloaded". Now one shared download path for all report files: 60s timeout, PDF header check, "PDF ready" (never "Downloaded"), Open PDF button, reason plus Try again on failure.

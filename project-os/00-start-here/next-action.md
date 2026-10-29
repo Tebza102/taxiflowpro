@@ -1,5 +1,15 @@
 # Next Action
 
+## Release stack #6-#12: Tebogo's decision (2026-10-29)
+
+1. **Read `05-build/release-stack-review.md` and approve GO or HOLD.** Recommendation: GO, conditional on the pre-release backup verifying.
+2. On GO, in order and only with Tebogo present:
+   - pre-release backup, verify, and an optional restore rehearsal;
+   - fingerprint, apply file 06, verify-release-06, fingerprint again;
+   - merge #6 to #12 with merge commits, retargeting each to `main`;
+   - promote the final `main` build once, then the smoke checks and an after-release backup.
+3. Optional before GO: spreadsheet check (manual section B) and device rows A-E; hosted delta Part B in the test project's SQL editor.
+
 ## Phone fixes (2026-10-29): branch `agent/phone-fixes`
 
 1. **Tebogo:** on the phone, run section F of `06-quality/manual-checks-guide-and-salary.md`, using the demo address the agent gives. PDF download on the phone: CONFIRMED working (Firefox for Android, 2026-10-29). Still to confirm: the menu (F1-F3) and the vehicle and daily PDFs (F6).

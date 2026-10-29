@@ -104,7 +104,7 @@ test("create a driver with a salary, then edit: the existing arrangement and his
   expect(errors).toEqual([]);
 });
 
-test("profile -> payment -> expense report: one salary, recorded in Money, listed once", async ({ page }) => {
+test("profile -> payment -> report: one salary recorded in Money, listed once on screen, in CSV and PDF, in no vehicle report", async ({ page }) => {
   await signIn(page, "owner@taxiflow.local");
   const month = isoToday().slice(0, 7);
   await createDriverWithSalary(page, "Flow Driver", { amount: 4100, start: `${month}-01` });
@@ -122,15 +122,34 @@ test("profile -> payment -> expense report: one salary, recorded in Money, liste
   await expect(paymentForm.getByTestId("salary-duplicate-warning")).toContainText("Already recorded");
   await paymentForm.getByRole("button", { name: "Cancel" }).click();
 
-  // The month's expense report (built in the browser from the same records)
-  // lists the salary once. Reports > Business report reads the server copy, so
-  // that step is proven in tenant mode (localdb-browser/driver-salary-profile-tenant.spec.js);
-  // demo-mode Reports use the fixed demo data.
+  // The month's expense report lists the salary once.
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download expense report (CSV)" }).click();
   const csv = await readFile(await (await downloadPromise).path(), "utf8");
   expect(csv.split(/\r?\n/).filter((line) => line.includes("Driver salary / Flow Driver /"))).toHaveLength(1);
   expect(csv).toContain("Reconciles,yes");
+
+  // Reports (demo mode builds from this demo workspace): screen, CSV and PDF
+  // each list the session's salary once; no vehicle report has it.
+  await moduleButton(page, "Reports").first().click();
+  await page.getByTestId("period-report-period").selectOption("monthly");
+  await page.getByTestId("period-report-month").fill(month);
+  await page.getByTestId("period-report-view").click();
+  await expect(page.getByTestId("period-report-transactions").locator("tr").filter({ hasText: "Driver salary / Flow Driver" })).toHaveCount(1);
+  await expect(page.getByTestId("period-report-salaries")).toContainText("4");
+  const reportCsvPromise = page.waitForEvent("download");
+  await page.getByTestId("period-report-download-csv").click();
+  const reportCsv = await readFile(await (await reportCsvPromise).path(), "utf8");
+  expect(reportCsv.split(/\r?\n/).filter((line) => line.includes("Driver salary / Flow Driver /"))).toHaveLength(1);
+  const pdfPromise = page.waitForEvent("download");
+  await page.getByTestId("period-report-download-pdf").click();
+  const pdf = await readFile(await (await pdfPromise).path());
+  const pdfText = (pdf.toString("latin1").match(/<[0-9a-fA-F]+>/g) ?? []).map((chunk) => Buffer.from(chunk.slice(1, -1), "hex").toString("latin1")).join("").replace(/\s+/g, "");
+  expect(pdfText).toContain("Driversalary/FlowDriver");
+  await page.getByText("Individual vehicle").click();
+  await page.getByTestId("period-report-view").click();
+  await expect(page.getByTestId("period-report-selection")).toContainText("Vehicle report");
+  await expect(page.getByTestId("period-report-transactions")).not.toContainText("Flow Driver");
 });
 
 test("a Manager with driver-profile management but Money off edits profiles without seeing any salary settings", async ({ page }) => {

@@ -1,7 +1,7 @@
 import { buildDailyFinanceReportData } from "../../_lib/dailyFinanceReport.js";
 import { renderDailyFinanceReportPdf } from "../../_lib/dailyFinanceReportPdf.js";
 import { assertReportAccess } from "../../_lib/reportAccess.js";
-import { loadServerSnapshot } from "../../_lib/snapshotLoader.js";
+import { loadReportSnapshot } from "../../_lib/reportSnapshot.js";
 
 const sendJson = (res, statusCode, payload) => {
   res.statusCode = statusCode;
@@ -36,8 +36,8 @@ export const resolveReportPdf = async (snapshotResult, reportId) => {
 };
 
 export default async function handler(req, res) {
-  if (req.method !== "GET") {
-    res.setHeader("Allow", "GET");
+  if (!["GET", "POST"].includes(req.method)) {
+    res.setHeader("Allow", "GET, POST");
     return sendJson(res, 405, {
       error: "Method not allowed. Use GET /api/admin/daily-log/:id/report-pdf.",
     });
@@ -50,7 +50,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const snapshotResult = await loadServerSnapshot({
+    const snapshotResult = await loadReportSnapshot({
       req,
       mode: getQueryValue(req.query?.mode),
     });

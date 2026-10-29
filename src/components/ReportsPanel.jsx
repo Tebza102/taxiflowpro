@@ -7,6 +7,7 @@ import {
   getFinanceRecordWorkDate,
   normalizeCashUpWorkflowStatus,
 } from "../lib/cashUpContract";
+import { sanitizeDemoReportSnapshot } from "../lib/demoReportSnapshot";
 import { getActiveBusinessId } from "../lib/tenantWorkspace";
 import { PeriodReportSection } from "./PeriodReportSection";
 
@@ -134,9 +135,22 @@ export function ReportsPanel({ snapshot, activeRole, canAccessReports, accessTok
     }
   }, [recordsForDate, selectedId]);
 
+  // Demo mode: every report is built from the demo workspace as it is now
+  // (this session's entries included), sent with the request; live mode reads
+  // the stored business data on the server.
+  const demoBody = useMemo(
+    () => (isDemo ? JSON.stringify({ snapshot: sanitizeDemoReportSnapshot(snapshot ?? {}) }) : null),
+    [isDemo, snapshot],
+  );
   const requestInit = useMemo(
-    () => ({ headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {} }),
-    [accessToken],
+    () => ({
+      headers: {
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        ...(demoBody ? { "Content-Type": "application/json" } : {}),
+      },
+      ...(demoBody ? { method: "POST", body: demoBody } : {}),
+    }),
+    [accessToken, demoBody],
   );
   // Tenant mode: the report is read for the business currently loaded.
   const activeBusinessId = isDemo ? null : getActiveBusinessId();
@@ -243,11 +257,11 @@ export function ReportsPanel({ snapshot, activeRole, canAccessReports, accessTok
 
       {isDemo && (
         <p className="finance-form-note" data-tone="warning">
-          Demo mode: reports use demo data and every PDF is marked DEMO DATA.
+          Demo mode: reports use this demo workspace as it is now, including entries added in this session, and every PDF is marked DEMO DATA.
         </p>
       )}
 
-      <PeriodReportSection snapshot={snapshot} accessToken={accessToken} isDemo={isDemo} modeQuery={modeQuery} />
+      <PeriodReportSection snapshot={snapshot} accessToken={accessToken} isDemo={isDemo} demoBody={demoBody} modeQuery={modeQuery} />
 
       <div className="overview-board-head period-report-divider" data-testid="daily-cash-report">
         <p className="eyebrow">One day's cash-up</p>

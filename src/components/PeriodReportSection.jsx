@@ -10,7 +10,17 @@ import { REPORT_PERIOD_LABELS, REPORT_PERIODS, REPORT_STATUS_LABELS, reportDateO
 const ZAR = new Intl.NumberFormat("en-ZA", { style: "currency", currency: "ZAR" });
 const rand = (cents) => ZAR.format((cents ?? 0) / 100);
 
+// A report request that has not answered after this long is abandoned, so the
+// screen never stays on "Preparing..." (the person can try again).
+const REQUEST_TIMEOUT_MS = 60_000;
+const fetchWithTimeout = (url, init) => {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => window.clearTimeout(timer));
+};
+
 const describeError = (status, message) => {
+  if (status === "timeout") return "The report took too long to prepare. Try again.";
   if (status === 401) return "Your session has expired. Sign in again to use reports.";
   if (status === 403) return "Your role does not have access to management reports.";
   if ((status === 400 || status === 404) && message) return message;
@@ -72,7 +82,7 @@ const Stat = ({ label, value, testId, tone }) => (
   </div>
 );
 
-export function PeriodReportSection({ snapshot, accessToken, isDemo, modeQuery }) {
+export function PeriodReportSection({ snapshot, accessToken, isDemo, demoBody = null, modeQuery }) {
   const vehicles = useMemo(
     () => [...(snapshot?.vehicles ?? [])].sort((a, b) => String(a.registration ?? "").localeCompare(String(b.registration ?? ""))),
     [snapshot],
@@ -92,6 +102,9 @@ export function PeriodReportSection({ snapshot, accessToken, isDemo, modeQuery }
     end: latestDate,
   }));
   const [applied, setApplied] = useState(null);
+  // Demo mode sends the demo workspace captured when View report was pressed,
+  // so the downloads match the report on screen even if entries change later.
+  const [appliedBody, setAppliedBody] = useState(null);
   const [result, setResult] = useState({ status: "idle" });
   const [download, setDownload] = useState({ status: "idle" });
   const requestNumber = useRef(0);
@@ -102,8 +115,11 @@ export function PeriodReportSection({ snapshot, accessToken, isDemo, modeQuery }
     (filters.period === "custom" ? filters.start && filters.end : filters.period === "monthly" ? filters.month : filters.date);
   const query = filtersReady ? toQuery(filters) : null;
   const appliedQuery = applied ? toQuery(applied) : null;
-  const changed = applied && query !== appliedQuery;
-  const headers = accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
+  const changed = applied && (query !== appliedQuery || (isDemo && demoBody !== appliedBody));
+  const requestInit = (body) => ({
+    headers: { ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}), ...(body ? { "Content-Type": "application/json" } : {}) },
+    ...(body ? { method: "POST", body } : {}),
+  });
 
   const viewReport = async (event) => {
     event.preventDefault();
@@ -111,15 +127,16 @@ export function PeriodReportSection({ snapshot, accessToken, isDemo, modeQuery }
     const current = requestNumber.current + 1;
     requestNumber.current = current;
     setApplied(filters);
+    setAppliedBody(demoBody);
     setDownload({ status: "idle" });
     setResult({ status: "loading" });
     try {
-      const response = await fetch(`/api/admin/reports/period?${query}&format=json&${modeQuery}`, { headers });
+      const response = await fetchWithTimeout(`/api/admin/reports/period?${query}&format=json&${modeQuery}`, requestInit(demoBody));
       const body = await response.json().catch(() => ({}));
       if (requestNumber.current !== current) return;
       setResult(response.ok ? { status: "ready", report: body } : { status: "error", message: describeError(response.status, body.error) });
-    } catch {
-      if (requestNumber.current === current) setResult({ status: "error", message: describeError(0) });
+    } catch (error) {
+      if (requestNumber.current === current) setResult({ status: "error", message: describeError(error?.name === "AbortError" ? "timeout" : 0) });
     }
   };
 
@@ -127,7 +144,7 @@ export function PeriodReportSection({ snapshot, accessToken, isDemo, modeQuery }
     if (!appliedQuery || download.status === "loading") return;
     setDownload({ status: "loading", format });
     try {
-      const response = await fetch(`/api/admin/reports/period?${appliedQuery}&format=${format}&${modeQuery}`, { headers });
+      const response = await fetchWithTimeout(`/api/admin/reports/period?${appliedQuery}&format=${format}&${modeQuery}`, requestInit(appliedBody));
       if (!response.ok) {
         const body = await response.json().catch(() => ({}));
         setDownload({ status: "error", message: describeError(response.status, body.error) });
@@ -144,8 +161,8 @@ export function PeriodReportSection({ snapshot, accessToken, isDemo, modeQuery }
       // Mobile browsers read the blob after click() returns; revoke later.
       window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
       setDownload({ status: "done", filename: link.download });
-    } catch {
-      setDownload({ status: "error", message: describeError(0) });
+    } catch (error) {
+      setDownload({ status: "error", message: describeError(error?.name === "AbortError" ? "timeout" : 0) });
     }
   };
 
@@ -249,7 +266,7 @@ export function PeriodReportSection({ snapshot, accessToken, isDemo, modeQuery }
           </div>
           {changed && (
             <p className="finance-form-note" data-tone="warning" data-testid="period-report-stale">
-              You changed the filters. The report and downloads below are still for the selection shown; select View report to update them.
+              The filters or the demo entries changed. The report and downloads below are still for the selection shown; select View report to update them.
             </p>
           )}
 

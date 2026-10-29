@@ -1,7 +1,7 @@
 import { buildPeriodReport, periodReportCsv, periodReportFilename } from "../../../src/lib/periodReport.js";
 import { renderPeriodReportPdf } from "../../_lib/periodReportPdf.js";
 import { assertReportAccess } from "../../_lib/reportAccess.js";
-import { loadServerSnapshot } from "../../_lib/snapshotLoader.js";
+import { loadReportSnapshot } from "../../_lib/reportSnapshot.js";
 
 // GET /api/admin/reports/period?scope=business|vehicle&vehicle=<id>
 //   &period=daily|weekly|monthly|custom&date=YYYY-MM-DD&start=&end=&format=json|csv|pdf
@@ -41,16 +41,16 @@ export const resolvePeriodReport = (snapshotResult, request, { generatedAt } = {
 };
 
 export default async function handler(req, res) {
-  if (req.method !== "GET") {
-    res.setHeader("Allow", "GET");
-    return sendJson(res, 405, { error: "Method not allowed. Use GET /api/admin/reports/period." });
+  if (!["GET", "POST"].includes(req.method)) {
+    res.setHeader("Allow", "GET, POST");
+    return sendJson(res, 405, { error: "Method not allowed. Use GET (or POST in demo mode) /api/admin/reports/period." });
   }
 
   const format = String(queryValue(req.query?.format) ?? "json").toLowerCase();
   if (!FORMATS.includes(format)) return sendJson(res, 400, { error: "format must be json, csv or pdf." });
 
   try {
-    const snapshotResult = await loadServerSnapshot({ req, mode: queryValue(req.query?.mode) });
+    const snapshotResult = await loadReportSnapshot({ req, mode: queryValue(req.query?.mode) });
     const report = resolvePeriodReport(snapshotResult, readReportRequest(req.query));
 
     if (format === "json") {

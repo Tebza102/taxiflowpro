@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 
+import { effectivePermissions } from "../../src/lib/memberPermissions.js";
 import { normalizeModuleViewAccess } from "../../src/lib/moduleAccessPolicy.js";
 
 // Shared server authorization boundary for business (tenant) data.
@@ -85,6 +86,21 @@ export const selectMembership = (memberships, requestedBusinessId) => {
   return active[0];
 };
 
+// The caller's own active memberships (caller token, RLS). Release file 06 adds
+// the permissions column; before it exists the same query without it is used
+// (42703 = undefined column), so this code can be deployed ahead of file 06
+// without changing anyone's access.
+const MEMBERSHIP_COLUMNS = "business_id, role, driver_staff_id, active";
+export const readOwnMemberships = async (client, userId) => {
+  const withPermissions = await client
+    .from("business_memberships")
+    .select(`${MEMBERSHIP_COLUMNS}, permissions`)
+    .eq("user_id", userId)
+    .eq("active", true);
+  if (withPermissions.error?.code !== "42703") return withPermissions;
+  return client.from("business_memberships").select(MEMBERSHIP_COLUMNS).eq("user_id", userId).eq("active", true);
+};
+
 export const authorizeBusinessRequest = async (req) => {
   const accessToken = getBearerToken(req);
   if (!accessToken) throw createHttpError(401, "A Supabase access token is required.");
@@ -97,11 +113,7 @@ export const authorizeBusinessRequest = async (req) => {
   } = await client.auth.getUser(accessToken);
   if (userError || !user?.id) throw createHttpError(401, "The supplied Supabase access token is invalid or expired.");
 
-  const { data: memberships, error: membershipError } = await client
-    .from("business_memberships")
-    .select("business_id, role, driver_staff_id, active")
-    .eq("user_id", user.id)
-    .eq("active", true);
+  const { data: memberships, error: membershipError } = await readOwnMemberships(client, user.id);
   if (membershipError) throw createHttpError(403, "Business membership could not be verified.");
 
   const membership = selectMembership(memberships, requestedBusinessId);
@@ -111,6 +123,9 @@ export const authorizeBusinessRequest = async (req) => {
     businessId: String(membership.business_id).toLowerCase(),
     role: membership.role,
     driverStaffId: membership.driver_staff_id ? String(membership.driver_staff_id) : null,
+    // Stored responsibilities (release file 06); null on a database without
+    // file 06, which effectivePermissions treats as the role defaults.
+    permissions: Array.isArray(membership.permissions) ? membership.permissions : null,
     activeMembershipCount: (memberships ?? []).length,
   };
 };
@@ -230,6 +245,7 @@ export const buildRequester = (authorization, storedSnapshot) => {
   const toggles = email
     ? (storedSnapshot?.appUsers ?? []).find((entry) => String(entry?.email ?? "").trim().toLowerCase() === email)?.moduleAccess
     : undefined;
+  const moduleAccess = normalizeModuleViewAccess(toggles ?? {}, authorization.role);
   return {
     id: authorization.userId,
     email: authorization.email,
@@ -237,6 +253,8 @@ export const buildRequester = (authorization, storedSnapshot) => {
     businessId: authorization.businessId,
     driverStaffId: authorization.driverStaffId,
     activeMember: true,
-    moduleAccess: normalizeModuleViewAccess(toggles ?? {}, authorization.role),
+    moduleAccess,
+    // Responsibilities from the membership, each capped by its module's access.
+    permissions: effectivePermissions({ role: authorization.role, permissions: authorization.permissions, moduleAccess }),
   };
 };

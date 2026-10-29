@@ -118,6 +118,8 @@ export const loadWorkspace = async () => {
       businesses: listed.businesses,
       role: json.role,
       driverStaffId: json.driverStaffId,
+      // Effective responsibilities (server-computed); used only to show controls.
+      permissions: Array.isArray(json.permissions) ? json.permissions : [],
       scope: json.scope,
       actorNames: json.actorNames ?? {},
       tenant: true,

@@ -1,16 +1,69 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { MEMBER_PERMISSIONS, PERMISSION_ROLES, defaultPermissionsForRole, delegablePermissions, normalizePermissionList } from "../lib/memberPermissions";
 import { membersRequest } from "../lib/tenantWorkspace";
 
 // Tenant mode Settings: business access through POST /api/business/members.
-// Owners grant Admin, Manager and Driver access, remove or restore it, keep
-// driver profiles (no sign-in needed) and link their own login to a profile.
-// Admins can view. Owners themselves are created by the operator procedure.
+// Owners grant Admin, Manager and Driver access, remove or restore it, set each
+// Admin's and Manager's responsibilities, keep driver profiles (no sign-in
+// needed) and link their own login to a profile. Admins can view. Owners
+// themselves are created by the operator procedure. Roles and sign-ins stay
+// with the Owner. Responsibilities can also be changed by someone the Owner gave
+// "Manage staff responsibilities", only within what that person holds (the
+// server enforces it; these controls only reflect it).
 const ROLES = ["Admin", "Manager", "Driver"];
 const emptyGrant = { email: "", name: "", role: "Admin", driverStaffId: "" };
+const MODULE_LABELS = { finance: "Money", fleet: "Fleet & Operations", drivers: "Drivers", settings: "Settings" };
 
-export default function TenantAccessPanel({ activeRole, currentUserEmail, onChanged }) {
+const storedPermissions = (member) =>
+  member.permissions === null || member.permissions === undefined ? defaultPermissionsForRole(member.role) : normalizePermissionList(member.permissions);
+
+function ResponsibilityEditor({ member, isOwner, delegable, isSelf, busy, onSave }) {
+  const stored = storedPermissions(member);
+  const [draft, setDraft] = useState(stored);
+  const storedKey = stored.join(",");
+  useEffect(() => {
+    setDraft(storedKey ? storedKey.split(",") : []);
+  }, [storedKey]);
+  const changed = [...draft].sort().join(",") !== [...stored].sort().join(",");
+  // Owner: any. Staff manager: only what it holds, never itself, never another staff manager.
+  const canEditMember = !isSelf && member.active && (isOwner || (delegable.length > 0 && !stored.includes("staff.manage")));
+  const canEditKey = (key) => canEditMember && (isOwner || delegable.includes(key));
+  return (
+    <div className="tenant-responsibilities" data-testid="responsibilities">
+      <p className="eyebrow">Responsibilities</p>
+      {MEMBER_PERMISSIONS.map((permission) => {
+        const moduleOff = member.moduleAccess?.[permission.module] === false;
+        return (
+          <label key={permission.key} className="finance-field finance-field-check" title={permission.detail}>
+            <span>
+              {permission.label}
+              {moduleOff ? ` (inactive: ${MODULE_LABELS[permission.module]} is switched off for this person)` : ""}
+            </span>
+            <input
+              type="checkbox"
+              aria-label={`${permission.label} for ${member.email}`}
+              disabled={!canEditKey(permission.key) || busy}
+              checked={draft.includes(permission.key)}
+              onChange={(event) =>
+                setDraft((current) => (event.target.checked ? [...current, permission.key] : current.filter((key) => key !== permission.key)))
+              }
+            />
+          </label>
+        );
+      })}
+      {canEditMember && (
+        <button type="button" className="record-button" disabled={busy || !changed} onClick={() => onSave(draft)}>
+          Save responsibilities
+        </button>
+      )}
+    </div>
+  );
+}
+
+export default function TenantAccessPanel({ activeRole, currentUserEmail, actorPermissions = [], onChanged }) {
   const isOwner = activeRole === "Owner";
+  const delegable = delegablePermissions({ role: activeRole, permissions: actorPermissions });
   const [data, setData] = useState(null);
   const [feedback, setFeedback] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -67,6 +120,18 @@ export default function TenantAccessPanel({ activeRole, currentUserEmail, onChan
                 {member.driverStaffId ? ` / driver profile ${member.driverStaffId}` : ""}
                 {member.active ? "" : " / access removed"}
               </p>
+              {PERMISSION_ROLES.includes(member.role) && (
+                <ResponsibilityEditor
+                  member={member}
+                  isOwner={isOwner}
+                  delegable={delegable}
+                  isSelf={member.email === String(currentUserEmail ?? "").toLowerCase()}
+                  busy={busy}
+                  onSave={(permissions) =>
+                    run("member.permissions", { userId: member.userId, permissions }, `Responsibilities saved for ${member.email}. They apply from their next action.`)
+                  }
+                />
+              )}
             </div>
             {isOwner && member.role !== "Owner" && (
               <button
@@ -86,6 +151,10 @@ export default function TenantAccessPanel({ activeRole, currentUserEmail, onChan
             )}
           </article>
         ))}
+        <p className="finance-form-note" data-tone="info">
+          Only the Owner changes roles and sign-ins. Responsibilities: the Owner, or someone given "Manage staff responsibilities" (only ones they hold, never their own, never another staff manager's). A responsibility works only while its module is switched on for that person.
+          Not available here yet: changing someone&apos;s role (remove access and grant it again) and custom roles.
+        </p>
       </article>
 
       {isOwner && (

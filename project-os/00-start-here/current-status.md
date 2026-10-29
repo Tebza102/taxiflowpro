@@ -1,5 +1,79 @@
 # Current Status
 
+## Release 06 review COMPLETE (2026-10-20): recommendation GO; production on hold
+
+- Review document: `05-build/release-06-review.md`. Final file 06 SHA-256 `09dd1e33112108f0a17d8645ec9fb3294c8139ba56fc391508ab8699d676b30c` (`ac10ed1`); app code tested = `e78e4b3` tree (unchanged at head `c3f6eda`+).
+- All local suites pass on the final file 06, including backup restore of responsibilities and the production-path rehearsal (skip 01-05, apply 06, rollback, re-apply).
+- Separation of duties binds everyone (a second authorized person must verify each count); sign-out unchanged (ends sessions on all devices).
+- **Hosted test backend is NOT aligned:** it runs the earlier file 06. Delta and targeted check ready (`scripts/preview-test/delta-06-restore-fidelity.sql`, `verify-delta-06.sql`).
+- Known limit: backups exclude the permission-audit table and platform_admins.
+
+## Release file 06 acceptance: ALL THREE gaps PASSED (2026-10-19 night); production on hold (history)
+
+- **Hosted proof:** authenticated journey on Preview `taxiflowpro-n8yesi8bq-apprigate.vercel.app` against the isolated test project `sxoonhovoqgcpflhqirb` (never production): full cash workflow; Owner permission changes; Manager route/vehicle/driver saves surviving reload; banking revocation blocking the next direct request; delegated staff management limits with tenant-scoped audit rows; separation of duties by direct API; cross-company refusal. 6/6 passed. Details: change-log 2026-10-19 "Authenticated hosted Preview journey".
+- **Cleanup:** automation bypass secrets 0 (an accidental one created by `vercel curl` at 17:21 UTC was found and revoked); deployment protection on. Test project, its data and the branch-scoped Preview variables remain until Tebogo decides.
+- **Decision needed before release:** separation of duties applies to the Owner too, so a business run by the Owner alone cannot verify the Owner's own counts.
+
+## Acceptance gaps (2026-10-19, later): parts 1-2 DONE locally; part 3 WAITING on Tebogo (superseded above)
+
+- **Delegated staff management** (`staff.manage`, Owner-given only; holders change other Admins'/Managers' responsibilities only within their own; audit table `member_permission_changes`) and **separation of duties** (nobody verifies a count they recorded, Owner included) are built and pass locally (101/101, 25/25, unit 10/10, regressions, browser 12/12).
+- **Isolated Preview backend:** test project `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`) has the schema (release files 01-06; applied by Tebogo 2026-10-19, verified 10/10 read-only by the agent); still no accounts or data. Branch-scoped Vercel Preview variables point this branch's Preview at it. Next: Tebogo puts the test project's secret key in an env file outside the repo and in the branch Vercel variable, then runs `seed-hosted-test.mjs`; then the agent runs the hosted journey with a temporary bypass secret and revokes it.
+- Production on hold (`af3e5ad`, file 05 only).
+
+## Owner-assigned responsibilities (release file 06), 2026-10-19: BUILT and TESTED locally + Preview; NOT in production
+
+- **Branch** `agent/owner-responsibilities` (pushed; code `7f1419b`), from `0b02435`. **Preview** `https://taxiflowpro-nifglxqz9-apprigate.vercel.app` READY. Production unchanged (`af3e5ad`, file 05 only).
+- **What it does:** the Owner sets, per Admin/Manager, *Receive and count cash*, *Verify counted cash*, *Bank verified cash*, *Manage driver profiles and assignments*, *Manage routes and vehicles* (Settings > Business access). The server enforces them from the membership row on every request, capped by module access. Roles, sign-ins and responsibilities stay Owner-only. Migration keeps everyone's current access (Admin count; Manager verify + bank).
+- **Fixed gaps from the rehearsal:** Add Route, Add/Edit Vehicle (incl. driver assignment) and Save driver now work in the business workspace via server actions.
+- **Still not available in the business workspace** (labelled in the screens; nothing is saved): archive vehicle, defects, service/document records, shift allocation page, expense presets, settings/profile saves, role change in the UI, custom roles, driver email edits. No segregation-of-duties rule (one person can be given both count and verify).
+- **Evidence:** change-log 2026-10-19 "Owner-assigned responsibilities". All suites pass on the isolated test stack (new: 72/72, 24/24, 8/8, browser 1/1; regressions all pass; hosted-copy 22/22 + 72/72; browser 12/12 + mock 34/34). Rehearsal database unchanged.
+- **Readiness gate** (next-action.md): items 2 and 3 are built and locally verified; they count only after release and production checks.
+
+
+## Local onboarding rehearsal (2026-10-19): PASSED on the local synthetic stack
+
+The full runbook flow ran locally: create the company and Owner, Owner password, team, set-up data, Driver capture, Admin count, Manager verify, Manager deposit. Company separation and Driver restrictions were shown in the UI and at the API (403s). Production was not touched. Details and the Docker launch fix: change-log 2026-10-19.
+
+**Not ready for a real business.** DKIM passing is necessary but not sufficient. Open gaps found by the rehearsal (findings in change-log 2026-10-19, "Owner permissions findings"):
+- **Add Route and Add Vehicle** in Fleet, and **Save driver** in the Drivers module, are refused in the business workspace. No server action exists for them. The route loader used in the rehearsal was an operator workaround, not a fix.
+- **Owner-assigned responsibilities are missing.** Hand-in is fixed to Owner/Admin, verify to Owner/Manager, and banking to Owner, or Manager with Money on (the default). Driver profiles and staff access are Owner-only. There is no screen for per-person switches.
+- Owner and Driver restrictions are still unverified in production.
+
+## Platform admin RELEASED to production (2026-10-18 16:20 SAST)
+
+- **Deployed:** commit `af3e5ad` (merge of PR #3; code identical to the reviewed `6b0b249`). Deployment `dpl_2P2aUep4zsvNYk2LirS4qecRHX3s` (`taxiflowpro-dy1a1k761`), promoted to `taxiflow.co.za` at 16:20:44–16:20:55; bundle `index-2xzkC0xd.js`.
+- **Database:**
+  - release file 05 applied (01–04 skipped); all post-checks PASS;
+  - `platform_admins`: RLS on and forced, no policies, grants only to the owner (postgres) and `service_role` SELECT;
+  - exactly one grant: `apprigate@gmail.com`, active, operator. It is still Admin in Tenant 1.
+- **Data unchanged:**
+  - 1 business (TaxiFlow Pro); 6 Auth users;
+  - membership fingerprint `85596e42…` before and after;
+  - snapshot `0ce5840c…@2026-10-11 19:18:19 UTC` before and after.
+- **Backups:**
+  - pre-release `…2026-10-18T13-59-37-485Z.tfbk` (SHA-256 `f04778a7…`) and after-release `…2026-10-18T14-30-08-777Z.tfbk` (`62345aea…`);
+  - export, verify and check PASS for both; copies in `G:My DriveTaxiFlow backups`, hashes match. The cloud upload by Drive for Desktop has not been confirmed.
+- **Live checks (unauthenticated):**
+  - sign-in renders;
+  - `/api/platform/businesses` returns 401 with no token (GET and POST) and with a garbage token, with `no-store`;
+  - `/api/business/memberships` returns 401; `sw.js` 200;
+  - www is unchanged (same `index.html` hash).
+- **User-verified signed-in checks** (Tebogo, in his own browser, as `apprigate@gmail.com`, after the 16:26 SAST sign-in; reported to the agent, not observed by it):
+  - the Companies button is visible;
+  - only TaxiFlow Pro is listed;
+  - his business role is still Admin;
+  - existing records are visible after a refresh.
+- **Unverified in production** (no production sign-in by the agent or as those roles):
+  - Owner (`owner@apprigate.com`) sees no Companies button;
+  - Drivers see only their own records;
+  - Admin cannot grant access;
+  - a non-member company is refused;
+  - an Owner cannot mint Owners.
+
+  These are proven only locally (`platform-admin-tests.mjs` 75/75; Playwright 11/11). The server checks are identical code in production.
+- **Rollback:** `vercel promote https://taxiflowpro-jng5n1ced-apprigate.vercel.app --scope apprigate` (file 05 is additive). Revoke the capability with `update public.platform_admins set active = false` or the file-05 rollback. For data, restore the pre-release backup.
+
+
 ## Public website on www (2026-10-18): RELEASED 15:53 SAST
 
 - **Live:** `https://www.taxiflow.co.za`. Commit `c55b990`; deployment `dpl_CY4Rbhm3LGfcAwZwSDQoogA5TRYd` (files identical to the reviewed Preview `dpl_5HJ3YjCEDmMS4YmqrTmgRV5Tnrhc`).

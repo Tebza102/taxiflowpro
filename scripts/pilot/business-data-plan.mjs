@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 
+import { normalizeRegistration } from "../../src/lib/fleetRecordContract.js";
+
 // Operator business-data load: PLANNING (pure) and APPLYING (one atomic,
 // version-checked write). Used by scripts/localdb/load-business-data.mjs.
 //
@@ -28,7 +30,8 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const clone = (value) => JSON.parse(JSON.stringify(value ?? null));
 const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
-export const normalizeRegistration = (value) => text(value).toUpperCase().replace(/[\s-]+/g, " ");
+// Shared with the app's server-side vehicle save (api/_lib/fleetActions.js).
+export { normalizeRegistration };
 const slug = (value) => text(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 const shortHash = (value) => createHash("sha256").update(value).digest("hex").slice(0, 10);
 

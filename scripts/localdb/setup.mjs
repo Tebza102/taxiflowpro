@@ -24,7 +24,7 @@ import {
   readLocalEnv,
   removeComposeVolume,
 } from "./lib/exec.mjs";
-import { CLI_DISABLED_CONFIG, CLI_DISABLED_SENTINEL } from "./lib/localTarget.mjs";
+import { ACTIVE_PROFILE, CLI_DISABLED_CONFIG, CLI_DISABLED_SENTINEL, renderComposeForProfile } from "./lib/localTarget.mjs";
 import { buildSeedSql, buildTenantSeedSql } from "./seed-data.mjs";
 
 const SOURCE = path.join(REPO_ROOT, "scripts", "localdb");
@@ -39,7 +39,10 @@ export const prepare = () => {
   }
   writeFileSync(cliConfig, CLI_DISABLED_CONFIG);
   mkdirSync(path.join(COMPOSE_DIR, "db-init"), { recursive: true });
-  copyFileSync(path.join(SOURCE, "compose", "docker-compose.yml"), path.join(COMPOSE_DIR, "docker-compose.yml"));
+  writeFileSync(
+    path.join(COMPOSE_DIR, "docker-compose.yml"),
+    renderComposeForProfile(readFileSync(path.join(SOURCE, "compose", "docker-compose.yml"), "utf8")),
+  );
   for (const file of ["roles.sql", "jwt.sql"]) {
     copyFileSync(path.join(SOURCE, "compose", "db-init", file), path.join(COMPOSE_DIR, "db-init", file));
   }
@@ -121,6 +124,7 @@ export const HOSTED_RELEASE = [
   path.join(MIGRATIONS_DIR, "20261010113000_pilot_onboarding.sql"),
   path.join(MIGRATIONS_DIR, "20261011090000_assign_initial_owner.sql"),
   path.join(MIGRATIONS_DIR, "20261018090000_platform_admins.sql"),
+  path.join(MIGRATIONS_DIR, "20261019090000_member_permissions.sql"),
 ];
 
 export const rebuild = ({ seed, hosted = false, releaseFiles = true }) => {
@@ -172,5 +176,5 @@ if (isMain) {
     console.error("Usage: node scripts/localdb/setup.mjs prepare|start|reset|schema|hosted|stop");
     process.exit(2);
   }
-  console.log(`[localdb] ${mode} done (${WORKDIR})`);
+  console.log(`[localdb] ${mode} done (profile ${ACTIVE_PROFILE.name}, ${WORKDIR})`);
 }

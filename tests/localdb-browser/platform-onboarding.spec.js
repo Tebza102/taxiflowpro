@@ -106,7 +106,7 @@ test("platform admin creates a company and its Owner onboards staff; companies s
   await expect(status).toContainText("Driver profile Fleet Driver added.");
   await access.getByLabel("Email", { exact: true }).fill(DRIVER);
   await access.getByRole("combobox", { name: "Access", exact: true }).selectOption("Driver");
-  await access.getByLabel("Driver profile").selectOption({ label: "Fleet Driver" });
+  await access.getByRole("combobox", { name: /^Driver profile/ }).selectOption({ label: "Fleet Driver" });
   await access.getByRole("button", { name: "Grant access" }).click();
   await expect(status).toContainText(`${DRIVER} can now sign in as Driver. A password setup email was sent.`);
   await access.getByLabel("Email", { exact: true }).fill(MANAGER);

@@ -3019,3 +3019,133 @@ button {
   width: 1.25rem;
   height: 1.25rem;
 }
+
+/* Reports > Business and vehicle reports */
+.period-report,
+.period-report-result {
+  display: grid;
+  gap: 0.9rem;
+  min-width: 0;
+}
+
+.period-report-choice {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.6rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.period-report-choice legend {
+  margin-bottom: 0.35rem;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.period-report-choice .report-record-option {
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 2.75rem;
+}
+
+.period-report-selection {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.85rem;
+  border-left: 4px solid var(--navy);
+  border-radius: 0.6rem;
+  background: rgba(245, 247, 250, 0.9);
+}
+
+.period-report-selection h3,
+.period-report-selection p {
+  margin: 0;
+  color: var(--navy);
+  overflow-wrap: anywhere;
+}
+
+.period-report-selection small {
+  color: var(--muted);
+}
+
+.period-report-downloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.period-report-downloads .action-button,
+.period-report .action-button.primary {
+  min-height: 2.75rem;
+}
+
+.period-report .info-pair[data-tone="danger"] strong {
+  color: #b03a2e;
+}
+
+.period-report-table-wrap {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 0.85rem;
+}
+
+.period-report-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.period-report-table caption {
+  padding: 0.6rem 0.75rem;
+  color: var(--navy);
+  font-weight: 700;
+  text-align: left;
+}
+
+.period-report-table th,
+.period-report-table td {
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid rgba(10, 25, 37, 0.08);
+  text-align: left;
+  vertical-align: top;
+}
+
+.period-report-table th {
+  color: var(--muted);
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.period-report-table [data-align="end"] {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.period-report-result ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.period-report-divider {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 719px) {
+  .period-report-choice {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .period-report-downloads .action-button {
+    flex: 1 1 100%;
+  }
+}

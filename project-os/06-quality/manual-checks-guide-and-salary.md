@@ -48,3 +48,15 @@ Use the CSV from A11, or download it on the computer (same steps in a desktop br
 | B7 | Look for a description that contains a comma (if any). | It stays in one cell (not split). | |
 
 If any check fails, write down what happened, the device or app, and a screenshot; do not mark the PR ready.
+
+## C. Business and vehicle reports (added 2026-10-29, branch `agent/period-reports`)
+
+Date: ______  Checked by: ______  Device/app: ______
+
+| # | Steps | Expected result | Result |
+|---|---|---|---|
+| C1 | As Owner: Reports. Overall business, Monthly, March 2026, View report. | "Business report: Overall business" and "Mar 2026 (1 Mar 2026 to 31 Mar 2026)" shown above the figures. | |
+| C2 | Download PDF on the phone and open it. | A4, DEMO DATA marked, same scope, dates and Net result as the screen; tables readable, nothing cut off. | |
+| C3 | Download CSV and open it in Excel and Google Sheets. | Sections in separate columns; Income, Expenses and Net result equal the screen; amounts are numbers; "Reconciles,yes". | |
+| C4 | Individual vehicle, JHB 457 GP, Weekly, 27 Mar 2026. | Only that vehicle's entries; no "Rank Fees" or "No vehicle" lines; drivers named. | |
+| C5 | Change the dates without pressing View report. | Yellow warning that the report and downloads are still for the selection shown. | |

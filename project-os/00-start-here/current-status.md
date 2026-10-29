@@ -9,6 +9,14 @@
   3. PR #8 driver salaries: `agent/driver-salary` (`bd063c5`) -> `agent/user-guide`. Uses the guide (salary sentence) and release 06's finance-action permissions.
 - Merge order: #6, #7, #8, retargeting each to `main` as the one below merges.
 
+## Business and vehicle reports (2026-10-29): branch `agent/period-reports` (stacked on `agent/driver-salary`); not merged or deployed
+
+- The monthly expense CSV alone did not meet the reporting requirement. Reports now has **Business and vehicle reports** for Owners, and Admins/Managers with Money on: scope Overall business or Individual vehicle; period Daily, Weekly (Mon-Sun), Monthly or Custom dates; a View report button; the applied scope and dates shown on screen; PDF and CSV downloads of exactly the report shown (if filters change, a warning says so until View report is pressed again).
+- Business report: income, expenses (vehicle / business costs without a vehicle / driver salaries), net result, breakdowns, salary lines, per-vehicle results, verification status, cash checking (driver days) and banking (deposits), every transaction, notes. Vehicle report: identity, own income and expenses, net, activity (trips, special hires, days, odometer distance, drivers), transactions. No allocation of shared costs or salaries to vehicles.
+- Net result is labelled "Net result (recorded income less recorded expenses)" with a note that it is not accounting profit. Historical limits disclosed in each report (entries dated by capture time, undated entries, older "Salary" expenses without a salary payment, asset purchases, cash checking only from day hand-ins).
+- One server report per request (`/api/admin/reports/period`, access checked first, server-side) feeds the screen, CSV and PDF, so they reconcile. Daily cash report kept below it with an explanation of its narrower purpose. Details: `04-technical/data-model.md`.
+- Evidence: see change-log 2026-10-29. Not checked: real phone, real spreadsheet app, PDF layout by eye (content asserted by tests only), hosted Preview.
+
 ## Driver salaries (2026-10-28): draft PR #8, not deployed; hosted check PASSED
 
 - Commits on `agent/driver-salary`: `bd063c5` (first version), `ea7e571` (Project OS), `a8dac17` (reconciled with the original requirements), `e46ba96` (Project OS), `4370dce` (server salary timestamp; hosted journey picks a fresh day), plus the hosted-results commit.

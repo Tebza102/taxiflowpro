@@ -13,7 +13,8 @@
 
 - **Report PDFs on a phone:** server generation was healthy (emulated Android over the LAN: 200 `application/pdf`, readable business/vehicle/daily PDFs). The real-phone demo runs on plain `http://` at a LAN IP, where Chrome on Android warns about or blocks downloads, and the app hid this by always saying "Downloaded". Now one shared download path for all report files: 60s timeout, PDF header check, "PDF ready" (never "Downloaded"), Open PDF button, reason plus Try again on failure.
 - **Mobile menu:** the two-row translucent bottom bar is replaced by a compact top bar and a drawer. The top bar shows the menu button and current page, also on phones turned sideways. The drawer is closed by default, closes after navigating, on the backdrop or on Escape, has focus handling and 44px targets, and lists only the role/module pages. Desktop unchanged.
-- Two separate commits (menu first, then downloads). Evidence: change-log 2026-10-29 "Phone fixes". **Real-phone check not passed until Tebogo confirms** (manual checks section F).
+- Follow-up (same day): on the phone the CSV saved but the PDF did not. The server was excluded: the stress test passed, and server errors are now logged. The PDF is now handed over as a generic file (same bytes, `.pdf` name), so Chrome on Android saves it instead of passing it to its PDF viewer. The dev server logs each report request for diagnosis.
+- Separate commits (menu, downloads, PDF hand-off). Evidence: change-log 2026-10-29 "Phone fixes". **Real-phone check not passed until Tebogo confirms** (manual checks section F).
 
 ## Recurring fixed expenses (Prompt 3, 2026-10-29): branch `agent/recurring-expenses` (stacked on `agent/driver-salary-profile`); not merged or deployed
 

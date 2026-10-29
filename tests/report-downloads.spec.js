@@ -75,6 +75,10 @@ test("business and vehicle PDFs: complete files, ready message with Open PDF, se
   // Tapping Open PDF hands over the same file again.
   const again = await save(page, "period-report-download-open");
   expect(again.buffer.equals(business.buffer)).toBe(true);
+  // Handed over as a generic file, so Chrome on Android saves it rather than
+  // passing it to its PDF viewer; the CSV keeps its own type.
+  const savedType = await open.evaluate(async (link) => (await (await fetch(link.href)).blob()).type);
+  expect(savedType).toBe("application/octet-stream");
 
   await page.getByText("Individual vehicle").click();
   await page.getByTestId("period-report-vehicle").selectOption({ label: "JHB 457 GP" });

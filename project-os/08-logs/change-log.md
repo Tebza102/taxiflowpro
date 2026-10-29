@@ -1868,3 +1868,29 @@ Pass in automation. Real-phone check NOT passed until Tebogo confirms (manual ch
 
 **Next action:**
 - Tebogo runs section F on the phone and reports what Chrome showed at F4.
+
+### 2026-10-29 — Phone PDF still not saving (CSV saves): PDF handed over as a generic file; report errors logged (branch `agent/phone-fixes`)
+
+**Changed by:** Agent
+
+**Files changed:**
+- `src/lib/reportDownload.js`, `tests/report-downloads.spec.js`
+- `api/admin/reports/period.js`, `api/admin/daily-log/report-pdf.js` (server errors now logged)
+- `vite.config.js` (dev server only: one log line per report request)
+
+**Summary:**
+Tebogo's retry on the phone: the CSV downloads but the PDF still does not. Both use the same browser download code, so the difference is the file itself.
+- *Server excluded:* the period PDF renderer was stress-tested with phone-style demo data and rendered every case, business and vehicle; daily, monthly and wide custom periods. The data included emoji, accents, Chinese text, empty and 400-character fields, string amounts, a recurring schedule and entries without a vehicle. Before this change the handlers swallowed errors without logging; they now log any 500 to the server log (also useful on Vercel).
+- *Remaining difference:* the PDF blob was typed `application/pdf` and the CSV `text/csv`. Recent Chrome on Android hands `application/pdf` to its built-in PDF viewer instead of saving a blob download. Fix: the PDF is handed over with the same bytes, typed `application/octet-stream` with the `.pdf` name, so it saves like the CSV and opens as a PDF from Downloads. The CSV is unchanged.
+- *Evidence still needed:* no Android debug tools on this laptop, so the real phone could not be inspected directly. The dev server now logs each report request: route, format, status, bytes, time, browser and phone address, never bodies or tokens. Tebogo's next tap shows whether the phone's PDF request reached the server and returned 200.
+
+**Tests run:**
+- `report-downloads.spec.js` now also asserts the saved PDF is typed `application/octet-stream` with unchanged bytes; report, period-report and recurring specs 23/23.
+- Full `verify-all` run `2026-10-29T14-50-43-880Z`: node 426/426, guards, build, mock 69/69, tenant 31/31.
+
+**Result:**
+Pass in automation. Real-phone check NOT passed until Tebogo confirms.
+
+**Next action:**
+- Tebogo retries Download PDF on the phone; the agent reads the `[report-dev]` lines for that request.
+

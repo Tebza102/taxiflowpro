@@ -68,6 +68,8 @@ export default async function handler(req, res) {
     return res.end(body);
   } catch (error) {
     const statusCode = error?.statusCode ?? 500;
+    // The person gets a plain message; the cause goes to the server log.
+    if (statusCode >= 500) console.error(`[reports/period] ${format} report failed:`, error);
     return sendJson(res, statusCode, statusCode >= 500 ? { error: "Unable to build the report." } : { error: error.message });
   }
 }

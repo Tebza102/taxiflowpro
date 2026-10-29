@@ -65,6 +65,8 @@ export default async function handler(req, res) {
     return res.end(buffer);
   } catch (error) {
     const statusCode = error?.statusCode ?? 500;
+    // The person gets a plain message; the cause goes to the server log.
+    if (statusCode >= 500) console.error("[daily-log/report-pdf] PDF failed:", error);
 
     return sendJson(
       res,

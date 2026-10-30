@@ -367,3 +367,61 @@ Results:
 - any section 4 hash differs or any post-check is false;
 - a public domain moves after the #6 merge;
 - or Tebogo wants the open manual checks done first.
+
+## 12. Release record (2026-10-29/30, Tebogo authorised; agent ran it)
+
+**Backups.**
+- Pre-release: `taxiflow-vfxftviwteypasredjgm-2026-10-29T19-50-57-439Z.tfbk`. Export PASS, separate verify PASS. Counts: businesses 3, memberships 10, snapshots 3, request log 1, auth users 10, identities 10, platform admins 1 (equal to the live counts).
+- Post-release: `taxiflow-vfxftviwteypasredjgm-2026-10-30T07-42-32-130Z.tfbk`. Export PASS, separate verify PASS (2026-10-30). Same counts plus 1 permission change.
+- Both are stored in `C:\Users\appri\taxiflow-backups` (outside the repo). The connection file sits outside the repo.
+
+**Quiet window** confirmed by Tebogo. The last business write before it was on 2026-10-19.
+
+**Before (2026-10-29 21:42 UTC).**
+- Live: `dpl_2P2aUep4zsvNYk2LirS4qecRHX3s` (`af3e5ad`), bundle `index-2xzkC0xd.js`; file 06 absent.
+- `fingerprint-release-06`: businesses `c70c17e4…`, memberships `6d1874e6…`, snapshots `ac95e4d6…`.
+- `unchanged-data-release-06`: businesses `3c22b82e…`, memberships `ae164fd7…`, snapshots `84562277…`, finance `9f5f869d…`, platform admins `65c2477b…`, auth `a9b360aa…`.
+
+**File 06.**
+- `apply-release.mjs`: SKIP 01-05, APPLIED 06 (6.0s), all six post-checks PASS.
+- `verify-release-06`: 11/11 true (3 Admins `{cash.count}`, 2 Managers `{cash.verify,cash.bank}`, 5 Owner/Driver `{}`, audit table empty).
+- Both hash sets identical afterwards (23:02 UTC). The quiet window ended.
+
+**Merges.** All with merge commits, each retargeted to `main`:
+- #6 `2703387`
+- #7 `2fe4050`
+- #8 `83bb6df`
+- #9 `d8595b9`
+- #10 `a724c6b`
+- #11 `629dbfb`
+- #12 `f24e71b`
+
+The final `main` tree is identical to `2d1c8bd` (app code = `cf75549`).
+
+**Alias gate (answers section 8's open question).**
+- The #6 build `dpl_BBentvVHqmcNLMVfh9R6qfEzo93G` took only `taxiflowpro-apprigate.vercel.app` and `taxiflowpro-git-main-apprigate.vercel.app`, both behind the Vercel login.
+- So the team aliases follow `main` before promotion, and the public domains do not.
+- `taxiflow.co.za` and `taxiflowpro.vercel.app` stayed on `index-2xzkC0xd.js` through all seven merges.
+
+**Promotion (once).**
+- `dpl_64rcuDg1DUHW34W4cgSTWrQERB2K` (`taxiflowpro-hf0i0bonz`, `f24e71b`, READY) promoted.
+- Both public domains serve `index-De8tm53x.js`:
+  - it contains the production ref and not the test ref;
+  - it includes the mobile drawer, recurring expenses and the octet-stream PDF hand-off;
+  - unauthenticated `/api/business/workspace` and `/api/admin/reports/period` answer 401.
+- After promotion, the snapshot and membership hashes were unchanged (23:21 UTC).
+
+**Production smoke checks** (Owner `owner@apprigate.com`, business `taxiflow-legacy`, view and download only; the network log showed GET requests only):
+- PASS sign-in; the Owner guide shows.
+- PASS Business access lists 6 members with roles; the Admin/Manager responsibility controls show; `/api/platform/businesses` 403 for a non-platform-admin.
+- PASS Overview, Money > Expenses (existing expenses, statuses and driver notes; Driver salaries and Recurring fixed expenses sections), Fleet (`YNJ 211 GP`), Drivers (2 profiles; the salary section shows in the profile; cancelled without saving).
+- PASS Reports: custom dates 2026-06-01 to 2026-10-09. Income R 17 064,00, expenses R 3 480,00, net R 13 584,00 (matches the dashboard and Money). PDF 357 KB "PDF ready" with Open PDF; CSV 5 KB "CSV ready".
+- PASS mobile 375x812: the top-bar menu opens with all six sections and closes on Escape.
+- NOT RUN: a Driver-only sign-in in production. It passed on the hosted Preview.
+
+**Post-release writes (not the agent).**
+- 2026-10-29 23:43:45 UTC: an Owner set `taxiadmin@apprigate.com` (Admin, `taxiflow-legacy`) from `{cash.count}` to all six responsibilities.
+- It is recorded once in `member_permission_changes` and in the activity history.
+- This explains the later change in the snapshot and membership hashes. No other writes since.
+
+**Separation of duties** is enforced on the server (`api/_lib/financeActions.js`, `financeRecordActions.js`): the counter of a hand-in cannot verify it.

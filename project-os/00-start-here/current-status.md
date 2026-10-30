@@ -1,5 +1,19 @@
 # Current Status
 
+## RELEASED: controlled client pilot (2026-10-30)
+
+- **Live:** https://taxiflow.co.za (and taxiflowpro.vercel.app).
+  - Deployment `dpl_64rcuDg1DUHW34W4cgSTWrQERB2K` (`taxiflowpro-hf0i0bonz`), commit `f24e71b` on `main`.
+  - PRs #6-#12 are merged with merge commits; the app code is identical to the tested `cf75549`.
+- **Database:** production `vfxftviwteypasredjgm` has release files 01-06. `verify-release-06` 11/11; protected-data hashes identical across the apply.
+- **Backups:** pre-release and post-release encrypted backups, export and verify both PASS (`C:\Users\appri\taxiflow-backups`).
+- **Production smoke checks (Owner): PASS**, view and download only. A Driver-only sign-in was not checked in production.
+- **Feature freeze** for the pilot. Priorities, first-client checklist, issue log and limitations: `05-build/client-pilot.md`. Full record: `05-build/release-stack-review.md` section 12.
+- **Still unconfirmed:** manual checks A-E and the spreadsheet-app check.
+- **Rollback:** maintenance build first. The old app `af3e5ad` only as degraded operation (section 9).
+
+The sections below describe the state before the release and are kept as history.
+
 ## Repository context and open stack (verified 2026-10-28)
 
 - Repository: `Tebza102/taxiflowpro`. In this repository PR #6 is TaxiFlow's release 06 (`agent/owner-responsibilities`, open draft, unchanged at `51a0f5d`). It is not the separate client-workspace project's PR #6, which lives in another repository and is not touched from here. No `feature/client-centred-workspace` branch exists here.

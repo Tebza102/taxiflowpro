@@ -1967,3 +1967,18 @@ Pass in automation. Real-phone check NOT passed until Tebogo confirms.
 - The test project was paused again.
 
 **Not changed:** production; no merge or deployment. Still open: the production backup, the restore-rehearsal decision, the quiet window, and manual checks A-E and the spreadsheet check.
+
+## 2026-10-30: production release of #6-#12 for a controlled client pilot
+
+**Changed by:** Agent under Tebogo's written authorisation. Tebogo typed the project ref, the passphrase and the sign-in locally.
+
+- **Pre-release backup:** export and verify PASS.
+- **Quiet window:** file 06 applied (SKIP 01-05, APPLIED 06, post-checks PASS); `verify-release-06` 11/11; both protected-data hash sets identical.
+- **Merges:** #6 to #12 with merge commits, in order. The alias gate showed only the login-protected team aliases follow `main`; the public domains moved only on promote.
+- **Promotion:** `dpl_64rcuDg1DUHW34W4cgSTWrQERB2K` (`f24e71b`), once.
+- **Smoke checks (Owner):** all PASS. A Driver-only sign-in was not run in production.
+- **Post-release backup:** export and verify PASS.
+- **Observed:** one Owner responsibility change at 23:43 UTC (audited), not made by the agent.
+- **New:** `05-build/client-pilot.md` (priorities, first-client checklist, issue log, support, limitations). Release record in `release-stack-review.md` section 12.
+
+**Not changed:** billing plans, project settings, client financial data (no test records written). Feature freeze from now on.

@@ -9,7 +9,10 @@ Requested by Tebogo on 2026-11-10 (brief written for "taxiflowv2"; Tebogo confir
 - **New packages:** `zod`, `@anthropic-ai/sdk`, `exceljs`, `heic-convert`. New environment variables (names only): `LOGBOOK_VISION_MODEL`, `ANTHROPIC_API_KEY`.
 - **Schema:** one new migration (six tables, five functions) applied only to the local test stack. Production does not have it.
 - **Evidence and what was not verified:** change-log 2026-11-10.
-- **Not verified:** extraction by a real vision model (no key on this machine; the model was stubbed in every test); real handwriting; a real phone; HEIC photos from a real device; any hosted Preview.
+- **Real extraction (reported by Tebogo, not re-run by the agent):** `scripts/logbook/extraction-check.mjs` 7/7 PASS against the real model on the three synthetic pages, including null/low for the blotted cell.
+- **Full tenant browser suite at `e418a8d` (2026-11-10, fresh test stack): 34/34 PASS** in one run, no code changes, including the logbook review tests and `tenant-access-roles.spec.js` (intermittent earlier; see change-log).
+- **Hosted Preview check: NOT RUN.** The branch Preview has no Supabase settings (connects to no database) and the test project `taxiflow-preview-test` is paused.
+- **Not verified:** real handwriting; a real phone; HEIC photos from a real device; any hosted Preview.
 
 ## RELEASED: controlled client pilot (2026-10-30)
 

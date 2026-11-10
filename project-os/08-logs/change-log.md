@@ -2014,3 +2014,14 @@ Pass in automation. Real-phone check NOT passed until Tebogo confirms.
 - Lint and typecheck: the repository has neither.
 
 **Not changed:** `main`, production database, production deployment, Vercel settings, `scripts/hosted/apply-release.mjs`, `scripts/preview-test/schema.sql`.
+
+## 2026-11-10: PR #13 verification at `e418a8d` (branch `feat/logbook-pipeline`)
+
+**Changed by:** Agent. Documentation only; no code changed.
+
+- **Local tenant browser suite** (`TAXIFLOW_LOCALDB_PROFILE=test`, `setup.mjs reset`, then `npx playwright test -c playwright.localdb.config.mjs`, vision stub): **34/34 PASS in one run** on a fresh test stack, including the three logbook review tests and `tenant-access-roles.spec.js:65`.
+- **Earlier intermittent failure of `tenant-access-roles.spec.js:65`** (one of three runs): its trace shows the grant succeeded and the status message appeared, and the failure snapshot already contains the Admin row. The row arrived after the 5-second default wait, because the panel first reloads the whole workspace (`onChanged`) and then the member list. Timing on the local stack, not a logbook regression; no change made. If it recurs, the fix is a longer wait on that one assertion.
+- **Real extraction:** Tebogo reports `scripts/logbook/extraction-check.mjs` 7/7 PASS against the real model, including null/low for the blotted cell. Reused as reported; not re-run here.
+- **Hosted Preview: NOT RUN.** Read-only checks: the branch Preview `dpl_2f8fgKkQbH3YftWaeJgsgs34NTMn` (`e418a8d`, READY) has no branch-scoped variables; Supabase variables exist only for Production and for `agent/owner-responsibilities`, so this Preview reaches no database (fail-closed, not production). The test project `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`) is paused. Nothing was changed in Vercel or Supabase.
+
+**Not changed:** production, `main`, Vercel settings, the test project, PR #13's merge state.

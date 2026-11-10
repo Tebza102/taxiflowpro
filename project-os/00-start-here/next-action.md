@@ -4,9 +4,8 @@
 
 The pilot feature freeze still stands. This branch is new scope asked for by Tebogo on 2026-11-10; it waits for a decision and is not part of the pilot.
 
-1. **Tebogo: run the real photo check.** It has never run against a real vision model (no key on the build machine). In a terminal with `LOGBOOK_VISION_MODEL` and `ANTHROPIC_API_KEY` set:
-   `node scripts/logbook/extraction-check.mjs`
-   It draws three synthetic pages (clean, blurry, one blotted cell) and must end `PASS`. The blotted cell must come back empty with low confidence.
+1. ~~Real photo check~~: 7/7 PASS (run by Tebogo). Full local tenant suite: 34/34 PASS at `e418a8d`.
+   **Hosted Preview check (optional, needs Tebogo):** approve restoring the paused `taxiflow-preview-test` project and adding branch-scoped Preview variables for `feat/logbook-pipeline` (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` of the test project, plus `LOGBOOK_VISION_MODEL` and `ANTHROPIC_API_KEY`). The agent then applies the logbook migration to the test project only, redeploys the branch Preview, confirms it points at the test project, and runs upload, review, approve, re-upload with synthetic data.
 2. **Decide whether this ships during the pilot.** If yes, before any merge:
    - add `LOGBOOK_VISION_MODEL` and `ANTHROPIC_API_KEY` to Vercel (Preview first, then Production), server-side only;
    - take a fresh production backup, then apply `scripts/localdb/migrations/20261110090000_logbook_pipeline.sql` as release file 07 (add it to `scripts/hosted/apply-release.mjs` and to `scripts/preview-test/schema.sql` first; neither was changed on this branch);

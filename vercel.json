@@ -12,5 +12,10 @@
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
-  ]
+  ],
+  "functions": {
+    "api/logbook/*.js": {
+      "maxDuration": 60
+    }
+  }
 }

@@ -4,7 +4,7 @@
 // by Tebogo in that project's SQL editor. Generated from the repository's
 // release files so nothing is retyped by hand:
 //   * the app table as production has it, but with no browser policies;
-//   * release files 01-06 (scripts/hosted/apply-release.mjs RELEASE_FILES), with
+//   * release files 01-07 (scripts/hosted/apply-release.mjs RELEASE_FILES), with
 //     exactly two segments of 01 removed, because a fresh project has no legacy
 //     workspace: the legacy-workspace mapping (one business row, one update,
 //     the membership backfill from appUsers) and the closing assertion that

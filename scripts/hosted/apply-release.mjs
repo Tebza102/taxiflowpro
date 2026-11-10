@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Apply the tenant release files 01-06 to a database, in the tested order, each
+// Apply the tenant release files 01-07 to a database, in the tested order, each
 // in its own transaction, then print the access and mapping checks.
 //   node scripts/hosted/apply-release.mjs --target <local|project-ref> [--env-file <outside-repo>]
 // * Hosted targets use the same guarded connection as the backup tool
@@ -26,6 +26,7 @@ export const RELEASE_FILES = [
   { label: "04 assign initial owner", file: "scripts/localdb/migrations/20261011090000_assign_initial_owner.sql", marker: "select exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'assign_initial_owner');" },
   { label: "05 platform admins", file: "scripts/localdb/migrations/20261018090000_platform_admins.sql", marker: "select to_regclass('public.platform_admins') is not null;" },
   { label: "06 member permissions", file: "scripts/localdb/migrations/20261019090000_member_permissions.sql", marker: "select exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'business_memberships' and column_name = 'permissions');" },
+  { label: "07 logbook import", file: "scripts/localdb/migrations/20261110090000_logbook_pipeline.sql", marker: "select to_regclass('public.logbook_row_events') is not null and to_regprocedure('public.logbook_rate_take(uuid,integer,integer)') is not null;" },
 ];
 
 export const POST_CHECKS_SQL = `select json_build_object(
@@ -67,7 +68,7 @@ const psqlFor = async (target) => {
 
 const confirm = async (target) => {
   if (target.kind !== "hosted") return;
-  console.log(`Target project: ${target.ref} (${target.connection.PGHOST})\nOperation     : apply tenant release files 01-06 (writes)`);
+  console.log(`Target project: ${target.ref} (${target.connection.PGHOST})\nOperation     : apply tenant release files 01-07 (writes)`);
   if (!process.stdin.isTTY) throw new Error("A hosted target needs an interactive terminal for confirmation.");
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const answer = await new Promise((resolve) => rl.question(`Type the project ref (${target.ref}) to apply: `, resolve));

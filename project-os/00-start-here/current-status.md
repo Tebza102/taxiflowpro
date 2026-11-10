@@ -11,7 +11,7 @@ Requested by Tebogo on 2026-11-10 (brief written for "taxiflowv2"; Tebogo confir
 - **Evidence and what was not verified:** change-log 2026-11-10.
 - **Real extraction (reported by Tebogo, not re-run by the agent):** `scripts/logbook/extraction-check.mjs` 7/7 PASS against the real model on the three synthetic pages, including null/low for the blotted cell.
 - **Full tenant browser suite at `e418a8d` (2026-11-10, fresh test stack): 34/34 PASS** in one run, no code changes, including the logbook review tests and `tenant-access-roles.spec.js` (intermittent earlier; see change-log).
-- **Hosted Preview check: NOT RUN.** The branch Preview has no Supabase settings (connects to no database) and the test project `taxiflow-preview-test` is paused.
+- **Hosted Preview check: NOT RUN (stopped by Tebogo, 2026-11-10).** Set up but not executed: the test project `taxiflow-preview-test` is restored (left running) with the logbook migration applied; the branch Preview `taxiflowpro-7vz9ert31-apprigate.vercel.app` (`9ebd41f`) is built with seven branch-only settings pointing at the test project. It sits behind Vercel login; creating a temporary protection bypass was refused by the agent session's safety rules, and no bypass exists.
 - **Not verified:** real handwriting; a real phone; HEIC photos from a real device; any hosted Preview.
 
 ## RELEASED: controlled client pilot (2026-10-30)

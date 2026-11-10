@@ -2025,3 +2025,15 @@ Pass in automation. Real-phone check NOT passed until Tebogo confirms.
 - **Hosted Preview: NOT RUN.** Read-only checks: the branch Preview `dpl_2f8fgKkQbH3YftWaeJgsgs34NTMn` (`e418a8d`, READY) has no branch-scoped variables; Supabase variables exist only for Production and for `agent/owner-responsibilities`, so this Preview reaches no database (fail-closed, not production). The test project `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`) is paused. Nothing was changed in Vercel or Supabase.
 
 **Not changed:** production, `main`, Vercel settings, the test project, PR #13's merge state.
+
+## 2026-11-10: hosted Preview set-up for PR #13 (stopped before running)
+
+**Changed by:** Agent with Tebogo's approval ("Yes, set it up"); Tebogo added the three secret settings himself through the Vercel CLI. Stopped by Tebogo before the run.
+
+- Test project `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`) restored after checking it holds only the two synthetic preview companies (`@example.com` accounts only) and release 06. Logbook migration applied there only: 6 tables with RLS, 5 functions, no browser grants or execute rights. **Left running.**
+- Vercel, Preview, branch `feat/logbook-pipeline` only: agent added `VITE_SUPABASE_URL`, `SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `SUPABASE_ANON_KEY` (test project URL and public anon key); Tebogo added `SUPABASE_SERVICE_ROLE_KEY` (test project secret key; an earlier 20-character value was removed and re-added), `ANTHROPIC_API_KEY`, `LOGBOOK_VISION_MODEL` (`claude-haiku-4-5-20251001`, the model of the 7/7 run). Production variables unchanged.
+- New test `tests/preview-test/logbook-journey.spec.js` (commit `9ebd41f`); its Preview `taxiflowpro-7vz9ert31-apprigate.vercel.app` is READY.
+- **Not run:** the Preview is behind Vercel login. Creating a temporary protection bypass was refused by the agent session's safety rules; no bypass was created and no request reached the Preview's app.
+- Tebogo's real extraction run: 7/7 PASS with `claude-haiku-4-5-20251001` (terminal output shared in chat).
+
+**Not changed:** production database and settings, `main`, PR #13 merge state.

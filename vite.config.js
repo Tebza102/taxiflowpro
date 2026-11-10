@@ -6,6 +6,7 @@ import react from "@vitejs/plugin-react";
 // report routes are mapped to their real handlers here, mirroring the vercel.json
 // rewrites /api/admin/daily-log/:id/<name> -> api/admin/daily-log/<name>.js?id=:id.
 // Never part of a build.
+let logbookStubLoaded = false;
 const reportApiDevRoutes = () => ({
   name: "taxiflow-report-api-dev",
   apply: "serve",
@@ -32,6 +33,30 @@ const reportApiDevRoutes = () => ({
         /^\/api\/(business)\/(workspace|memberships|members|finance-actions)$/.exec(url.pathname) ??
         /^\/api\/(platform)\/(businesses)$/.exec(url.pathname) ??
         /^\/api\/(admin\/reports)\/(period)$/.exec(url.pathname);
+
+      // Logbook pipeline (dev only): Vercel routes /api/logbook/<action> to the
+      // dynamic function api/logbook/[action].js with query.action set.
+      const logbookMatch = /^\/api\/logbook\/([a-z-]+)$/.exec(url.pathname);
+      if (logbookMatch) {
+        try {
+          const handlerUrl = pathToFileURL(fileURLToPath(new URL("./api/logbook/[action].js", import.meta.url))).href;
+          // Local browser tests only: a synthetic stand-in for the vision model,
+          // named by TAXIFLOW_LOGBOOK_VISION_STUB (see playwright.localdb.config.mjs).
+          // This block exists only in the dev server; deployed functions have no such switch.
+          if (process.env.TAXIFLOW_LOGBOOK_VISION_STUB && !logbookStubLoaded) {
+            const { setLogbookVisionClientForTests } = await import(pathToFileURL(fileURLToPath(new URL("./api/_lib/logbookVision.js", import.meta.url))).href);
+            const stub = await import(pathToFileURL(fileURLToPath(new URL(process.env.TAXIFLOW_LOGBOOK_VISION_STUB, import.meta.url))).href);
+            setLogbookVisionClientForTests(stub.default);
+            logbookStubLoaded = true;
+          }
+          const { default: handler } = await import(handlerUrl);
+          req.query = { ...Object.fromEntries(url.searchParams), action: logbookMatch[1] };
+          await handler(req, res);
+        } catch (error) {
+          next(error);
+        }
+        return;
+      }
 
       if (businessMatch) {
         try {

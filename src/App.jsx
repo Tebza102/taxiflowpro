@@ -40,6 +40,7 @@ import TenantAccessPanel from "./components/TenantAccessPanel";
 import { UserGuideSheet } from "./components/UserGuideSheet";
 import { DriverSalaryPanel } from "./components/DriverSalaryPanel";
 import { RecurringExpensesPanel } from "./components/RecurringExpensesPanel";
+import { LogbookImportPanel } from "./components/LogbookImportPanel";
 import { DriverProfileSalary, createSalaryDraft, salaryFieldsFromDraft } from "./components/DriverProfileSalary";
 const formatSignedMoney = (value) => {
   const amount = Number(value ?? 0);
@@ -6350,6 +6351,11 @@ function App() {
               onDeleteTransaction={deleteTransaction}
               onLockDeposit={lockDeposit}
               cashSteps={tenantLive ? { count: canCountCashNow(), verify: canVerifyCashNow(), bank: canBankCashNow() } : null}
+              logbookImport={
+                tenantLive && ["Owner", "Admin"].includes(tenantMeta?.role)
+                  ? { isOwner: tenantMeta.role === "Owner", onLiveDataChanged: reloadCanonicalLiveSnapshot }
+                  : null
+              }
             />
           )}
           {activeView === "fleet" && (
@@ -7108,6 +7114,8 @@ function FinancePanel({
   onDeleteTransaction,
   onLockDeposit,
   cashSteps = null,
+  // Business workspace, Owner/Admin only: { isOwner, onLiveDataChanged }. The server re-checks.
+  logbookImport = null,
 }) {
   const finance = snapshot.finance;
   const defaultVehicle = snapshot.vehicles[0] ?? null;
@@ -7538,6 +7546,15 @@ function FinancePanel({
           icon={Lock}
           onClick={() => setFinanceView("banking")}
         />
+        {logbookImport && canEditFinanceUpdates && (
+          <FinanceModeButton
+            active={financeView === "logbook"}
+            label="Logbook import"
+            meta="Photos of paper logbook pages"
+            icon={FileText}
+            onClick={() => setFinanceView("logbook")}
+          />
+        )}
       </div>
 
       {feedback && (
@@ -8589,6 +8606,10 @@ function FinancePanel({
             onRecordPayment={onRecordRecurringPayment}
           />
         </div>
+      )}
+
+      {financeView === "logbook" && logbookImport && canEditFinanceUpdates && (
+        <LogbookImportPanel isOwner={logbookImport.isOwner} onLiveDataChanged={logbookImport.onLiveDataChanged} />
       )}
 
       {financeView === "banking" && activeRole !== "Driver" && (

@@ -1,5 +1,34 @@
 # Next Action
 
+## Logbook import (2026-11-10): branch `feat/logbook-pipeline`, pushed, not merged
+
+The pilot feature freeze still stands. This branch is new scope asked for by Tebogo on 2026-11-10; it waits for a decision and is not part of the pilot.
+
+1. ~~Real photo check~~: 7/7 PASS (run by Tebogo). Full local tenant suite: 34/34 PASS at `e418a8d`.
+   ~~Hosted Preview check~~: **PASS 2/2 on 2026-11-10** (test project paused again). Cleanup left for Tebogo: revoke the Protection Bypass for Automation secret (taxiflowpro > Settings > Deployment Protection); optionally delete the seven `feat/logbook-pipeline` Preview variables.
+2. **Production release AUTHORISED by Tebogo (2026-11-10); in progress, production still untouched.**
+   - Done: release file 07 wired into `apply-release.mjs` (`8cbe083`); logbook tables added to the encrypted backup and restore (`ff541f8`, local proof 41/41, existing backup suite 43/43, unit 446/446).
+   - **Waiting on Tebogo:** (a) the guarded production backup in a terminal (type the ref, then the passphrase); (b) add `LOGBOOK_VISION_MODEL` (= `claude-haiku-4-5-20251001`) and `ANTHROPIC_API_KEY` (sensitive) to Vercel **Production** (the agent's attempt was blocked by its permission rules).
+   - Then (agent): apply release file 07 with `node scripts/hosted/apply-release.mjs --target vfxftviwteypasredjgm --env-file <outside repo>` (interactive: typed ref), verify read-only, merge PR #13, deploy, read-only live smoke checks, record the result and the rollback target (current production deployment `dpl_64rcuDg1DUHW34W4cgSTWrQERB2K`, commit `f24e71b`).
+   - Function count (this adds one, 11 in total) and the ~4.5 MB request limit: check on the production deployment.
+3. Review the draft decisions in `04-technical/data-model.md` ("Paper logbook import"): approved rows become pending income and cash-expense records; the banked figure is reference only and never creates a deposit.
+4. Try it by eye on the local test stack: Money > Logbook import, with real handwriting, on a phone.
+
+## Controlled client pilot (from 2026-10-30): feature freeze
+
+1. **Tebogo:** confirm the 2026-10-29 23:43 UTC responsibility change for `taxiadmin@apprigate.com` (all six, including count and verify) was intended. Otherwise undo it in Settings > Business access.
+2. Onboard the first client with `05-build/client-pilot.md`:
+   - business setup, roles and the second cash verifier, vehicles and drivers, starting position;
+   - one full daily workflow with Tebogo available.
+3. Log every client report in the issue log there. Fix only: sign-in/access, money calculations, lost data, blocked workflows, report errors.
+4. Optional:
+   - a Driver-only sign-in on production;
+   - the open manual checks A-E and the spreadsheet check.
+5. Keep both backups and the passphrase. Take a fresh backup before any future schema change.
+6. Push branch `agent/release-record` (this record, docs only) and open a PR when convenient.
+
+Everything below is history from before the release.
+
 ## Release stack #6-#12: Tebogo's decision (2026-10-29)
 
 1. **Read `05-build/release-stack-review.md` and approve GO or HOLD.** Recommendation: GO, conditional on the pre-release backup verifying.

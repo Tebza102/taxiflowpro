@@ -1967,3 +1967,114 @@ Pass in automation. Real-phone check NOT passed until Tebogo confirms.
 - The test project was paused again.
 
 **Not changed:** production; no merge or deployment. Still open: the production backup, the restore-rehearsal decision, the quiet window, and manual checks A-E and the spreadsheet check.
+
+## 2026-10-30: production release of #6-#12 for a controlled client pilot
+
+**Changed by:** Agent under Tebogo's written authorisation. Tebogo typed the project ref, the passphrase and the sign-in locally.
+
+- **Pre-release backup:** export and verify PASS.
+- **Quiet window:** file 06 applied (SKIP 01-05, APPLIED 06, post-checks PASS); `verify-release-06` 11/11; both protected-data hash sets identical.
+- **Merges:** #6 to #12 with merge commits, in order. The alias gate showed only the login-protected team aliases follow `main`; the public domains moved only on promote.
+- **Promotion:** `dpl_64rcuDg1DUHW34W4cgSTWrQERB2K` (`f24e71b`), once.
+- **Smoke checks (Owner):** all PASS. A Driver-only sign-in was not run in production.
+- **Post-release backup:** export and verify PASS.
+- **Observed:** one Owner responsibility change at 23:43 UTC (audited), not made by the agent.
+- **New:** `05-build/client-pilot.md` (priorities, first-client checklist, issue log, support, limitations). Release record in `release-stack-review.md` section 12.
+
+**Not changed:** billing plans, project settings, client financial data (no test records written). Feature freeze from now on.
+
+## 2026-11-10: paper logbook import pipeline (branch `feat/logbook-pipeline`)
+
+**Changed by:** Agent, on Tebogo's request (brief written for "taxiflowv2"; `origin` here is `Tebza102/taxiflowpro`, no `taxiflowv2` repository was found, and Tebogo confirmed "Build in taxiflowpro"). Outside the pilot feature freeze; not merged, not deployed.
+
+**What was built**
+- Server: one function `api/logbook/[action].js` (extract, import, batches, batch, page-image, row-edit, row-approve, row-reject, export, keys) over `api/_lib/logbookService.js`, `logbookVision.js` (vision call, server only, strict JSON checked with zod, one retry), `logbookSchema.js` (zod shapes, row hash), `logbookApproval.js` (row to finance records, pure), `logbookExport.js` (Excel).
+- Shared rules without AI: `src/lib/logbookContract.js` (parsing, date/amount/vehicle/driver checks, reconciliation, duplicate identity).
+- Database (local test stack only): `scripts/localdb/migrations/20261110090000_logbook_pipeline.sql` and its rollback.
+- Screen: Money > Logbook import (`src/components/LogbookImportPanel.jsx`), shown to Owner/Admin in the business workspace.
+- Packages added: `zod`, `@anthropic-ai/sdk`, `exceljs`, `heic-convert`. Environment variable names: `LOGBOOK_VISION_MODEL`, `ANTHROPIC_API_KEY`.
+
+**Decisions taken (review before any release)**
+- The live data here is the business snapshot, so "approve" adds ordinary pending income and vehicle cash-expense records (Fuel, Wash, Rank Fees, Other) for that driver, vehicle and day. It never counts, verifies or banks cash; the paper's banked figure is kept for reference and for the reconciliation check only.
+- Roles: Owner, or Admin with Money on. Managers and Drivers are refused. Import keys: Owner only.
+- No Excel export existed in this repository, so the export layout is new.
+- No lint or typecheck exists in this repository (plain JavaScript, no ESLint or TypeScript configuration); none was added.
+
+**Evidence (all on synthetic data; the vision model was a stub in every automated test)**
+- `node --test tests/*.test.mjs` (through `verify-all --only node`): 445/445 PASS, including the 19 new tests in `tests/logbook-pipeline.test.mjs` (schemas, parsing, date/vehicle/driver/amount checks, reconciliation, row hash, approval mapping, role rule, upload type and size, vision reply contract with one retry, Excel export).
+- `scripts/localdb/logbook-tests.mjs` on a freshly reset local test stack, real local sign-ins, real handler and database functions: **84/84 PASS**. Covers 401 without or with a bad token on every action; 403 for Manager, Driver, no membership, inactive membership and a selected foreign business; 404 for every cross-business id; upload, pending, approve, records exist; re-upload of the same photo (no model call, nothing added); a new photo of the same lines (skipped by row hash); unreadable cell null/low and blocked until corrected; reconciliation warning needing confirmation; reject keeps its record; three simultaneous approvals (one wins); automation key hashed, import-only, idempotent, rate limited at 30 per minute, revocable; Excel export. The first run was 77/84: one defect (the edit schema demanded every field) caused all seven failures and was fixed.
+- Browser, local test stack (`tests/localdb-browser/logbook-import-tenant.spec.js`, 3 tests): PASS. Upload, photo beside rows, low and medium cells highlighted, Approve disabled on the unreadable cell, edit, approve, income visible in Daily Earnings, reject, re-upload adds nothing, export download, Manager has no screen and gets 403, signed out gets 401. Screenshots in `uat-reports/logbook-review/` (not committed).
+- Full tenant browser suite (`verify-all --only tenant`): not green in a single run. Run 1: 31 passed, 1 failed (the new test's own wrong expectation of "R 1 705" formatting; fixed). Run 2: 33 passed, 1 failed (`tenant-access-roles.spec.js:65`, which passed in run 1 on the same application code). That test and the logbook tests then passed together on a fresh reset (4/4). Treated as an existing intermittent test, not investigated further.
+- Demo browser suite: 69/69 PASS, run on port 4273 with a temporary config, because another local project was already serving on 4173 and the committed config reuses whatever answers there.
+- `verify-all --only guards`: PASS. `vite build`: PASS.
+
+**Not run / not verified**
+- **Extraction by a real vision model.** No `ANTHROPIC_API_KEY` exists on this machine. `scripts/logbook/extraction-check.mjs` drew the three synthetic pages (clean, blurry, one blotted cell) and stopped as BLOCKED without calling a model. Whether a real model returns null/low for the blotted cell is unproven.
+- Real handwriting, a real phone, a real HEIC photo (only the refusal of an undecodable HEIC was tested), any Vercel Preview (function routing for `api/logbook/[action].js`, the 60 s limit, the request size limit), and the migration on any hosted database.
+- Lint and typecheck: the repository has neither.
+
+**Not changed:** `main`, production database, production deployment, Vercel settings, `scripts/hosted/apply-release.mjs`, `scripts/preview-test/schema.sql`.
+
+## 2026-11-10: PR #13 verification at `e418a8d` (branch `feat/logbook-pipeline`)
+
+**Changed by:** Agent. Documentation only; no code changed.
+
+- **Local tenant browser suite** (`TAXIFLOW_LOCALDB_PROFILE=test`, `setup.mjs reset`, then `npx playwright test -c playwright.localdb.config.mjs`, vision stub): **34/34 PASS in one run** on a fresh test stack, including the three logbook review tests and `tenant-access-roles.spec.js:65`.
+- **Earlier intermittent failure of `tenant-access-roles.spec.js:65`** (one of three runs): its trace shows the grant succeeded and the status message appeared, and the failure snapshot already contains the Admin row. The row arrived after the 5-second default wait, because the panel first reloads the whole workspace (`onChanged`) and then the member list. Timing on the local stack, not a logbook regression; no change made. If it recurs, the fix is a longer wait on that one assertion.
+- **Real extraction:** Tebogo reports `scripts/logbook/extraction-check.mjs` 7/7 PASS against the real model, including null/low for the blotted cell. Reused as reported; not re-run here.
+- **Hosted Preview: NOT RUN.** Read-only checks: the branch Preview `dpl_2f8fgKkQbH3YftWaeJgsgs34NTMn` (`e418a8d`, READY) has no branch-scoped variables; Supabase variables exist only for Production and for `agent/owner-responsibilities`, so this Preview reaches no database (fail-closed, not production). The test project `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`) is paused. Nothing was changed in Vercel or Supabase.
+
+**Not changed:** production, `main`, Vercel settings, the test project, PR #13's merge state.
+
+## 2026-11-10: hosted Preview set-up for PR #13 (stopped before running)
+
+**Changed by:** Agent with Tebogo's approval ("Yes, set it up"); Tebogo added the three secret settings himself through the Vercel CLI. Stopped by Tebogo before the run.
+
+- Test project `taxiflow-preview-test` (`sxoonhovoqgcpflhqirb`) restored after checking it holds only the two synthetic preview companies (`@example.com` accounts only) and release 06. Logbook migration applied there only: 6 tables with RLS, 5 functions, no browser grants or execute rights. **Left running.**
+- Vercel, Preview, branch `feat/logbook-pipeline` only: agent added `VITE_SUPABASE_URL`, `SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, `SUPABASE_ANON_KEY` (test project URL and public anon key); Tebogo added `SUPABASE_SERVICE_ROLE_KEY` (test project secret key; an earlier 20-character value was removed and re-added), `ANTHROPIC_API_KEY`, `LOGBOOK_VISION_MODEL` (`claude-haiku-4-5-20251001`, the model of the 7/7 run). Production variables unchanged.
+- New test `tests/preview-test/logbook-journey.spec.js` (commit `9ebd41f`); its Preview `taxiflowpro-7vz9ert31-apprigate.vercel.app` is READY.
+- **Not run:** the Preview is behind Vercel login. Creating a temporary protection bypass was refused by the agent session's safety rules; no bypass was created and no request reached the Preview's app.
+- Tebogo's real extraction run: 7/7 PASS with `claude-haiku-4-5-20251001` (terminal output shared in chat).
+
+**Not changed:** production database and settings, `main`, PR #13 merge state.
+
+## 2026-11-10: hosted Preview check for PR #13: PASS
+
+**Changed by:** Agent (resumed at Tebogo's request; bypass secret created by Tebogo)
+
+**Files changed:**
+- `tests/preview-test/logbook-journey.spec.js`: synthetic vehicle registration corrected to `PV TEST 01` (as stored in the test project).
+- Project OS: current-status, next-action, this log.
+
+**Before any write:** test project `sxoonhovoqgcpflhqirb` ACTIVE_HEALTHY; 6 logbook tables and 5 functions present; 6 users, all `@example.com`; Preview answers 200 with the bypass, 302 without, 401 signed out.
+
+**Tests run:** `PREVIEW_URL=https://taxiflowpro-7vz9ert31-apprigate.vercel.app npx playwright test -c playwright.preview-test.config.mjs tests/preview-test/logbook-journey.spec.js`
+- Run 1: FAIL in the target test at the vehicle lookup (test expected `PV-TEST-01`; stored registration is `PV TEST 01`). Read-only step; nothing written. Bundle and auth guards had passed.
+- Run 2: **2/2 PASS** (55 s). Real model read {date 2026-11-07, PV TEST 01, UAT Driver, revenue 1327, fuel 400, wash 50, marshal 30, other 0, banked 847}, all high confidence, no checks raised. Approve gave 4 pending records; re-upload reported "was uploaded before" and added nothing.
+- Database check afterwards: 1 batch; rows {approved: 1}; 0 duplicate hashes among pending/approved; 4 `logbook-import` records, all pending.
+
+**Result:** PASS. Test project paused afterwards. Production, `main` and PR #13's merge state unchanged.
+
+**Risks remaining:** real handwriting, real phone, real HEIC photo not tried. The bypass secret still exists until Tebogo revokes it; the seven branch Preview variables remain.
+
+### 2026-11-10 — Logbook recovery coverage in the operator backup (no production change)
+
+**Changed by:** Agent (Claude Code), authorised by Tebogo as part of the logbook production release
+
+**Files changed:**
+- scripts/backup/lib/backupCore.mjs, scripts/backup/backup.mjs
+- tests/backup-tool.test.mjs
+- scripts/localdb/backup-logbook-tests.mjs (new), scripts/localdb/backup-tests.mjs (repo-file check pattern)
+
+**Summary:**
+Supabase Free plan has no platform backups, and the operator backup did not export the six logbook tables. It now does, when the database has them: import keys, key usage, batches, page photos, rows and audit events, in the same read-only snapshot transaction. Validation checks that every reference resolves within the backup and stays in one business. Full restore inserts them in dependency order; audit-event ids are kept (OVERRIDING SYSTEM VALUE) and the identity sequence is moved past them. A one-business restore now also puts that business's logbook queue (batches, pages, rows, events) back with its snapshot, because an approval writes both in one transaction; import keys and usage are access and are not rolled back. A pre-logbook backup is refused (changing nothing) for a business that has logbook data. Backups without the tables remain valid (same format). The backup transport now reports psql's own error when psql stops before reading a large input (seen as a broken pipe on a refused restore).
+
+**Tests run:**
+- node --test tests/*.test.mjs: 446/446
+- scripts/localdb/backup-logbook-tests.mjs (fresh local stack, synthetic data, ~1.5 MB synthetic photo): 41/41
+- scripts/localdb/backup-tests.mjs (existing): 43/43
+
+**Result:**
+PASS on run 3. Run 1: 39/41 (the saved output was cut short; the visible failure was the repo-file check matching the new file's own name). Run 2: 39/41 (that check again, its fix had not applied, and the broken-pipe message on a refused restore). Both fixed. Run 3: 41/41.
+
+**Limitation:** page photos live in the database, so backups grow by about 1-3 MB per photo (transport limit 512 MB).

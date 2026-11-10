@@ -1,5 +1,34 @@
 # Current Status
 
+## Logbook import (2026-11-10): branch `feat/logbook-pipeline`; pushed; NOT merged, NOT deployed, production untouched
+
+Requested by Tebogo on 2026-11-10 (brief written for "taxiflowv2"; Tebogo confirmed to build it in this repository). It is outside the pilot feature freeze and waits for a decision. The branch is based on `agent/release-record` (one docs commit ahead of `main`).
+
+- **What exists:** an Owner or Admin (Money on) uploads a logbook page photo in Money > Logbook import; the server reads it with a vision model into rows; rows wait in a review queue beside the photo with low/medium confidence highlighted; each row is edited, approved or rejected; only approval writes finance records. An automation key can send already-structured rows into the same queue. A batch exports to Excel with confidence flags.
+- **Details:** `04-technical/data-model.md` ("Paper logbook import") and `04-technical/auth-and-roles.md` ("Logbook import routes").
+- **New packages:** `zod`, `@anthropic-ai/sdk`, `exceljs`, `heic-convert`. New environment variables (names only): `LOGBOOK_VISION_MODEL`, `ANTHROPIC_API_KEY`.
+- **Schema:** one new migration (six tables, five functions) applied only to the local test stack. Production does not have it.
+- **Evidence and what was not verified:** change-log 2026-11-10.
+- **Real extraction (reported by Tebogo, not re-run by the agent):** `scripts/logbook/extraction-check.mjs` 7/7 PASS against the real model on the three synthetic pages, including null/low for the blotted cell.
+- **Full tenant browser suite at `e418a8d` (2026-11-10, fresh test stack): 34/34 PASS** in one run, no code changes, including the logbook review tests and `tenant-access-roles.spec.js` (intermittent earlier; see change-log).
+- **Hosted Preview check: PASS 2/2 (2026-11-10, resumed at Tebogo's request).** Preview `taxiflowpro-7vz9ert31-apprigate.vercel.app` (`9ebd41f`) against the isolated test project `sxoonhovoqgcpflhqirb` only, with the real vision model: target guard (bundle carries the test project, not production; 401 signed out; Owner 200; Manager 403); upload -> 1 row pending, nothing recorded -> model read every field exactly as written, all high confidence, no checks raised -> approve -> 4 pending records (income + Fuel, Wash, Rank Fees) -> same photo again: "was uploaded before", nothing added. Database afterwards: 1 batch, 1 approved row, 0 duplicate hashes, 4 logbook records all pending. First attempt failed in the test itself (registration `PV-TEST-01` vs the stored `PV TEST 01`; read-only step, no writes); test value fixed. Test project paused afterwards. The temporary bypass secret was created by Tebogo; revoke it in Vercel.
+- **Not verified:** real handwriting; a real phone; HEIC photos from a real device.
+- **Production release authorised by Tebogo (2026-11-10), in progress; production not yet changed.** Recovery coverage for the logbook tables added (`ff541f8`): the encrypted backup exports and restores all six tables; a one-business restore puts that business's logbook queue back with its snapshot (import keys untouched); backups without the tables stay readable. Local proof 41/41. **Limitation:** page photos are stored in the database, so each adds about 1-3 MB to every backup (transport limit 512 MB); revisit before heavy use.
+
+## RELEASED: controlled client pilot (2026-10-30)
+
+- **Live:** https://taxiflow.co.za (and taxiflowpro.vercel.app).
+  - Deployment `dpl_64rcuDg1DUHW34W4cgSTWrQERB2K` (`taxiflowpro-hf0i0bonz`), commit `f24e71b` on `main`.
+  - PRs #6-#12 are merged with merge commits; the app code is identical to the tested `cf75549`.
+- **Database:** production `vfxftviwteypasredjgm` has release files 01-06. `verify-release-06` 11/11; protected-data hashes identical across the apply.
+- **Backups:** pre-release and post-release encrypted backups, export and verify both PASS (`C:\Users\appri\taxiflow-backups`).
+- **Production smoke checks (Owner): PASS**, view and download only. A Driver-only sign-in was not checked in production.
+- **Feature freeze** for the pilot. Priorities, first-client checklist, issue log and limitations: `05-build/client-pilot.md`. Full record: `05-build/release-stack-review.md` section 12.
+- **Still unconfirmed:** manual checks A-E and the spreadsheet-app check.
+- **Rollback:** maintenance build first. The old app `af3e5ad` only as degraded operation (section 9).
+
+The sections below describe the state before the release and are kept as history.
+
 ## Repository context and open stack (verified 2026-10-28)
 
 - Repository: `Tebza102/taxiflowpro`. In this repository PR #6 is TaxiFlow's release 06 (`agent/owner-responsibilities`, open draft, unchanged at `51a0f5d`). It is not the separate client-workspace project's PR #6, which lives in another repository and is not touched from here. No `feature/client-centred-workspace` branch exists here.

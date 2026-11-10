@@ -64,3 +64,9 @@ Signing out ends that user's sessions on every device (Supabase global sign-out)
 
 ## Debug Notes
 Before fixing auth, use `/project-os/09-agent-skills/auth-debug-skill.md`.
+
+## Logbook import routes (2026-11-10, branch `feat/logbook-pipeline`; NOT merged)
+- `/api/logbook/extract`, `batches`, `batch`, `page-image`, `row-edit`, `row-approve`, `row-reject`, `export`: a valid token **and** an active membership **and** role Owner, or Admin with Money on (`assertLogbookAccess`). Managers and Drivers get 403. Checked before the request body is read. All data is pinned to the authorized business; another business's ids answer 404.
+- `/api/logbook/keys` (list, create, revoke): Owner only.
+- `/api/logbook/import`: an automation key only (`x-api-key` or `Authorization: Bearer tflb_...`). The key is random (32 bytes), shown once, stored as a SHA-256 hash, scoped `logbook.import`, bound to one business, revocable, and limited to 30 requests per minute. It opens no other route and cannot choose another business. A sign-in token is refused on this route.
+- The vision model id and key (`LOGBOOK_VISION_MODEL`, `ANTHROPIC_API_KEY`) are server environment variables only.

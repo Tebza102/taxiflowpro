@@ -15,6 +15,8 @@
 | Variable Name | Purpose | Required | Notes |
 |---|---|---|---|
 | EXAMPLE_SECRET_KEY | Example only | Yes/No | Must not be exposed |
+| LOGBOOK_VISION_MODEL | Model id used by `POST /api/logbook/extract` to read logbook photos (`api/_lib/logbookVision.js`) | Only for logbook photo import | Server only. Without it the route answers 503 and nothing else is affected. |
+| ANTHROPIC_API_KEY | Key for the vision model call in `api/_lib/logbookVision.js` | Only for logbook photo import | Server only. Never `VITE_`-prefixed, never sent to or accepted from the browser. Set per Vercel environment. |
 
 ## Deployment Platform Variables
 Document variables required by Vercel, Firebase, Netlify, Railway, Render, Supabase, or other platforms.

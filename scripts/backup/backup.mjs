@@ -8,7 +8,8 @@
 //
 // export: one read-only REPEATABLE READ transaction (businesses, memberships,
 //   snapshots, finance request log, Auth users and identities, and when present
-//   platform_admins and member_permission_changes), validated, then
+//   platform_admins, member_permission_changes and the six logbook-import
+//   tables (keys, key usage, batches, page photos, rows, audit events)), validated, then
 //   encrypted in memory (AES-256-GCM). The file is written as .partial, read
 //   back, decrypted and compared with the export hash and counts; only then is
 //   it renamed and "PASS" appended to <out-dir>/backup-log.txt. Any failure
@@ -16,8 +17,9 @@
 //   touches disk. Output and secrets must be outside the repository.
 // check: the morning check; exit 1 unless the newest log line is a recent PASS.
 // restore: full restore into an EMPTY project (Auth, businesses, memberships,
-//   snapshots, request log in one transaction), or --business: that business's
-//   snapshot together with its request log (memberships and Auth untouched).
+//   snapshots, request log and the optional tables in one transaction), or
+//   --business: that business's snapshot together with its request log and its
+//   logbook review queue (memberships, Auth and logbook import keys untouched).
 //   The target is re-read afterwards and compared with the backup.
 //
 // Hosted targets (a project ref) have NOT been run yet. They need --env-file
@@ -29,6 +31,8 @@ import { createInterface } from "node:readline";
 
 import {
   OPTIONAL_TABLES_PROBE_SQL,
+  LOGBOOK_QUEUE_KEYS,
+  LOGBOOK_TABLES,
   PRE_MIGRATION_FORMAT,
   SCHEMA_PROBE_SQL,
   buildBusinessRestoreSql,
@@ -73,7 +77,10 @@ const psqlFor = async (target) => {
 
 const runPsql = (args, sql, env) => {
   const result = spawnSync("docker", args, { input: sql, encoding: "utf8", env, maxBuffer: 512 << 20, timeout: 900_000 });
-  if (result.error) throw new Error(`psql could not run: ${result.error.message}`);
+  // psql stops at the first error (ON_ERROR_STOP), possibly before it has read a
+  // large input; the closed pipe then also shows as result.error. Report psql's
+  // own error in that case. Success still requires a clean exit with no error.
+  if (result.error && !(typeof result.status === "number" && result.status !== 0 && result.stderr)) throw new Error(`psql could not run: ${result.error.message}`);
   if (result.status !== 0) throw new Error(`psql failed (exit ${result.status}): ${(result.stderr || "").trim().split(/\r?\n/).slice(-2).join(" ").slice(0, 300)}`);
   return result.stdout;
 };
@@ -228,7 +235,9 @@ const runRestore = async () => {
   const passphrase = await readPassphrase({ confirm: false });
   const { bundle } = decryptFile(file, passphrase);
   const psql = await psqlFor(target);
-  const columns = readTargetColumns(psql, columnTablesFor(bundle));
+  // A one-business restore also reads the target's logbook tables (empty when
+  // the target has none), so it keeps the logbook queue consistent with the snapshot.
+  const columns = readTargetColumns(psql, [...new Set([...columnTablesFor(bundle), ...(businessId ? LOGBOOK_TABLES : [])])]);
   if (businessId) psql(buildBusinessRestoreSql(bundle, businessId, columns));
   else psql(bundle.format === PRE_MIGRATION_FORMAT ? buildPreMigrationRestoreSql(bundle, columns) : buildFullRestoreSql(bundle, columns));
 
@@ -240,6 +249,7 @@ const runRestore = async () => {
     const pick = (b) => ({
       snapshot: b.workspaces.filter((w) => w.business_id === businessId),
       requestLog: b.requests.filter((q) => q.business_id === businessId),
+      ...(bundle.logbook_rows ? Object.fromEntries(LOGBOOK_QUEUE_KEYS.map((key) => [key, (b[key] ?? []).filter((row) => row.business_id === businessId)])) : {}),
     });
     const [want, got] = [pick(bundle), pick(after)];
     checks = Object.fromEntries(Object.keys(want).map((key) => [key, rowsHash(want[key]) === rowsHash(got[key]) ? "MATCH" : "DIFF"]));

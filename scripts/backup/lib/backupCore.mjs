@@ -12,13 +12,26 @@ export const END_MARKER = "taxiflow-backup-complete";
 // The end marker is the last key: truncated output never parses as complete.
 // Optional tenant tables, exported only when the database has them (release
 // file 05: platform_admins; release file 06: member_permission_changes, the
-// permission-audit history). A database or an older backup without them stays
-// valid. Rows only: their access rules (RLS forced, no browser grants) belong
-// to the target schema and are never part of a backup.
+// permission-audit history; release file 07: the six logbook-import tables,
+// the review queue with its page photos, the audit events and the import keys).
+// A database or an older backup without them stays valid. Rows only: their
+// access rules (RLS, no browser grants) belong to the target schema and are
+// never part of a backup. The logbook entries are listed in dependency order.
 export const OPTIONAL_TENANT_TABLES = Object.freeze([
   Object.freeze({ key: "platform_admins", label: "platformAdmins", table: "public.platform_admins", alias: "p", order: "p.user_id" }),
   Object.freeze({ key: "permission_changes", label: "permissionChanges", table: "public.member_permission_changes", alias: "c", order: "c.business_id, c.changed_at, c.id" }),
+  Object.freeze({ key: "logbook_api_keys", label: "logbookApiKeys", table: "public.logbook_api_keys", alias: "lk", order: "lk.id" }),
+  Object.freeze({ key: "logbook_api_key_usage", label: "logbookApiKeyUsage", table: "public.logbook_api_key_usage", alias: "lu", order: "lu.key_id, lu.window_start" }),
+  Object.freeze({ key: "logbook_batches", label: "logbookBatches", table: "public.logbook_batches", alias: "lb", order: "lb.id" }),
+  Object.freeze({ key: "logbook_pages", label: "logbookPages", table: "public.logbook_pages", alias: "lp", order: "lp.id" }),
+  Object.freeze({ key: "logbook_rows", label: "logbookRows", table: "public.logbook_rows", alias: "lr", order: "lr.id" }),
+  Object.freeze({ key: "logbook_row_events", label: "logbookRowEvents", table: "public.logbook_row_events", alias: "le", order: "le.id", identity: "id" }),
 ]);
+// The business-owned logbook queue (restored with a business); keys and their
+// usage are access, like memberships, and are never rolled back per business.
+export const LOGBOOK_QUEUE_KEYS = Object.freeze(["logbook_batches", "logbook_pages", "logbook_rows", "logbook_row_events"]);
+const LOGBOOK_KEYS = Object.freeze(["logbook_api_keys", "logbook_api_key_usage", ...LOGBOOK_QUEUE_KEYS]);
+export const LOGBOOK_TABLES = Object.freeze(LOGBOOK_KEYS.map((key) => OPTIONAL_TENANT_TABLES.find((t) => t.key === key).table));
 export const OPTIONAL_TABLES_PROBE_SQL = `select concat_ws(',', ${OPTIONAL_TENANT_TABLES.map((t) => `case when to_regclass('${t.table}') is not null then '${t.key}' end`).join(", ")});`;
 const optionalPresent = (bundle) => OPTIONAL_TENANT_TABLES.filter((t) => bundle[t.key] !== undefined);
 
@@ -115,7 +128,55 @@ export const validateBundle = (bundle) => {
   for (const c of bundle.permission_changes ?? []) {
     if (!businesses.has(c.business_id)) fail("a permission-audit row references a missing business.");
   }
+  validateLogbook(bundle, businesses, users);
   return bundle;
+};
+
+// The logbook tables come as a set (one release file): all six or none, and
+// every reference inside them resolves within the backup, to the same business.
+const validateLogbook = (bundle, businesses, users) => {
+  const present = LOGBOOK_KEYS.filter((key) => bundle[key] !== undefined);
+  if (present.length === 0) return;
+  if (present.length !== LOGBOOK_KEYS.length) fail("the logbook tables are only partly present.");
+  const user = (id, what) => {
+    if (id && !users.has(id)) fail(`${what} references a missing Auth user.`);
+  };
+  const business = (id, what) => {
+    if (!businesses.has(id)) fail(`${what} references a missing business.`);
+  };
+  const sameBusiness = (map, id, businessId, what) => {
+    const parent = map.get(id);
+    if (!parent) fail(`${what} references a missing parent row.`);
+    if (parent.business_id !== businessId) fail(`${what} belongs to another business than its parent.`);
+  };
+  const keys = new Map(bundle.logbook_api_keys.map((k) => [k.id, k]));
+  for (const k of bundle.logbook_api_keys) {
+    business(k.business_id, "a logbook import key");
+    user(k.created_by, "a logbook import key");
+    user(k.revoked_by, "a logbook import key");
+  }
+  for (const u of bundle.logbook_api_key_usage) if (!keys.has(u.key_id)) fail("a logbook key-usage row references a missing key.");
+  const batches = new Map(bundle.logbook_batches.map((b) => [b.id, b]));
+  for (const b of bundle.logbook_batches) {
+    business(b.business_id, "a logbook batch");
+    user(b.created_by, "a logbook batch");
+    if (b.api_key_id) sameBusiness(keys, b.api_key_id, b.business_id, "a logbook batch");
+  }
+  const pages = new Map(bundle.logbook_pages.map((p) => [p.id, p]));
+  for (const p of bundle.logbook_pages) sameBusiness(batches, p.batch_id, p.business_id, "a logbook page");
+  const rows = new Map(bundle.logbook_rows.map((r) => [r.id, r]));
+  for (const r of bundle.logbook_rows) {
+    sameBusiness(batches, r.batch_id, r.business_id, "a logbook row");
+    if (r.page_id) sameBusiness(pages, r.page_id, r.business_id, "a logbook row");
+    user(r.edited_by, "a logbook row");
+    user(r.reviewed_by, "a logbook row");
+  }
+  for (const e of bundle.logbook_row_events) {
+    sameBusiness(batches, e.batch_id, e.business_id, "a logbook audit event");
+    sameBusiness(rows, e.row_id, e.business_id, "a logbook audit event");
+    user(e.actor_user_id, "a logbook audit event");
+    if (e.actor_api_key_id) sameBusiness(keys, e.actor_api_key_id, e.business_id, "a logbook audit event");
+  }
 };
 
 // Metadata only: counts, ids, versions and hashes. No emails, names or money.
@@ -163,6 +224,7 @@ const buildTenantManifest = (bundle, { plaintextSha256, ciphertextSha256, target
       memberships: bundle.memberships.filter((m) => m.business_id === b.id).length,
       requestLog: bundle.requests.filter((q) => q.business_id === b.id).length,
       ...(bundle.permission_changes ? { permissionChanges: bundle.permission_changes.filter((c) => c.business_id === b.id).length } : {}),
+      ...(bundle.logbook_rows ? { logbookRows: bundle.logbook_rows.filter((r) => r.business_id === b.id).length } : {}),
     };
   }),
 });
@@ -176,9 +238,13 @@ const tagged = (text, tag) => {
   return `$${tag}$${value}$${tag}$`;
 };
 
-const insertRows = (table, columnsSql, rows, conflict = "") =>
+// identity: a "generated always" identity column restored with its backed-up
+// values (OVERRIDING SYSTEM VALUE); its sequence is then moved past the highest
+// value in the table so the next generated id never collides.
+const insertRows = (table, columnsSql, rows, conflict = "", identity = null) =>
   rows.length
-    ? `insert into ${table} (${columnsSql}) select ${columnsSql} from jsonb_populate_recordset(null::${table}, ${tagged(JSON.stringify(rows), "rows")}::jsonb) ${conflict};`
+    ? `insert into ${table} (${columnsSql}) ${identity ? "overriding system value " : ""}select ${columnsSql} from jsonb_populate_recordset(null::${table}, ${tagged(JSON.stringify(rows), "rows")}::jsonb) ${conflict};${identity ? `
+select setval(pg_get_serial_sequence('${table}', '${identity}'), greatest((select max(${identity}) from ${table}), (select last_value from ${table}_${identity}_seq)));` : ""}`
     : "";
 
 // columns: { "auth.users": "id,email,...", ... } non-generated column lists read
@@ -199,7 +265,7 @@ export const buildFullRestoreSql = (bundle, columns) => {
   const rowsOf = (key) => bundle[key] ?? [];
   const insertOptional = (key) => {
     const t = optional.find((entry) => entry.key === key);
-    return t ? insertRows(t.table, columns[t.table], rowsOf(key)) : "";
+    return t ? insertRows(t.table, columns[t.table], rowsOf(key), "", t.identity) : "";
   };
   return `begin;
 do $guard$ begin
@@ -214,6 +280,7 @@ ${insertOptional("platform_admins")}
 ${insertRows("public.businesses", columns["public.businesses"], bundle.businesses, `on conflict (id) do update set (${columns["public.businesses"]}) = row(${columns["public.businesses"].split(",").map((column) => `excluded.${column}`).join(",")})`)}
 ${insertRows("public.business_memberships", columns["public.business_memberships"], bundle.memberships)}
 ${insertOptional("permission_changes")}
+${LOGBOOK_KEYS.map(insertOptional).join("\n")}
 ${bundle.workspaces
   .map(
     (w) =>
@@ -238,12 +305,42 @@ commit;
 // request id can never report "already applied" for a change the restored
 // snapshot does not contain). Memberships and Auth are NOT touched: restoring
 // access from an old backup could re-grant access an Owner has since removed.
+// Logbook (target has release file 07): the business's review queue (batches,
+// pages, rows, audit events) goes back to the backup together with the
+// snapshot, because an approval writes the snapshot, the row status and the
+// audit event in one transaction. Import keys and their usage are access and
+// are not touched (a key revoked since the backup stays revoked). A backup
+// without the logbook tables is refused when the business has logbook data in
+// the target, since the two could not be made consistent.
 export const buildBusinessRestoreSql = (bundle, businessId, columns) => {
   if (bundle.format === PRE_MIGRATION_FORMAT) throw new Error("A one-business restore needs a backup taken after the tenant migration.");
   const workspace = bundle.workspaces.find((w) => w.business_id === businessId);
   if (!workspace) throw new Error("That business is not in the backup.");
   const requests = bundle.requests.filter((q) => q.business_id === businessId);
   const id = tagged(businessId, "b");
+  let logbook = "";
+  if (columns["public.logbook_rows"] && bundle.logbook_rows === undefined) {
+    logbook = `do $logbook$ begin
+  if exists (select 1 from public.logbook_batches where business_id = ${id}::uuid) then
+    raise exception 'BACKUP HAS NO LOGBOOK DATA: this business has logbook imports; use a backup taken after release file 07';
+  end if;
+end $logbook$;`;
+  } else if (columns["public.logbook_rows"]) {
+    const byKey = Object.fromEntries(OPTIONAL_TENANT_TABLES.map((t) => [t.key, t]));
+    const mine = (key) => bundle[key].filter((row) => row.business_id === businessId);
+    const insert = (key) => insertRows(byKey[key].table, columns[byKey[key].table], mine(key), "", byKey[key].identity);
+    const keyIds = [...new Set([...mine("logbook_batches").map((b) => b.api_key_id), ...mine("logbook_row_events").map((e) => e.actor_api_key_id)].filter(Boolean))];
+    logbook = `do $logbook$ begin
+  if (select count(*) from public.logbook_api_keys where business_id = ${id}::uuid and id = any(${tagged(`{${keyIds.join(",")}}`, "k")}::uuid[])) <> ${keyIds.length} then
+    raise exception 'LOGBOOK KEY MISSING IN TARGET';
+  end if;
+end $logbook$;
+delete from public.logbook_row_events where business_id = ${id}::uuid;
+delete from public.logbook_rows where business_id = ${id}::uuid;
+delete from public.logbook_pages where business_id = ${id}::uuid;
+delete from public.logbook_batches where business_id = ${id}::uuid;
+${LOGBOOK_QUEUE_KEYS.map(insert).join("\n")}`;
+  }
   return `begin;
 do $guard$ begin
   if not exists (select 1 from public.businesses where id = ${id}::uuid) then
@@ -260,6 +357,7 @@ update public.workspace_snapshots
  where business_id = ${id}::uuid;
 delete from public.finance_action_requests where business_id = ${id}::uuid;
 ${insertRows("public.finance_action_requests", columns["public.finance_action_requests"], requests)}
+${logbook}
 commit;
 `;
 };

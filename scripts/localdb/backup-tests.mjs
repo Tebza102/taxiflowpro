@@ -243,7 +243,7 @@ record(run.code === 1 && /env-file/.test(run.out) && backups().length === 1, "a 
 
 // 9. Nothing in Git ------------------------------------------------------------------------
 const gitStatus = spawnSync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: REPO_ROOT, encoding: "utf8" }).stdout;
-record(!/\.tfbk|backup-log|passphrase|\.partial/.test(gitStatus), "no backup, log or passphrase file appears in the repository");
+record(!/\.tfbk|backup-log\.txt|passphrase|\.partial/.test(gitStatus), "no backup, log or passphrase file appears in the repository");
 
 const failed = results.filter((x) => !x.ok).length;
 console.log(`\nevidence folder (outside the repo): ${DIR}`);

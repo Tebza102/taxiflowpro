@@ -215,3 +215,78 @@ test("platform_admins and the permission-audit history are backed up and restore
   // A one-business restore never touches platform grants or audit history.
   assert.doesNotMatch(buildBusinessRestoreSql(withOptional(), B, columns), /platform_admins|member_permission_changes/);
 });
+
+test("the six logbook tables are backed up and restored when present; older backups stay readable", async () => {
+  const core = await import("../scripts/backup/lib/backupCore.mjs");
+  const LOGBOOK = ["logbook_api_keys", "logbook_api_key_usage", "logbook_batches", "logbook_pages", "logbook_rows", "logbook_row_events"];
+  for (const key of LOGBOOK) assert.match(core.OPTIONAL_TABLES_PROBE_SQL, new RegExp(`'${key}'`));
+  const sqlAll = core.exportSqlFor("tenant", LOGBOOK);
+  for (const key of LOGBOOK) assert.ok(sqlAll.includes(`from public.${key} `), key);
+  assert.ok(sqlAll.indexOf("'end'") > sqlAll.indexOf("logbook_row_events"), "the end marker stays last");
+  assert.doesNotMatch(EXPORT_SQL, /logbook/);
+
+  const K = "30000000-0000-4000-8000-000000000001";
+  const BA = "40000000-0000-4000-8000-000000000001";
+  const P = "50000000-0000-4000-8000-000000000001";
+  const R = "60000000-0000-4000-8000-000000000001";
+  const withLogbook = () => ({
+    ...bundle(),
+    logbook_api_keys: [{ id: K, business_id: B, name: "k", key_prefix: "tfl_", key_hash: "h", created_by: U }],
+    logbook_api_key_usage: [{ key_id: K, window_start: "2026-11-10T08:00:00Z", request_count: 1 }],
+    logbook_batches: [{ id: BA, business_id: B, source: "upload", created_by: U, api_key_id: null }],
+    logbook_pages: [{ id: P, business_id: B, batch_id: BA, page_number: 1, media_type: "image/png", byte_size: 3, sha256: "s", image_base64: "AAAA" }],
+    logbook_rows: [{ id: R, business_id: B, batch_id: BA, page_id: P, row_index: 0, fields: {}, issues: [], row_hash: "rh", status: "pending" }],
+    logbook_row_events: [{ id: 7, business_id: B, batch_id: BA, row_id: R, action: "extracted", actor_user_id: U }],
+  });
+  assert.equal(validateBundle(withLogbook()).logbook_rows.length, 1);
+  assert.equal(validateBundle(bundle()).logbook_rows, undefined, "a backup taken before release file 07 is accepted");
+  const broken = [
+    [(b) => delete b.logbook_pages, /only partly present/],
+    [(b) => (b.logbook_rows[0].batch_id = "missing"), /logbook row references a missing parent/],
+    [(b) => (b.logbook_row_events[0].row_id = "missing"), /audit event references a missing parent/],
+    [(b) => (b.logbook_row_events[0].actor_user_id = "missing"), /audit event references a missing Auth user/],
+    [(b) => (b.logbook_api_key_usage[0].key_id = "missing"), /key-usage row references a missing key/],
+    [(b) => (b.logbook_batches[0].business_id = "missing"), /logbook batch references a missing business/],
+    [(b) => (b.logbook_pages[0].business_id = "other"), /belongs to another business/],
+  ];
+  for (const [mutate, pattern] of broken) {
+    const b = withLogbook();
+    mutate(b);
+    assert.throws(() => validateBundle(b), pattern);
+  }
+  const manifest = core.buildManifest(withLogbook(), {});
+  assert.deepEqual([manifest.counts.logbookApiKeys, manifest.counts.logbookPages, manifest.counts.logbookRows, manifest.counts.logbookRowEvents], [1, 1, 1, 1]);
+  assert.equal(manifest.businesses[0].logbookRows, 1);
+  assert.equal(core.buildManifest(bundle(), {}).counts.logbookRows, undefined, "older manifests keep their counts");
+
+  const columns = {
+    "auth.users": "id,email", "auth.identities": "id,user_id", "public.businesses": "id,slug,name",
+    "public.business_memberships": "business_id,user_id,role,active", "public.finance_action_requests": "business_id,request_id",
+    "public.logbook_api_keys": "id,business_id", "public.logbook_api_key_usage": "key_id,window_start", "public.logbook_batches": "id,business_id",
+    "public.logbook_pages": "id,business_id,batch_id", "public.logbook_rows": "id,business_id,batch_id", "public.logbook_row_events": "id,business_id,row_id",
+  };
+  const sql = core.buildFullRestoreSql(withLogbook(), columns);
+  const at = (table) => sql.indexOf(`insert into public.${table} `);
+  assert.ok(at("businesses") < at("logbook_api_keys") && at("logbook_api_keys") < at("logbook_api_key_usage") && at("logbook_api_key_usage") < at("logbook_batches")
+    && at("logbook_batches") < at("logbook_pages") && at("logbook_pages") < at("logbook_rows") && at("logbook_rows") < at("logbook_row_events"), "dependency order");
+  assert.match(sql, /insert into public\.logbook_row_events \([^)]*\) overriding system value select/);
+  assert.match(sql, /setval\(pg_get_serial_sequence\('public\.logbook_row_events', 'id'\)/);
+  assert.match(sql, /or exists \(select 1 from public\.logbook_row_events\)/);
+  assert.match(sql, /select count\(\*\) from public\.logbook_pages\) <> 1/);
+  assert.doesNotMatch(sql, /grant |revoke |row level security|policy/i);
+  assert.throws(() => core.buildFullRestoreSql(withLogbook(), { ...columns, "public.logbook_pages": "" }), /apply the release files/);
+
+  // One business: the queue goes back with the snapshot; keys and usage are untouched.
+  const one = buildBusinessRestoreSql(withLogbook(), B, columns);
+  for (const table of ["logbook_row_events", "logbook_rows", "logbook_pages", "logbook_batches"]) {
+    assert.match(one, new RegExp(`delete from public\.${table} where business_id =`));
+    assert.match(one, new RegExp(`insert into public\.${table} `));
+  }
+  assert.ok(one.indexOf("delete from public.logbook_row_events") < one.indexOf("delete from public.logbook_batches"));
+  assert.doesNotMatch(one, /insert into public\.logbook_api_keys|delete from public\.logbook_api_keys|logbook_api_key_usage/);
+  assert.match(one, /LOGBOOK KEY MISSING IN TARGET/);
+  // An older backup against a target with logbook data: refused, not inconsistent.
+  assert.match(buildBusinessRestoreSql(bundle(), B, columns), /BACKUP HAS NO LOGBOOK DATA/);
+  // A target without release file 07: unchanged behaviour.
+  assert.doesNotMatch(buildBusinessRestoreSql(bundle(), B, { "public.finance_action_requests": "business_id,request_id" }), /logbook/);
+});

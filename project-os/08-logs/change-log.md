@@ -2056,3 +2056,25 @@ Pass in automation. Real-phone check NOT passed until Tebogo confirms.
 **Result:** PASS. Test project paused afterwards. Production, `main` and PR #13's merge state unchanged.
 
 **Risks remaining:** real handwriting, real phone, real HEIC photo not tried. The bypass secret still exists until Tebogo revokes it; the seven branch Preview variables remain.
+
+### 2026-11-10 — Logbook recovery coverage in the operator backup (no production change)
+
+**Changed by:** Agent (Claude Code), authorised by Tebogo as part of the logbook production release
+
+**Files changed:**
+- scripts/backup/lib/backupCore.mjs, scripts/backup/backup.mjs
+- tests/backup-tool.test.mjs
+- scripts/localdb/backup-logbook-tests.mjs (new), scripts/localdb/backup-tests.mjs (repo-file check pattern)
+
+**Summary:**
+Supabase Free plan has no platform backups, and the operator backup did not export the six logbook tables. It now does, when the database has them: import keys, key usage, batches, page photos, rows and audit events, in the same read-only snapshot transaction. Validation checks that every reference resolves within the backup and stays in one business. Full restore inserts them in dependency order; audit-event ids are kept (OVERRIDING SYSTEM VALUE) and the identity sequence is moved past them. A one-business restore now also puts that business's logbook queue (batches, pages, rows, events) back with its snapshot, because an approval writes both in one transaction; import keys and usage are access and are not rolled back. A pre-logbook backup is refused (changing nothing) for a business that has logbook data. Backups without the tables remain valid (same format). The backup transport now reports psql's own error when psql stops before reading a large input (seen as a broken pipe on a refused restore).
+
+**Tests run:**
+- node --test tests/*.test.mjs: 446/446
+- scripts/localdb/backup-logbook-tests.mjs (fresh local stack, synthetic data, ~1.5 MB synthetic photo): 41/41
+- scripts/localdb/backup-tests.mjs (existing): 43/43
+
+**Result:**
+PASS on run 3. Run 1: 39/41 (the saved output was cut short; the visible failure was the repo-file check matching the new file's own name). Run 2: 39/41 (that check again, its fix had not applied, and the broken-pipe message on a refused restore). Both fixed. Run 3: 41/41.
+
+**Limitation:** page photos live in the database, so backups grow by about 1-3 MB per photo (transport limit 512 MB).

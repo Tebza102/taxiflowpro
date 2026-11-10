@@ -6,10 +6,11 @@ The pilot feature freeze still stands. This branch is new scope asked for by Teb
 
 1. ~~Real photo check~~: 7/7 PASS (run by Tebogo). Full local tenant suite: 34/34 PASS at `e418a8d`.
    ~~Hosted Preview check~~: **PASS 2/2 on 2026-11-10** (test project paused again). Cleanup left for Tebogo: revoke the Protection Bypass for Automation secret (taxiflowpro > Settings > Deployment Protection); optionally delete the seven `feat/logbook-pipeline` Preview variables.
-2. **Decide whether this ships during the pilot.** If yes, before any merge:
-   - add `LOGBOOK_VISION_MODEL` and `ANTHROPIC_API_KEY` to Vercel (Preview first, then Production), server-side only;
-   - take a fresh production backup, then apply `scripts/localdb/migrations/20261110090000_logbook_pipeline.sql` as release file 07 (add it to `scripts/hosted/apply-release.mjs` and to `scripts/preview-test/schema.sql` first; neither was changed on this branch);
-   - check the Vercel plan's function count (this adds one function, 11 in total) and request size limit (about 4.5 MB per upload).
+2. **Production release AUTHORISED by Tebogo (2026-11-10); in progress, production still untouched.**
+   - Done: release file 07 wired into `apply-release.mjs` (`8cbe083`); logbook tables added to the encrypted backup and restore (`ff541f8`, local proof 41/41, existing backup suite 43/43, unit 446/446).
+   - **Waiting on Tebogo:** (a) the guarded production backup in a terminal (type the ref, then the passphrase); (b) add `LOGBOOK_VISION_MODEL` (= `claude-haiku-4-5-20251001`) and `ANTHROPIC_API_KEY` (sensitive) to Vercel **Production** (the agent's attempt was blocked by its permission rules).
+   - Then (agent): apply release file 07 with `node scripts/hosted/apply-release.mjs --target vfxftviwteypasredjgm --env-file <outside repo>` (interactive: typed ref), verify read-only, merge PR #13, deploy, read-only live smoke checks, record the result and the rollback target (current production deployment `dpl_64rcuDg1DUHW34W4cgSTWrQERB2K`, commit `f24e71b`).
+   - Function count (this adds one, 11 in total) and the ~4.5 MB request limit: check on the production deployment.
 3. Review the draft decisions in `04-technical/data-model.md` ("Paper logbook import"): approved rows become pending income and cash-expense records; the banked figure is reference only and never creates a deposit.
 4. Try it by eye on the local test stack: Money > Logbook import, with real handwriting, on a phone.
 

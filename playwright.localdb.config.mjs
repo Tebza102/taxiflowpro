@@ -26,6 +26,9 @@ export default defineConfig({
     command: `node scripts/localdb/dev-tenant.mjs ${ACTIVE_PROFILE.appPort}`,
     url: APP_URL,
     // Never reuse a server: a server from the other profile would point at the wrong stack.
+    // The logbook review test never calls a real vision model: the dev server
+    // answers with the synthetic reply embedded in each synthetic test page.
+    env: { ...process.env, TAXIFLOW_LOGBOOK_VISION_STUB: "./tests/localdb-browser/logbook-vision-stub.mjs", LOGBOOK_VISION_MODEL: "synthetic-stub-model" },
     reuseExistingServer: false,
     timeout: 120_000,
   },

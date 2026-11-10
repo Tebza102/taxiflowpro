@@ -2037,3 +2037,22 @@ Pass in automation. Real-phone check NOT passed until Tebogo confirms.
 - Tebogo's real extraction run: 7/7 PASS with `claude-haiku-4-5-20251001` (terminal output shared in chat).
 
 **Not changed:** production database and settings, `main`, PR #13 merge state.
+
+## 2026-11-10: hosted Preview check for PR #13: PASS
+
+**Changed by:** Agent (resumed at Tebogo's request; bypass secret created by Tebogo)
+
+**Files changed:**
+- `tests/preview-test/logbook-journey.spec.js`: synthetic vehicle registration corrected to `PV TEST 01` (as stored in the test project).
+- Project OS: current-status, next-action, this log.
+
+**Before any write:** test project `sxoonhovoqgcpflhqirb` ACTIVE_HEALTHY; 6 logbook tables and 5 functions present; 6 users, all `@example.com`; Preview answers 200 with the bypass, 302 without, 401 signed out.
+
+**Tests run:** `PREVIEW_URL=https://taxiflowpro-7vz9ert31-apprigate.vercel.app npx playwright test -c playwright.preview-test.config.mjs tests/preview-test/logbook-journey.spec.js`
+- Run 1: FAIL in the target test at the vehicle lookup (test expected `PV-TEST-01`; stored registration is `PV TEST 01`). Read-only step; nothing written. Bundle and auth guards had passed.
+- Run 2: **2/2 PASS** (55 s). Real model read {date 2026-11-07, PV TEST 01, UAT Driver, revenue 1327, fuel 400, wash 50, marshal 30, other 0, banked 847}, all high confidence, no checks raised. Approve gave 4 pending records; re-upload reported "was uploaded before" and added nothing.
+- Database check afterwards: 1 batch; rows {approved: 1}; 0 duplicate hashes among pending/approved; 4 `logbook-import` records, all pending.
+
+**Result:** PASS. Test project paused afterwards. Production, `main` and PR #13's merge state unchanged.
+
+**Risks remaining:** real handwriting, real phone, real HEIC photo not tried. The bypass secret still exists until Tebogo revokes it; the seven branch Preview variables remain.

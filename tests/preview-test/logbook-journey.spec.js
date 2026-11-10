@@ -19,7 +19,7 @@ const PRODUCTION_REF = "vfxftviwteypasredjgm";
 const SUPABASE_URL = `https://${REF}.supabase.co`;
 const OWNER = "owner@example.com";
 const DRIVER_STAFF_ID = "pv-drv-01";
-const VEHICLE = "PV-TEST-01";
+const VEHICLE = "PV TEST 01";
 const DRIVER = "UAT Driver";
 
 test.describe.configure({ mode: "serial" });

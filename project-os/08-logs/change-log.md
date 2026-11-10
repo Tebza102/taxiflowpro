@@ -1982,3 +1982,35 @@ Pass in automation. Real-phone check NOT passed until Tebogo confirms.
 - **New:** `05-build/client-pilot.md` (priorities, first-client checklist, issue log, support, limitations). Release record in `release-stack-review.md` section 12.
 
 **Not changed:** billing plans, project settings, client financial data (no test records written). Feature freeze from now on.
+
+## 2026-11-10: paper logbook import pipeline (branch `feat/logbook-pipeline`)
+
+**Changed by:** Agent, on Tebogo's request (brief written for "taxiflowv2"; `origin` here is `Tebza102/taxiflowpro`, no `taxiflowv2` repository was found, and Tebogo confirmed "Build in taxiflowpro"). Outside the pilot feature freeze; not merged, not deployed.
+
+**What was built**
+- Server: one function `api/logbook/[action].js` (extract, import, batches, batch, page-image, row-edit, row-approve, row-reject, export, keys) over `api/_lib/logbookService.js`, `logbookVision.js` (vision call, server only, strict JSON checked with zod, one retry), `logbookSchema.js` (zod shapes, row hash), `logbookApproval.js` (row to finance records, pure), `logbookExport.js` (Excel).
+- Shared rules without AI: `src/lib/logbookContract.js` (parsing, date/amount/vehicle/driver checks, reconciliation, duplicate identity).
+- Database (local test stack only): `scripts/localdb/migrations/20261110090000_logbook_pipeline.sql` and its rollback.
+- Screen: Money > Logbook import (`src/components/LogbookImportPanel.jsx`), shown to Owner/Admin in the business workspace.
+- Packages added: `zod`, `@anthropic-ai/sdk`, `exceljs`, `heic-convert`. Environment variable names: `LOGBOOK_VISION_MODEL`, `ANTHROPIC_API_KEY`.
+
+**Decisions taken (review before any release)**
+- The live data here is the business snapshot, so "approve" adds ordinary pending income and vehicle cash-expense records (Fuel, Wash, Rank Fees, Other) for that driver, vehicle and day. It never counts, verifies or banks cash; the paper's banked figure is kept for reference and for the reconciliation check only.
+- Roles: Owner, or Admin with Money on. Managers and Drivers are refused. Import keys: Owner only.
+- No Excel export existed in this repository, so the export layout is new.
+- No lint or typecheck exists in this repository (plain JavaScript, no ESLint or TypeScript configuration); none was added.
+
+**Evidence (all on synthetic data; the vision model was a stub in every automated test)**
+- `node --test tests/*.test.mjs` (through `verify-all --only node`): 445/445 PASS, including the 19 new tests in `tests/logbook-pipeline.test.mjs` (schemas, parsing, date/vehicle/driver/amount checks, reconciliation, row hash, approval mapping, role rule, upload type and size, vision reply contract with one retry, Excel export).
+- `scripts/localdb/logbook-tests.mjs` on a freshly reset local test stack, real local sign-ins, real handler and database functions: **84/84 PASS**. Covers 401 without or with a bad token on every action; 403 for Manager, Driver, no membership, inactive membership and a selected foreign business; 404 for every cross-business id; upload, pending, approve, records exist; re-upload of the same photo (no model call, nothing added); a new photo of the same lines (skipped by row hash); unreadable cell null/low and blocked until corrected; reconciliation warning needing confirmation; reject keeps its record; three simultaneous approvals (one wins); automation key hashed, import-only, idempotent, rate limited at 30 per minute, revocable; Excel export. The first run was 77/84: one defect (the edit schema demanded every field) caused all seven failures and was fixed.
+- Browser, local test stack (`tests/localdb-browser/logbook-import-tenant.spec.js`, 3 tests): PASS. Upload, photo beside rows, low and medium cells highlighted, Approve disabled on the unreadable cell, edit, approve, income visible in Daily Earnings, reject, re-upload adds nothing, export download, Manager has no screen and gets 403, signed out gets 401. Screenshots in `uat-reports/logbook-review/` (not committed).
+- Full tenant browser suite (`verify-all --only tenant`): not green in a single run. Run 1: 31 passed, 1 failed (the new test's own wrong expectation of "R 1 705" formatting; fixed). Run 2: 33 passed, 1 failed (`tenant-access-roles.spec.js:65`, which passed in run 1 on the same application code). That test and the logbook tests then passed together on a fresh reset (4/4). Treated as an existing intermittent test, not investigated further.
+- Demo browser suite: 69/69 PASS, run on port 4273 with a temporary config, because another local project was already serving on 4173 and the committed config reuses whatever answers there.
+- `verify-all --only guards`: PASS. `vite build`: PASS.
+
+**Not run / not verified**
+- **Extraction by a real vision model.** No `ANTHROPIC_API_KEY` exists on this machine. `scripts/logbook/extraction-check.mjs` drew the three synthetic pages (clean, blurry, one blotted cell) and stopped as BLOCKED without calling a model. Whether a real model returns null/low for the blotted cell is unproven.
+- Real handwriting, a real phone, a real HEIC photo (only the refusal of an undecodable HEIC was tested), any Vercel Preview (function routing for `api/logbook/[action].js`, the 60 s limit, the request size limit), and the migration on any hosted database.
+- Lint and typecheck: the repository has neither.
+
+**Not changed:** `main`, production database, production deployment, Vercel settings, `scripts/hosted/apply-release.mjs`, `scripts/preview-test/schema.sql`.

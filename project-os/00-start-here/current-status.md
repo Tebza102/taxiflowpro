@@ -1,5 +1,16 @@
 # Current Status
 
+## Logbook import (2026-11-10): branch `feat/logbook-pipeline`; pushed; NOT merged, NOT deployed, production untouched
+
+Requested by Tebogo on 2026-11-10 (brief written for "taxiflowv2"; Tebogo confirmed to build it in this repository). It is outside the pilot feature freeze and waits for a decision. The branch is based on `agent/release-record` (one docs commit ahead of `main`).
+
+- **What exists:** an Owner or Admin (Money on) uploads a logbook page photo in Money > Logbook import; the server reads it with a vision model into rows; rows wait in a review queue beside the photo with low/medium confidence highlighted; each row is edited, approved or rejected; only approval writes finance records. An automation key can send already-structured rows into the same queue. A batch exports to Excel with confidence flags.
+- **Details:** `04-technical/data-model.md` ("Paper logbook import") and `04-technical/auth-and-roles.md` ("Logbook import routes").
+- **New packages:** `zod`, `@anthropic-ai/sdk`, `exceljs`, `heic-convert`. New environment variables (names only): `LOGBOOK_VISION_MODEL`, `ANTHROPIC_API_KEY`.
+- **Schema:** one new migration (six tables, five functions) applied only to the local test stack. Production does not have it.
+- **Evidence and what was not verified:** change-log 2026-11-10.
+- **Not verified:** extraction by a real vision model (no key on this machine; the model was stubbed in every test); real handwriting; a real phone; HEIC photos from a real device; any hosted Preview.
+
 ## RELEASED: controlled client pilot (2026-10-30)
 
 - **Live:** https://taxiflow.co.za (and taxiflowpro.vercel.app).

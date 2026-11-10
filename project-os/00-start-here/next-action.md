@@ -1,5 +1,19 @@
 # Next Action
 
+## Logbook import (2026-11-10): branch `feat/logbook-pipeline`, pushed, not merged
+
+The pilot feature freeze still stands. This branch is new scope asked for by Tebogo on 2026-11-10; it waits for a decision and is not part of the pilot.
+
+1. **Tebogo: run the real photo check.** It has never run against a real vision model (no key on the build machine). In a terminal with `LOGBOOK_VISION_MODEL` and `ANTHROPIC_API_KEY` set:
+   `node scripts/logbook/extraction-check.mjs`
+   It draws three synthetic pages (clean, blurry, one blotted cell) and must end `PASS`. The blotted cell must come back empty with low confidence.
+2. **Decide whether this ships during the pilot.** If yes, before any merge:
+   - add `LOGBOOK_VISION_MODEL` and `ANTHROPIC_API_KEY` to Vercel (Preview first, then Production), server-side only;
+   - take a fresh production backup, then apply `scripts/localdb/migrations/20261110090000_logbook_pipeline.sql` as release file 07 (add it to `scripts/hosted/apply-release.mjs` and to `scripts/preview-test/schema.sql` first; neither was changed on this branch);
+   - check the Vercel plan's function count (this adds one function, 11 in total) and request size limit (about 4.5 MB per upload).
+3. Review the draft decisions in `04-technical/data-model.md` ("Paper logbook import"): approved rows become pending income and cash-expense records; the banked figure is reference only and never creates a deposit.
+4. Try it by eye on the local test stack: Money > Logbook import, with real handwriting, on a phone.
+
 ## Controlled client pilot (from 2026-10-30): feature freeze
 
 1. **Tebogo:** confirm the 2026-10-29 23:43 UTC responsibility change for `taxiadmin@apprigate.com` (all six, including count and verify) was intended. Otherwise undo it in Settings > Business access.

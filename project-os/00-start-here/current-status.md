@@ -1,6 +1,18 @@
 # Current Status
 
-## Logbook import (2026-11-10): branch `feat/logbook-pipeline`; pushed; NOT merged, NOT deployed, production untouched
+## RELEASED: Logbook import (2026-11-10, authorised by Tebogo)
+
+- **Live:** https://taxiflow.co.za and taxiflowpro.vercel.app serve deployment `dpl_6JCqVFomgPpnu99BuEVriHowczQX` (`taxiflowpro-gkzd85ve7`), commit `2550ea3` on `main` (PR #13 merged with a merge commit; promoted once with `vercel promote`).
+- **Rollback target (application):** `vercel promote https://taxiflowpro-hf0i0bonz-apprigate.vercel.app --scope apprigate` (`dpl_64rcuDg1DUHW34W4cgSTWrQERB2K`, commit `f24e71b`). The old app does not use the logbook tables, so they can stay. Database rollback of release file 07 only if needed: `scripts/localdb/rollback/` file for `20261110090000_logbook_pipeline`, after a fresh backup (it drops the logbook tables and their data).
+- **Backup before the migration:** `C:\Users\appri\taxiflow-backups\taxiflow-vfxftviwteypasredjgm-2026-11-10T11-08-26-453Z.tfbk`: export PASS, verify PASS, log check OK. No production writes between that backup and the migration (last snapshot change 2026-10-29, last sign-in 2026-10-30).
+- **Database:** release file 07 APPLIED (01-06 skipped as applied); runner post-checks PASS. Independent read-only check: existing data fingerprints (businesses, memberships, snapshots, request log, permission audit, platform admins, Auth users) identical before and after; 6 new tables with RLS on, no browser grants, service role only, empty; 5 new functions security definer with empty search_path, not executable by anon/authenticated; duplicate-row index present.
+- **Production settings:** `LOGBOOK_VISION_MODEL` (`claude-haiku-4-5-20251001`) and `ANTHROPIC_API_KEY`, Production, sensitive (added by Tebogo).
+- **Recovery:** the operator backup now covers the six logbook tables (`ff541f8`). Page photos are stored in the database: each adds about 1-3 MB to every backup (transport limit 512 MB).
+- **Live smoke checks (read-only, signed out): PASS.** Both public domains serve the new bundle (`index-ZBK0FYa9.js`), which contains the Logbook import screen and the production project, not the test project, and no API key. `/api/logbook/batches`, `keys`, `extract`, `import`, `row-approve` answer 401 signed out; an unknown import key 401; an unknown action 404; `/api/business/workspace` 401. Logbook tables still empty and snapshots unchanged after the checks. Runtime errors in the last hour: none (one Node `url.parse` deprecation warning).
+- **Not checked live:** a signed-in Owner session and a real upload (would need production credentials and would write production data).
+- **Observation (not caused by this release):** `taxiflow.apprigate.com` is assigned to the deployment in Vercel, but its DNS answers from a LiteSpeed server ("Index of /"), not Vercel.
+
+## Logbook import (2026-11-10): build history (released; see above)
 
 Requested by Tebogo on 2026-11-10 (brief written for "taxiflowv2"; Tebogo confirmed to build it in this repository). It is outside the pilot feature freeze and waits for a decision. The branch is based on `agent/release-record` (one docs commit ahead of `main`).
 

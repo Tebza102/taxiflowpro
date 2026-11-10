@@ -2078,3 +2078,26 @@ Supabase Free plan has no platform backups, and the operator backup did not expo
 PASS on run 3. Run 1: 39/41 (the saved output was cut short; the visible failure was the repo-file check matching the new file's own name). Run 2: 39/41 (that check again, its fix had not applied, and the broken-pipe message on a refused restore). Both fixed. Run 3: 41/41.
 
 **Limitation:** page photos live in the database, so backups grow by about 1-3 MB per photo (transport limit 512 MB).
+
+### 2026-11-10 — PRODUCTION RELEASE: Logbook import (PR #13), release file 07
+
+**Changed by:** Agent (Claude Code), authorised by Tebogo; Tebogo typed the backup passphrase and the release confirmation and added the two Production settings.
+
+**Production changes:**
+- Supabase `vfxftviwteypasredjgm`: release file 07 (`scripts/localdb/migrations/20261110090000_logbook_pipeline.sql`) applied with `scripts/hosted/apply-release.mjs` (01-06 skipped).
+- GitHub: PR #13 marked ready and merged with a merge commit (`2550ea3`).
+- Vercel: production build `dpl_6JCqVFomgPpnu99BuEVriHowczQX` promoted (custom domains are not auto-assigned).
+
+**Before:**
+- Guarded backup: export PASS, verify PASS, check OK (`taxiflow-vfxftviwteypasredjgm-2026-11-10T11-08-26-453Z.tfbk`); production quiet since.
+- Recovery coverage for the logbook tables added and proven locally (41/41, existing backup suite 43/43, unit 446/446).
+- Production env: both logbook variables present (Vercel API).
+
+**After (evidence):**
+- Runner: APPLIED 07, post-checks PASS.
+- Read-only SQL: protected-data fingerprints identical; 6 tables RLS on, no browser grants; 5 functions not browser-executable; index present.
+- Live: both public domains serve the new bundle; logbook routes 401 signed out; no test-project reference or key in the bundle; no new rows; no runtime errors.
+
+**Rollback target:** promote `taxiflowpro-hf0i0bonz` (`dpl_64rcuDg1DUHW34W4cgSTWrQERB2K`, `f24e71b`).
+
+**Not verified live:** signed-in Owner session, real upload (would write production data).

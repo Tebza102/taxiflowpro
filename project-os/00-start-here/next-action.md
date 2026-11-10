@@ -1,6 +1,15 @@
 # Next Action
 
-## Logbook import (2026-11-10): branch `feat/logbook-pipeline`, pushed, not merged
+## Logbook import: RELEASED 2026-11-10 (see current-status)
+
+1. **Tebogo (optional, recommended):** sign in on https://taxiflow.co.za as the Owner and open Money > Logbook import; check the screen loads with no batches. A first real upload writes production data: do it only with a real page you intend to keep.
+2. **Tebogo, cleanup from the hosted test:** revoke the Protection Bypass for Automation secret (taxiflowpro > Settings > Deployment Protection); optionally delete the seven `feat/logbook-pipeline` Preview variables; the test project `taxiflow-preview-test` stays paused.
+3. Take a fresh backup with the updated tool after the first real logbook uploads, and keep the daily morning check.
+4. Later (not now): page photos live in the database and grow every backup; plan object storage before heavy use.
+5. Pre-existing: `taxiflow.apprigate.com` DNS does not point at Vercel. Fix the DNS record or remove the domain, if it should be in use.
+6. Merge this record (branch `agent/logbook-release-record`, docs only) when convenient.
+
+## Logbook import (2026-11-10): pre-release history
 
 The pilot feature freeze still stands. This branch is new scope asked for by Tebogo on 2026-11-10; it waits for a decision and is not part of the pilot.
 

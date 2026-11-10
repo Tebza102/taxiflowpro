@@ -208,3 +208,38 @@ export const createPlatformCompany = async (fields) => {
     return { ok: false, retryable: true, error: "Network error. Nothing is lost; repeating the same details is safe." };
   }
 };
+
+// Paper logbook import (Owner/Admin): /api/logbook/<action> for the business
+// currently loaded. The server authorizes every call; nothing is cached here.
+// `as: "blob"` returns the file body (page image, Excel export).
+export const logbookRequest = async (action, { method = "GET", query = {}, body, as = "json" } = {}) => {
+  if (!context.businessId) return { ok: false, error: "The workspace is not loaded. Refresh first." };
+  try {
+    const session = await getSession();
+    if (!session?.access_token) return { ok: false, status: 401, error: "Sign in is required." };
+    const url = new URL(`/api/logbook/${action}`, window.location.origin);
+    url.searchParams.set("business", context.businessId);
+    for (const [key, value] of Object.entries(query)) url.searchParams.set(key, value);
+    const response = await fetch(url.toString(), {
+      method,
+      headers: { Authorization: `Bearer ${session.access_token}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+      cache: "no-store",
+    });
+    if (response.ok && as === "blob") {
+      const disposition = response.headers.get("Content-Disposition") ?? "";
+      return { ok: true, blob: await response.blob(), filename: /filename="([^"]+)"/.exec(disposition)?.[1] ?? null };
+    }
+    let json = {};
+    try {
+      json = await response.json();
+    } catch {
+      json = {};
+    }
+    if (response.ok) return { ok: true, ...json };
+    const tooLarge = response.status === 413 ? "The photo is too large to upload. Use a smaller photo (under 10 MB)." : null;
+    return { ok: false, status: response.status, ...json, error: json.error ?? tooLarge ?? "The logbook request could not be completed." };
+  } catch {
+    return { ok: false, retryable: true, error: "Network error. Nothing was confirmed; try again." };
+  }
+};
